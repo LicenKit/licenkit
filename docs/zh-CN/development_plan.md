@@ -27,7 +27,7 @@
 | **M04** | **授权策略与席位规则引擎 (Policies Engine)** | 买断/订阅有效期计算、设备席位上限 (`maxMachines`)、离线验签宽限期、`ed25519` 签名 vs `guid` 模式、特性标签 | **P0** | **已完成** | `server/src/routes/admin/policies.routes.ts`<br/>`web/src/components/modals/CreatePolicyModal.tsx`<br/>`web/src/components/modals/EditPolicyModal.tsx` |
 | **M05** | **许可证全生命周期管理 (Licenses Lifecycle)** | 格式化激活码生成 (`LIC-XXXX-XXXX-XXXX-XXXX`)、手动发码、挂起/解挂/吊销、到期判定、一键轮换 Key、席位查看与解绑 | **P0** | **已完成** | `server/src/routes/admin/licenses.routes.ts`<br/>`web/src/components/modals/IssueLicenseModal.tsx`<br/>`web/src/components/modals/LicenseDetailModal.tsx` |
 | **M06** | **客户端激活与试用防刷 (Client Activation & Anti-Abuse)** | 硬件指纹采集绑定、原子席位抢占、在线心跳、Ed25519 签名 Token 签发、单表匿名防刷试用 (`product_trials`) | **P0** | **已完成** | `server/src/routes/client.routes.ts`<br/>`server/src/infra/crypto/index.ts` |
-| **M07** | **支付网关入向回调与履约 (Inbound Webhooks & Fulfillment)** | Paddle 与 Stripe 网关入向回调、密文解密验签、精确幂等去重、策略下推查询、自动发码与绑定 Policy | **P0** | **核心已完成** (待公网真实联调) | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
+| **M07** | **支付网关入向回调与履约 (Inbound Webhooks & Fulfillment)** | Paddle、Stripe 与 Lemon Squeezy 网关入向回调、密文解密验签、精确 3D 幂等去重、策略下推查询、自动发码与绑定 Policy | **P0** | **已完成** (全量测试通过) | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
 | **M08** | **纯异步出向事件广播流 (Outbound Queues - Option A)** | 业务事件推入 Cloudflare Queues；异步推至 Resend / Zapier / 自建端点；HMAC 时间戳防重放签名与指数重试、端点管理与日志审计 | **P1** | **已完成** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
 | **M09** | **管理控制台前端 SPA (Web Dashboard UI)** | 现代化暗色控制台、Paddle/Stripe Tab 切换、6 大全功能业务 Modals、高级搜索与状态筛选、指标卡片与设备解绑 | **P1** | **已完成** | `web/src/pages/DashboardPage.tsx`<br/>`web/src/components/modals/*`<br/>`web/src/lib/api-client.ts` |
 | **M10** | **客户端生态 SDK (Client SDKs)** | 提供各平台原生开发者的接入库（macOS Swift、Windows C#、跨平台 CLI） | **P2** | **规划中** | 独立生态仓库 (`LicenKit-mac-sdk` 等) |
@@ -110,7 +110,8 @@
 - [x] **M07.4** **Stripe 签名真实验证算法**（按 Stripe 官方规范校验 `Stripe-Signature` 标头）；
 - [x] **M07.5** Paddle 交易完成事件解析（`transaction.completed` -> 自动按外部价格 ID 匹配 Policy 并生成 License）；
 - [x] **M07.6** Stripe Checkout 事件解析（`checkout.session.completed` -> 自动匹配生成 License）；
-- [x] **M07.7** 订阅取消与退费事件处理（`subscription.canceled` -> 自动将关联 License 标记为 `suspended` 或 `revoked`）。
+- [x] **M07.7** 订阅取消与退费事件处理（`subscription.canceled` -> 自动将关联 License 标记为 `suspended` 或 `revoked`）；
+- [x] **M07.8** **Lemon Squeezy 自动履约发码**（`order_created` -> 自动按 `variant_id` 下推匹配 Policy 并生成 License；`subscription_cancelled` 自动吊销，全量 3D 幂等去重）。
 
 ---
 

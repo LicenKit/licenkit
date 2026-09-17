@@ -27,7 +27,7 @@
 | **M04** | **Policies Engine** | Lifetime/subscription duration, hardware seat limit (`maxMachines`), offline grace period, `ed25519` vs `guid` schemes | **P0** | **Completed** | `server/src/routes/admin/policies.routes.ts`<br/>`web/src/components/modals/CreatePolicyModal.tsx`<br/>`web/src/components/modals/EditPolicyModal.tsx` |
 | **M05** | **Licenses Lifecycle** | Formatted key generator (`LIC-XXXX-XXXX-XXXX-XXXX`), manual issuance, suspension/reinstate/revocation, key rotation, seat unbinding | **P0** | **Completed** | `server/src/routes/admin/licenses.routes.ts`<br/>`web/src/components/modals/IssueLicenseModal.tsx`<br/>`web/src/components/modals/LicenseDetailModal.tsx` |
 | **M06** | **Client Activation & Anti-Abuse** | Machine fingerprint binding, atomic seat preemption, heartbeat keep-alive, Ed25519 signed token issuance, trial anti-abuse (`product_trials`) | **P0** | **Completed** | `server/src/routes/client.routes.ts`<br/>`server/src/infra/crypto/index.ts` |
-| **M07** | **Inbound Webhooks & Fulfillment** | Paddle & Stripe webhook handlers, signature verification, idempotent deduplication, automated license issuance | **P0** | **Completed** | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
+| **M07** | **Inbound Webhooks & Fulfillment** | Paddle, Stripe & Lemon Squeezy webhook handlers, signature verification, 3D idempotent deduplication, automated license issuance | **P0** | **Completed** | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
 | **M08** | **Outbound Queues & Broadcast** | Pushes business events to Cloudflare Queues; delivers to Resend / Zapier / custom endpoints with HMAC signatures and exponential backoff | **P1** | **Completed** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
 | **M09** | **Web Dashboard UI** | Dark-mode high-fidelity SPA console, Paddle/Stripe tab switching, 6 full-featured business modals, advanced search & filtering | **P1** | **Completed** | `web/src/pages/DashboardPage.tsx`<br/>`web/src/components/modals/*`<br/>`web/src/lib/api-client.ts` |
 | **M10** | **Client SDKs** | Native client libraries for macOS (Swift), Windows (C#), and cross-platform CLI | **P2** | **Planned** | Independent repositories (`LicenKit-mac-sdk`, etc.) |
@@ -111,7 +111,8 @@
 - [x] **M07.4** Stripe official signature verification (`Stripe-Signature`);
 - [x] **M07.5** Paddle `transaction.completed` event handling and automatic license fulfillment;
 - [x] **M07.6** Stripe `checkout.session.completed` event handling and automatic fulfillment;
-- [x] **M07.7** Subscription cancellation and refund handlers (`subscription.canceled` -> revoke license).
+- [x] **M07.7** Subscription cancellation and refund handlers (`subscription.canceled` -> revoke license);
+- [x] **M07.8** **Lemon Squeezy automatic fulfillment** (`order_created` -> match policy via `variant_id` pushdown and issue license; `subscription_cancelled` -> revoke license, with 3D deduplication).
 
 ---
 

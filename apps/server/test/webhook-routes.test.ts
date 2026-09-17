@@ -17,6 +17,7 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
   const productId = "prd_super_app_01";
   const paddleSecret = "pdl_ntfsec_test_secret_key_1234567890";
   const stripeSecret = "whsec_test_stripe_secret_key_abcdef123456";
+  const lemonSecret = "lemon_signing_secret_test_999";
 
   beforeEach(async () => {
     testEnv = createTestEnv();
@@ -29,6 +30,7 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
     const paymentConfigsPlain = JSON.stringify({
       paddle: { webhook_secret: paddleSecret },
       stripe: { webhook_secret: stripeSecret },
+      lemonsqueezy: { webhook_secret: lemonSecret },
     });
     const encryptedConfigs = await encryptEnvelope(paymentConfigsPlain, masterKey);
 
@@ -54,7 +56,7 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
       updatedAt: now,
     });
 
-    // 3. Seed Policies for Paddle and Stripe
+    // 3. Seed Policies for Paddle, Stripe and Lemon Squeezy
     await db.insert(schema.policies).values([
       {
         id: "pol_paddle_monthly",
@@ -82,6 +84,21 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
         scheme: "ed25519",
         features: JSON.stringify(["enterprise_features"]),
         metadata: JSON.stringify({ stripe_price_id: "price_stripe_enterprise_1y" }),
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "pol_lemon_tier",
+        accountId,
+        productId,
+        name: "Lemon Squeezy Pro Tier",
+        duration: 2592000,
+        offlineGracePeriod: 2592000,
+        maxMachines: 1,
+        scheme: "ed25519",
+        features: JSON.stringify(["lemon_perk"]),
+        metadata: JSON.stringify({ lemonsqueezy_variant_id: "variant_lemon_123" }),
         isActive: true,
         createdAt: now,
         updatedAt: now,
@@ -348,6 +365,164 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
         {
           method: "POST",
           headers: { "Content-Type": "application/json", "Stripe-Signature": sigHeader },
+          body: payload,
+        },
+        testEnv.env
+      );
+
+      expect(res.status).toBe(200);
+
+      const target = await db
+        .select()
+        .from(schema.licenses)
+        .where(eq(schema.licenses.id, licenseId))
+        .get();
+
+      expect(target.status).toBe("revoked");
+    });
+  });
+
+  describe("Lemon Squeezy Inbound Webhooks", () => {
+    it("should process order_created and issue license matched by variant_id pushdown", async () => {
+      const payload = JSON.stringify({
+        meta: {
+          event_name: "order_created",
+          event_id: "evt_lemon_order_1001",
+          custom_data: {},
+        },
+        data: {
+          id: "10099",
+          type: "orders",
+          attributes: {
+            user_email: "lemon_buyer@example.com",
+            first_order_item: {
+              variant_id: "variant_lemon_123",
+            },
+          },
+        },
+      });
+
+      const signature = await computeHmacSha256(payload, lemonSecret);
+
+      const res = await app.request(
+        `/api/v1/webhooks/lemonsqueezy/${accountId}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-signature": signature,
+          },
+          body: payload,
+        },
+        testEnv.env
+      );
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data.fulfillment.action).toBe("license_issued");
+
+      const issued = await db
+        .select()
+        .from(schema.licenses)
+        .where(eq(schema.licenses.customerEmail, "lemon_buyer@example.com"))
+        .get();
+
+      expect(issued).toBeDefined();
+      expect(issued.policyId).toBe("pol_lemon_tier");
+      expect(issued.status).toBe("active");
+    });
+
+    it("should enforce 3D idempotency when duplicate Lemon Squeezy order is received", async () => {
+      const payload = JSON.stringify({
+        meta: {
+          event_name: "order_created",
+          event_id: "evt_lemon_dup_1002",
+        },
+        data: {
+          id: "10100",
+          type: "orders",
+          attributes: {
+            user_email: "lemon_dup_buyer@example.com",
+            first_order_item: {
+              variant_id: "variant_lemon_123",
+            },
+          },
+        },
+      });
+
+      const signature = await computeHmacSha256(payload, lemonSecret);
+
+      // First call
+      const res1 = await app.request(
+        `/api/v1/webhooks/lemonsqueezy/${accountId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-signature": signature },
+          body: payload,
+        },
+        testEnv.env
+      );
+      expect(res1.status).toBe(200);
+
+      // Duplicate call
+      const res2 = await app.request(
+        `/api/v1/webhooks/lemonsqueezy/${accountId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-signature": signature },
+          body: payload,
+        },
+        testEnv.env
+      );
+
+      expect(res2.status).toBe(200);
+      const body2: any = await res2.json();
+      expect(body2.success).toBe(true);
+      expect(body2.message).toBe("Duplicate event already processed");
+
+      const count = await db
+        .select()
+        .from(schema.licenses)
+        .where(eq(schema.licenses.customerEmail, "lemon_dup_buyer@example.com"))
+        .all();
+
+      expect(count.length).toBe(1);
+    });
+
+    it("should revoke license on subscription_cancelled event", async () => {
+      const licenseId = "lic_lemon_sub_cancel";
+      await db.insert(schema.licenses).values({
+        id: licenseId,
+        accountId,
+        productId,
+        policyId: "pol_lemon_tier",
+        key: "LIC-LEMON-SUB-0001",
+        customerEmail: "lemon_sub_cancel@example.com",
+        status: "active",
+        metadata: JSON.stringify({ external_subscription_id: "lemon_sub_9988" }),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      const payload = JSON.stringify({
+        meta: {
+          event_name: "subscription_cancelled",
+          event_id: "evt_lemon_sub_cancel_01",
+        },
+        data: {
+          id: "lemon_sub_9988",
+          type: "subscriptions",
+        },
+      });
+
+      const signature = await computeHmacSha256(payload, lemonSecret);
+
+      const res = await app.request(
+        `/api/v1/webhooks/lemonsqueezy/${accountId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-signature": signature },
           body: payload,
         },
         testEnv.env

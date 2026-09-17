@@ -98,8 +98,11 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
     externalEventId = payload.id || null;
     eventType = payload.type || "unknown";
   } else if (provider === "lemonsqueezy") {
-    externalEventId = payload.meta?.custom_data?.event_id || payload.data?.id || null;
     eventType = payload.meta?.event_name || "unknown";
+    externalEventId =
+      payload.meta?.event_id ||
+      payload.meta?.custom_data?.event_id ||
+      (payload.data?.id ? `${eventType}_${payload.data.id}` : null);
   } else {
     externalEventId = payload.id || payload.event_id || null;
     eventType = payload.type || payload.event_type || "unknown";
@@ -164,6 +167,8 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
       fulfillmentResult = await handlePaddleFulfillment(c.env, db, accountId, eventType, payload);
     } else if (provider === "stripe") {
       fulfillmentResult = await handleStripeFulfillment(c.env, db, accountId, eventType, payload);
+    } else if (provider === "lemonsqueezy") {
+      fulfillmentResult = await handleLemonSqueezyFulfillment(c.env, db, accountId, eventType, payload);
     }
   } catch (err: any) {
     console.error(`Fulfillment error for ${provider} event ${eventType}:`, err);
@@ -603,3 +608,217 @@ async function handleStripeFulfillment(
 
   return { action: "unhandled_event" };
 }
+
+/**
+ * Handles Lemon Squeezy events fulfillment:
+ * - order_created: Issue license based on variant_id or custom policy ID
+ * - subscription_cancelled / subscription_expired: Revoke matching license
+ */
+async function handleLemonSqueezyFulfillment(
+  env: any,
+  db: any,
+  accountId: string,
+  eventType: string,
+  payload: any
+): Promise<{ licenseId?: string; action: string }> {
+  const data = payload.data || {};
+  const attributes = data.attributes || {};
+  const meta = payload.meta || {};
+  const customData = meta.custom_data || {};
+
+  if (eventType === "order_created") {
+    const customerEmail =
+      attributes.user_email || attributes.customer_email || customData.email || "customer@lemonsqueezy.com";
+
+    // Extract variant ID from first_order_item or attributes
+    const firstOrderItem = attributes.first_order_item || {};
+    const variantId =
+      firstOrderItem.variant_id ||
+      attributes.variant_id ||
+      customData.variant_id ||
+      null;
+
+    let matchedPolicy: typeof policies.$inferSelect | null = null;
+
+    // 1. Pushdown query: Match by custom_data.policy_id
+    if (customData.policy_id) {
+      matchedPolicy = await db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.accountId, accountId),
+            eq(policies.id, customData.policy_id),
+            eq(policies.isActive, true)
+          )
+        )
+        .get();
+    }
+
+    // 2. Pushdown query: Match by variant_id in metadata using SQLite json_extract
+    if (!matchedPolicy && variantId) {
+      const variantIdStr = String(variantId);
+      matchedPolicy = await db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.accountId, accountId),
+            eq(policies.isActive, true),
+            sql`(json_extract(${policies.metadata}, '$.lemonsqueezy_variant_id') = ${variantIdStr} OR json_extract(${policies.metadata}, '$.lemonsqueezyVariantId') = ${variantIdStr})`
+          )
+        )
+        .get();
+    }
+
+    // 3. Fallback: single active policy (guarded by pushdown count)
+    if (!matchedPolicy) {
+      const activeCountResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(policies)
+        .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+        .get();
+
+      if (activeCountResult?.count === 1) {
+        matchedPolicy = await db
+          .select()
+          .from(policies)
+          .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+          .get();
+      }
+    }
+
+    if (!matchedPolicy) {
+      return { action: "no_matching_policy" };
+    }
+
+    // Secondary Idempotency Shield: check if license already issued for this order ID
+    const orderIdStr = data.id ? String(data.id) : null;
+    if (orderIdStr) {
+      const existingLicense = await db
+        .select()
+        .from(licenses)
+        .where(
+          and(
+            eq(licenses.accountId, accountId),
+            sql`json_extract(${licenses.metadata}, '$.external_order_id') = ${orderIdStr}`
+          )
+        )
+        .get();
+
+      if (existingLicense) {
+        return { licenseId: existingLicense.id, action: "license_already_issued" };
+      }
+    }
+
+    // Issue License
+    const licenseId = `lic_${ulid().toLowerCase()}`;
+    const key = generateLicenseKey();
+    const now = new Date();
+
+    let expiresAt: string | null = null;
+    if (matchedPolicy.duration) {
+      expiresAt = new Date(now.getTime() + matchedPolicy.duration * 1000).toISOString();
+    }
+
+    const subscriptionId =
+      attributes.subscription_id ? String(attributes.subscription_id) :
+      data.relationships?.subscription?.data?.id ? String(data.relationships.subscription.data.id) : null;
+
+    const metadataObj = {
+      external_provider: "lemonsqueezy",
+      external_order_id: orderIdStr,
+      external_subscription_id: subscriptionId,
+      external_customer_id: attributes.customer_id ? String(attributes.customer_id) : null,
+      variant_id: variantId ? String(variantId) : null,
+      order_number: attributes.order_number ? String(attributes.order_number) : null,
+      ...customData,
+    };
+
+    await db.insert(licenses).values({
+      id: licenseId,
+      accountId,
+      productId: matchedPolicy.productId,
+      policyId: matchedPolicy.id,
+      key,
+      customerEmail: customerEmail.toLowerCase().trim(),
+      status: "active",
+      metadata: JSON.stringify(metadataObj),
+      expiresAt,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
+
+    const issuedLicense = {
+      id: licenseId,
+      key,
+      customerEmail,
+      productId: matchedPolicy.productId,
+      policyId: matchedPolicy.id,
+      status: "active",
+      expiresAt,
+    };
+
+    // Broadcast outbound event
+    await broadcastOutboundEvent(
+      env,
+      db,
+      accountId,
+      "license.created",
+      issuedLicense,
+      matchedPolicy.productId
+    );
+
+    return { licenseId, action: "license_issued" };
+  }
+
+  if (eventType === "subscription_cancelled" || eventType === "subscription_expired") {
+    const subscriptionId = data.id ? String(data.id) : null;
+    if (!subscriptionId) return { action: "no_subscription_id" };
+
+    // Pushdown SQL query: Find license linked to this subscription ID without in-memory full scanning
+    const targetLicense = await db
+      .select()
+      .from(licenses)
+      .where(
+        and(
+          eq(licenses.accountId, accountId),
+          sql`(json_extract(${licenses.metadata}, '$.external_subscription_id') = ${subscriptionId} OR json_extract(${licenses.metadata}, '$.externalSubscriptionId') = ${subscriptionId})`
+        )
+      )
+      .get();
+
+    if (!targetLicense) {
+      return { action: "subscription_license_not_found" };
+    }
+
+    const nowIso = new Date().toISOString();
+
+    await db
+      .update(licenses)
+      .set({
+        status: "revoked",
+        updatedAt: nowIso,
+      })
+      .where(eq(licenses.id, targetLicense.id));
+
+    const updatedLicense = {
+      ...targetLicense,
+      status: "revoked",
+    };
+
+    await broadcastOutboundEvent(
+      env,
+      db,
+      accountId,
+      "license.revoked",
+      updatedLicense,
+      targetLicense.productId
+    );
+
+    return { licenseId: targetLicense.id, action: "license_revoked" };
+  }
+
+  return { action: "unhandled_event" };
+}
+
