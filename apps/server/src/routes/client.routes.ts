@@ -87,7 +87,10 @@ clientRouter.get("/products/:id/pubkey", async (c) => {
     .get();
 
   if (!product || !product.isActive) {
-    throw new NotFoundError("Product not found or inactive");
+    return c.json({
+      success: false,
+      error: { code: "PRODUCT_NOT_FOUND", message: "Product not found or inactive" },
+    }, 200);
   }
 
   const activeKey = await db
@@ -107,7 +110,10 @@ clientRouter.get("/products/:id/pubkey", async (c) => {
     .get();
 
   if (!activeKey) {
-    throw new NotFoundError("No active cryptographic public key found for this product");
+    return c.json({
+      success: false,
+      error: { code: "KEY_NOT_FOUND", message: "No active cryptographic public key found for this product" },
+    }, 200);
   }
 
   return c.json({
@@ -145,15 +151,24 @@ clientRouter.post("/activate", async (c) => {
     .get();
 
   if (!license) {
-    throw new NotFoundError("License key not found");
+    return c.json({
+      success: false,
+      error: { code: "LICENSE_NOT_FOUND", message: "License key not found" },
+    }, 200);
   }
 
   if (license.status !== "active") {
-    throw new AppError("LICENSE_NOT_ACTIVE", `License is currently ${license.status}`, 403);
+    return c.json({
+      success: false,
+      error: { code: "LICENSE_NOT_ACTIVE", message: `License is currently ${license.status}` },
+    }, 200);
   }
 
   if (license.expiresAt && new Date(license.expiresAt).getTime() < Date.now()) {
-    throw new AppError("LICENSE_EXPIRED", "License has expired", 403);
+    return c.json({
+      success: false,
+      error: { code: "LICENSE_EXPIRED", message: "License has expired" },
+    }, 200);
   }
 
   const policy = await db
@@ -163,7 +178,10 @@ clientRouter.post("/activate", async (c) => {
     .get();
 
   if (!policy || !policy.isActive) {
-    throw new AppError("POLICY_DISABLED", "License policy is inactive or disabled", 403);
+    return c.json({
+      success: false,
+      error: { code: "POLICY_DISABLED", message: "License policy is inactive or disabled" },
+    }, 200);
   }
 
   // 2. Check if this machine is already activated
@@ -200,10 +218,13 @@ clientRouter.post("/activate", async (c) => {
 
     const currentCount = machineCountResult?.count || 0;
     if (currentCount >= policy.maxMachines) {
-      throw new ConflictError(
-        "SEAT_LIMIT_EXCEEDED",
-        `Seat limit reached (${currentCount}/${policy.maxMachines}). Please deactivate an old machine first.`
-      );
+      return c.json({
+        success: false,
+        error: {
+          code: "SEAT_LIMIT_EXCEEDED",
+          message: `Seat limit reached (${currentCount}/${policy.maxMachines}). Please deactivate an old machine first.`,
+        },
+      }, 200);
     }
 
     // 4. Create new machine binding
@@ -441,7 +462,10 @@ clientRouter.post("/deactivate", async (c) => {
     .get();
 
   if (!license) {
-    throw new NotFoundError("License key not found");
+    return c.json({
+      success: false,
+      error: { code: "LICENSE_NOT_FOUND", message: "License key not found" },
+    }, 200);
   }
 
   await db
@@ -491,11 +515,17 @@ clientRouter.post("/trial", async (c) => {
     .get();
 
   if (!product || !product.isActive) {
-    throw new NotFoundError("Product not found or inactive");
+    return c.json({
+      success: false,
+      error: { code: "PRODUCT_NOT_FOUND", message: "Product not found or inactive" },
+    }, 200);
   }
 
   if (product.trialDays <= 0) {
-    throw new AppError("TRIAL_NOT_AVAILABLE", "Trial is not enabled for this product", 400);
+    return c.json({
+      success: false,
+      error: { code: "TRIAL_NOT_AVAILABLE", message: "Trial is not enabled for this product" },
+    }, 200);
   }
 
   const trialFeatures: string[] = JSON.parse(product.trialFeatures || "[]");
