@@ -22,7 +22,7 @@
 | Module ID | Module Name | Core Responsibility | Priority | Status | Associated Code & Directory |
 | :--- | :--- | :--- | :---: | :---: | :--- |
 | **M01** | **System & Setup Wizard** | First-run setup wizard, `system_settings` singleton, zero-CORS dynamic domain routing, live config updates | **P0** | **Completed** | `server/src/routes/system.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts`<br/>`web/src/pages/SetupPage.tsx` |
-| **M02** | **Auth & RBAC** | Admin users, WebCrypto PBKDF2 password hashing, Session JWT issuance & Bearer middleware, multi-role access | **P0** | **Core Completed** (Multi-member invitation pending) | `server/src/routes/auth.routes.ts`<br/>`server/src/middleware/auth.ts`<br/>`web/src/pages/LoginPage.tsx` |
+| **M02** | **Auth & RBAC** | Admin users, WebCrypto PBKDF2 password hashing, Session JWT issuance & Bearer middleware, multi-role team management | **P0** | **Completed** | `server/src/routes/auth.routes.ts`<br/>`server/src/routes/admin/users.routes.ts`<br/>`web/src/pages/LoginPage.tsx`<br/>`web/src/pages/DashboardPage.tsx` |
 | **M03** | **Products & Cryptography** | Software product catalog, WebCrypto Ed25519 key pair generation, AES-256-GCM private key envelope encryption, key import verification | **P0** | **Completed** | `server/src/infra/crypto/`<br/>`server/src/routes/admin/products.routes.ts`<br/>`web/src/components/modals/CreateProductModal.tsx` |
 | **M04** | **Policies Engine** | Lifetime/subscription duration, hardware seat limit (`maxMachines`), offline grace period, `ed25519` vs `guid` schemes | **P0** | **Completed** | `server/src/routes/admin/policies.routes.ts`<br/>`web/src/components/modals/CreatePolicyModal.tsx`<br/>`web/src/components/modals/EditPolicyModal.tsx` |
 | **M05** | **Licenses Lifecycle** | Formatted key generator (`LIC-XXXX-XXXX-XXXX-XXXX`), manual issuance, suspension/reinstate/revocation, key rotation, seat unbinding | **P0** | **Completed** | `server/src/routes/admin/licenses.routes.ts`<br/>`web/src/components/modals/IssueLicenseModal.tsx`<br/>`web/src/components/modals/LicenseDetailModal.tsx` |
@@ -52,7 +52,7 @@
 - [x] **M02.2** WebCrypto PBKDF2-HMAC-SHA256 salted password hashing & constant-time comparison;
 - [x] **M02.3** WebCrypto HMAC-SHA256 Session JWT issuance & validation (7-day duration);
 - [x] **M02.4** `sessionAuth` middleware injecting authenticated context;
-- [ ] **M02.5** Team member management & password reset;
+- [x] **M02.5** Team member management & role switching (`PATCH /api/v1/admin/users/:id` & dashboard integration);
 - [ ] **M02.6** Member invitation workflow via outbound webhooks;
 - [ ] **M02.7** Detailed audit log for administrative actions.
 

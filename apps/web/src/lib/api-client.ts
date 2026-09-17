@@ -138,4 +138,24 @@ export const api = {
     deleteEndpoint: (id: string) => request<any>(`/admin/webhooks/${id}`, { method: "DELETE" }),
     listEvents: () => request<{ items: any[] }>("/admin/webhooks/events"),
   },
+  users: {
+    list: () => request<{ items: any[] }>("/admin/users"),
+    create: (body: { email: string; name: string; password: string; role: "admin" | "member" }) =>
+      request<{ id: string; email: string; name: string; role: string }>("/admin/users", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    update: (
+      id: string,
+      body: { name?: string; role?: "admin" | "member"; isActive?: boolean; password?: string }
+    ) =>
+      request<{ id: string; email: string; name: string; role: string; isActive: boolean }>(
+        `/admin/users/${id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        }
+      ),
+    delete: (id: string) => request<{ message: string }>(`/admin/users/${id}`, { method: "DELETE" }),
+  },
 };

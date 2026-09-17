@@ -92,6 +92,74 @@ adminUsersRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
   );
 });
 
+const UpdateUserSchema = z.object({
+  name: z.string().min(1).optional(),
+  role: z.enum(["admin", "member"]).optional(),
+  isActive: z.boolean().optional(),
+  password: z.string().min(8).optional(),
+});
+
+// PATCH /api/v1/admin/users/:id
+adminUsersRouter.patch("/:id", requireRole(["owner"]), async (c) => {
+  const targetId = c.req.param("id");
+  const currentUserId = c.get("userId");
+  const body = await c.req.json();
+  const input = UpdateUserSchema.parse(body);
+
+  const db = getTenantDB(c);
+  const accountId = c.get("accountId")!;
+
+  const target = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.id, targetId), eq(users.accountId, accountId)))
+    .get();
+
+  if (!target) {
+    throw new NotFoundError("User not found");
+  }
+
+  // Safety protection: cannot demote an owner or deactivate oneself
+  if (target.role === "owner" && input.role) {
+    throw new AppError("CANNOT_DEMOTE_OWNER", "The workspace owner cannot be demoted", 400);
+  }
+
+  if (targetId === currentUserId && input.isActive === false) {
+    throw new AppError("CANNOT_DEACTIVATE_SELF", "You cannot deactivate your own user account", 400);
+  }
+
+  const updates: Partial<typeof users.$inferInsert> = {
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (input.name !== undefined) updates.name = input.name;
+  if (input.role !== undefined) updates.role = input.role;
+  if (input.isActive !== undefined) updates.isActive = input.isActive;
+  if (input.password !== undefined) {
+    updates.passwordHash = await hashPassword(input.password);
+  }
+
+  await db.update(users).set(updates).where(eq(users.id, targetId));
+
+  const updated = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      role: users.role,
+      isActive: users.isActive,
+      updatedAt: users.updatedAt,
+    })
+    .from(users)
+    .where(eq(users.id, targetId))
+    .get();
+
+  return c.json({
+    success: true,
+    data: updated,
+  });
+});
+
 // DELETE /api/v1/admin/users/:id
 adminUsersRouter.delete("/:id", requireRole(["owner"]), async (c) => {
   const targetId = c.req.param("id");

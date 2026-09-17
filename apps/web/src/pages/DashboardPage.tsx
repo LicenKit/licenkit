@@ -36,6 +36,8 @@ import { EditProductModal } from "../components/modals/EditProductModal";
 import { EditPolicyModal } from "../components/modals/EditPolicyModal";
 import { LicenseDetailModal } from "../components/modals/LicenseDetailModal";
 import { CreateWebhookModal } from "../components/modals/CreateWebhookModal";
+import { CreateUserModal } from "../components/modals/CreateUserModal";
+import { EditUserModal } from "../components/modals/EditUserModal";
 
 interface DashboardPageProps {
   user: any;
@@ -96,12 +98,44 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
   const [envCheck, setEnvCheck] = useState<EnvCheckResponse | null>(null);
   const [loadingEnvCheck, setLoadingEnvCheck] = useState(false);
 
+  // Team state
+  const [teamUsers, setTeamUsers] = useState<any[]>([]);
+  const [loadingTeam, setLoadingTeam] = useState(false);
+  const [isCreateUserOpen, setIsCreateUserOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<any | null>(null);
+  const [isEditUserOpen, setIsEditUserOpen] = useState(false);
+
   useEffect(() => {
     loadSettings();
     loadDashboardData();
     loadWebhooks();
     loadEnvCheck();
+    loadTeamUsers();
   }, []);
+
+  const loadTeamUsers = async () => {
+    setLoadingTeam(true);
+    try {
+      const res = await api.users.list();
+      setTeamUsers(res.items || []);
+    } catch (err) {
+      console.error("Failed to load team members", err);
+    } finally {
+      setLoadingTeam(false);
+    }
+  };
+
+  const handleDeleteUser = async (targetUser: any) => {
+    if (!confirm(`Are you sure you want to remove ${targetUser.name} (${targetUser.email}) from the team?`)) {
+      return;
+    }
+    try {
+      await api.users.delete(targetUser.id);
+      loadTeamUsers();
+    } catch (err: any) {
+      alert(err.message || "Failed to remove user");
+    }
+  };
 
   const loadEnvCheck = async () => {
     setLoadingEnvCheck(true);
@@ -1205,23 +1239,105 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
           {activeNav === "team" && (
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <p className="text-sm text-slate-400">Collaborate with administrators and team members.</p>
-                <button className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg">
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Member</span>
-                </button>
-              </div>
-              <div className="bg-slate-800/50 border border-slate-700/70 rounded-xl divide-y divide-slate-800">
-                <div className="p-4 flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-medium text-white">{user.name} (You)</div>
-                    <div className="text-xs text-slate-400">{user.email}</div>
-                  </div>
-                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 uppercase font-semibold">
-                    {user.role}
-                  </span>
+                <div>
+                  <h3 className="text-sm font-medium text-white">Team Members</h3>
+                  <p className="text-xs text-slate-400">Collaborate with administrators and team members.</p>
                 </div>
+                {(user.role === "owner" || user.role === "admin") && (
+                  <button
+                    onClick={() => setIsCreateUserOpen(true)}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-xl transition-all cursor-pointer shadow-md shadow-indigo-600/20"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Member</span>
+                  </button>
+                )}
               </div>
+
+              {loadingTeam ? (
+                <div className="p-8 text-center text-slate-500 text-sm flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Loading team members...</span>
+                </div>
+              ) : teamUsers.length === 0 ? (
+                <div className="p-8 text-center bg-slate-800/30 border border-slate-700/60 rounded-xl text-slate-400 text-sm">
+                  No members found.
+                </div>
+              ) : (
+                <div className="bg-slate-800/50 border border-slate-700/70 rounded-xl divide-y divide-slate-800 overflow-hidden">
+                  {teamUsers.map((u) => {
+                    const isCurrentUser = u.id === user.id;
+                    return (
+                      <div
+                        key={u.id}
+                        className="p-4 flex items-center justify-between hover:bg-slate-800/40 transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5">
+                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 flex items-center justify-center text-xs font-bold text-indigo-300">
+                            {u.name?.slice(0, 2).toUpperCase() || "U"}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-white">{u.name}</span>
+                              {isCurrentUser && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 font-medium">
+                                  You
+                                </span>
+                              )}
+                              {u.isActive === false && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-400 font-medium">
+                                  Suspended
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-400">{u.email}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`text-xs px-2.5 py-0.5 rounded-full uppercase font-semibold tracking-wider ${
+                              u.role === "owner"
+                                ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                                : u.role === "admin"
+                                ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                                : "bg-slate-700/50 text-slate-400 border border-slate-700"
+                            }`}
+                          >
+                            {u.role}
+                          </span>
+
+                          {/* Action buttons: Only owner can edit roles or delete others */}
+                          {user.role === "owner" && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => {
+                                  setEditingUser(u);
+                                  setIsEditUserOpen(true);
+                                }}
+                                title="Edit Role & Permissions"
+                                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+
+                              {!isCurrentUser && u.role !== "owner" && (
+                                <button
+                                  onClick={() => handleDeleteUser(u)}
+                                  title="Remove Member"
+                                  className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </main>
@@ -1284,6 +1400,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
         onClose={() => setIsCreateWebhookOpen(false)}
         onSuccess={loadWebhooks}
         products={productsList}
+      />
+
+      <CreateUserModal
+        isOpen={isCreateUserOpen}
+        onClose={() => setIsCreateUserOpen(false)}
+        onSuccess={loadTeamUsers}
+      />
+
+      <EditUserModal
+        isOpen={isEditUserOpen}
+        onClose={() => {
+          setIsEditUserOpen(false);
+          setEditingUser(null);
+        }}
+        onSuccess={loadTeamUsers}
+        userToEdit={editingUser}
+        currentUserId={user.id}
       />
     </div>
   );
