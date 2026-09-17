@@ -1,0 +1,24 @@
+{
+  "name": "licenkit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LicenKit - Modern, self-hosted API-First licensing hub and key generator",
+  "keywords": [
+    "licensing",
+    "license-manager",
+    "license-generator",
+    "cloudflare-workers",
+    "d1",
+    "ed25519"
+  ],
+  "author": "LicenKit Contributors",
+  "scripts": {
+    "dev": "pnpm --parallel --filter '@licenkit/*' run dev",
+    "dev:server": "pnpm --filter @licenkit/server run dev",
+    "dev:web": "pnpm --filter @licenkit/web run dev",
+    "build": "pnpm --filter @licenkit/web run build && pnpm --filter @licenkit/server run build",
+    "typecheck": "pnpm -r run typecheck",
+    "deploy": "pnpm run build && pnpm --filter @licenkit/server run deploy"
+  },
+  "packageManager": "pnpm@10.32.1"
+}

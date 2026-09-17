@@ -1,0 +1,18 @@
+node_modules/
+dist/
+build/
+.cache/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+.dev.vars
+.wrangler/
+
+# OS / Editor files
+.DS_Store
+.vscode/
+.idea/
+*.log
+AGENTS.md
