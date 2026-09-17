@@ -22,7 +22,7 @@
 | 模块编号 | 模块名称 | 核心职责 | 优先级 | 当前状态 | 对应代码与目录 |
 | :--- | :--- | :--- | :---: | :---: | :--- |
 | **M01** | **系统引导与动态域名 (System & Setup)** | 首次部署 Setup 向导、`system_settings` 单例配置、单域名零 CORS 自动解析、参数热更新、环境安全自检 | **P0** | **已完成** | `server/src/routes/system.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts`<br/>`web/src/pages/SetupPage.tsx` |
-| **M02** | **身份认证与权限管理 (Auth & RBAC)** | 自然人账号、WebCrypto PBKDF2 密码散列、Session JWT 签发与 Bearer 中间件、多角色管控与团队管理 | **P0** | **已完成** | `server/src/routes/auth.routes.ts`<br/>`server/src/routes/admin/users.routes.ts`<br/>`web/src/pages/LoginPage.tsx`<br/>`web/src/pages/DashboardPage.tsx` |
+| **M02** | **身份认证与权限管理 (Auth & RBAC)** | 自然人账号、WebCrypto PBKDF2 密码散列、Session JWT 签发与 Bearer 中间件、多角色管控、团队管理与细粒度操作审计 | **P0** | **已完成** (剩余 M02.6 邀请) | `server/src/routes/auth.routes.ts`<br/>`server/src/routes/admin/users.routes.ts`<br/>`server/src/routes/admin/audit.routes.ts`<br/>`web/src/pages/DashboardPage.tsx` |
 | **M03** | **产品与离线密码学引擎 (Products & Crypto)** | 软件产品管理、WebCrypto 原生 Ed25519 密钥对生成、AES-256-GCM 私钥信封加密持久化、私钥导入校验与一次性下载 | **P0** | **已完成** | `server/src/infra/crypto/`<br/>`server/src/routes/admin/products.routes.ts`<br/>`web/src/components/modals/CreateProductModal.tsx` |
 | **M04** | **授权策略与席位规则引擎 (Policies Engine)** | 买断/订阅有效期计算、设备席位上限 (`maxMachines`)、离线验签宽限期、`ed25519` 签名 vs `guid` 模式、特性标签 | **P0** | **已完成** | `server/src/routes/admin/policies.routes.ts`<br/>`web/src/components/modals/CreatePolicyModal.tsx`<br/>`web/src/components/modals/EditPolicyModal.tsx` |
 | **M05** | **许可证全生命周期管理 (Licenses Lifecycle)** | 格式化激活码生成 (`LIC-XXXX-XXXX-XXXX-XXXX`)、手动发码、挂起/解挂/吊销、到期判定、一键轮换 Key、席位查看与解绑 | **P0** | **已完成** | `server/src/routes/admin/licenses.routes.ts`<br/>`web/src/components/modals/IssueLicenseModal.tsx`<br/>`web/src/components/modals/LicenseDetailModal.tsx` |
@@ -53,7 +53,7 @@
 - [x] **M02.4** `sessionAuth` 中间件（自动从 `Authorization: Bearer <token>` 提取身份并注入 Context）；
 - [x] **M02.5** 团队成员管理：支持四级角色（Owner/Admin/Member/Viewer）权限管控矩阵、新增成员、角色切换升降级、账号冻结与密码重置（`PATCH /api/v1/admin/users/:id` 与前端控制台联动）；
 - [ ] **M02.6** 成员邀请机制：通过出向 Webhook 发送邀请链接并在前端设置独立密码；
-- [ ] **M02.7** 细粒度操作审计：记录各管理员的操作流水日志。
+- [x] **M02.7** 细粒度操作审计：记录各管理员的操作流水日志（`audit_logs` 12 张表建模、强制查询下推、敏感数据递归脱敏、控制台时序流与 JSON 快照面板）。
 
 ---
 

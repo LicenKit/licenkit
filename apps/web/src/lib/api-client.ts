@@ -158,4 +158,27 @@ export const api = {
       ),
     delete: (id: string) => request<{ message: string }>(`/admin/users/${id}`, { method: "DELETE" }),
   },
+  audit: {
+    list: (
+      params: {
+        page?: number;
+        limit?: number;
+        action?: string;
+        resourceType?: string;
+        userId?: string;
+        query?: string;
+      } = {}
+    ) => {
+      const sp = new URLSearchParams();
+      if (params.page) sp.set("page", String(params.page));
+      if (params.limit) sp.set("limit", String(params.limit));
+      if (params.action && params.action !== "all") sp.set("action", params.action);
+      if (params.resourceType && params.resourceType !== "all") sp.set("resourceType", params.resourceType);
+      if (params.userId && params.userId !== "all") sp.set("userId", params.userId);
+      if (params.query) sp.set("query", params.query);
+      const qs = sp.toString();
+      return request<{ items: any[]; pagination: any }>(`/admin/audit-logs${qs ? `?${qs}` : ""}`);
+    },
+  },
 };
+

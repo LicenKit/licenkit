@@ -7,6 +7,7 @@ import { users, accounts } from "../infra/db/schema";
 import { verifyPassword, signJWT, getJwtSecret } from "../infra/crypto";
 import { sessionAuth } from "../middleware/auth";
 import { UnauthorizedError } from "../middleware/error";
+import { recordAuditLog } from "../infra/audit";
 
 export const authRouter = new Hono<AppContext>();
 
@@ -58,6 +59,19 @@ authRouter.post("/login", async (c) => {
     },
     jwtSecret
   );
+
+  await recordAuditLog({
+    c,
+    action: "auth.login",
+    resourceType: "auth",
+    resourceId: user.id,
+    userId: user.id,
+    userEmail: user.email,
+    accountId: account.id,
+    details: {
+      role: user.role,
+    },
+  });
 
   return c.json({
     success: true,
@@ -113,6 +127,14 @@ authRouter.get("/me", sessionAuth, async (c) => {
 
 // POST /api/v1/auth/logout
 authRouter.post("/logout", sessionAuth, async (c) => {
+  await recordAuditLog({
+    c,
+    action: "auth.logout",
+    resourceType: "auth",
+    resourceId: c.get("userId"),
+    details: {},
+  });
+
   return c.json({
     success: true,
     data: {
@@ -120,3 +142,4 @@ authRouter.post("/logout", sessionAuth, async (c) => {
     },
   });
 });
+

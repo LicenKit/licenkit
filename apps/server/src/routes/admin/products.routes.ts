@@ -8,6 +8,7 @@ import { products, cryptoKeys, policies, licenses } from "../../infra/db/schema"
 import { generateEd25519KeyPair, validateAndImportEd25519KeyPair, encryptEnvelope, getStorageEncryptionKey } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, ConflictError, AppError } from "../../middleware/error";
+import { recordAuditLog } from "../../infra/audit";
 
 export const adminProductsRouter = new Hono<AppContext>();
 
@@ -135,6 +136,20 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     }),
   ]);
 
+  await recordAuditLog({
+    c,
+    action: "product.create",
+    resourceType: "product",
+    resourceId: productId,
+    details: {
+      name: input.name,
+      description: input.description,
+      trialDays: input.trialDays,
+      keySource: source,
+      kid,
+    },
+  });
+
   return c.json(
     {
       success: true,
@@ -243,6 +258,19 @@ adminProductsRouter.patch("/:id", requireRole(["owner", "admin", "member"]), asy
     .where(and(eq(products.id, productId), eq(products.accountId, accountId)))
     .get();
 
+  await recordAuditLog({
+    c,
+    action: "product.update",
+    resourceType: "product",
+    resourceId: productId,
+    details: {
+      name: updatedProduct!.name,
+      isActive: updatedProduct!.isActive,
+      trialDays: updatedProduct!.trialDays,
+      updatedFields: Object.keys(input),
+    },
+  });
+
   const features = JSON.parse(updatedProduct!.trialFeatures || "[]");
   return c.json({
     success: true,
@@ -307,6 +335,16 @@ adminProductsRouter.delete("/:id", requireRole(["owner", "admin"]), async (c) =>
     db.delete(products).where(and(eq(products.id, productId), eq(products.accountId, accountId))),
     db.delete(cryptoKeys).where(and(eq(cryptoKeys.productId, productId), eq(cryptoKeys.accountId, accountId))),
   ]);
+
+  await recordAuditLog({
+    c,
+    action: "product.delete",
+    resourceType: "product",
+    resourceId: productId,
+    details: {
+      name: product.name,
+    },
+  });
 
   return c.json({
     success: true,

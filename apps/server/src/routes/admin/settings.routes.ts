@@ -7,6 +7,7 @@ import { systemSettings, accounts } from "../../infra/db/schema";
 import { encryptEnvelope, decryptEnvelope, getStorageEncryptionKey } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, AppError } from "../../middleware/error";
+import { recordAuditLog } from "../../infra/audit";
 
 export const adminSettingsRouter = new Hono<AppContext>();
 
@@ -150,6 +151,17 @@ adminSettingsRouter.put("/", requireRole(["owner", "admin"]), async (c) => {
     const encrypted = await encryptEnvelope(JSON.stringify(merged), encKey);
     await db.update(accounts).set({ paymentConfigs: encrypted, updatedAt: now }).where(eq(accounts.id, accountId));
   }
+
+  await recordAuditLog({
+    c,
+    action: "settings.update",
+    resourceType: "settings",
+    resourceId: "current",
+    details: {
+      updatedSystemFields: Object.keys(sysUpdates).filter((k) => k !== "updatedAt"),
+      updatedPaymentProviders: input.payment_configs ? Object.keys(input.payment_configs) : [],
+    },
+  });
 
   return c.json({
     success: true,

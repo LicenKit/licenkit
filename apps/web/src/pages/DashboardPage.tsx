@@ -28,6 +28,7 @@ import {
   Lock,
   RefreshCw,
   CheckCircle2,
+  History,
 } from "lucide-react";
 import { CreateProductModal } from "../components/modals/CreateProductModal";
 import { CreatePolicyModal } from "../components/modals/CreatePolicyModal";
@@ -38,6 +39,7 @@ import { LicenseDetailModal } from "../components/modals/LicenseDetailModal";
 import { CreateWebhookModal } from "../components/modals/CreateWebhookModal";
 import { CreateUserModal } from "../components/modals/CreateUserModal";
 import { EditUserModal } from "../components/modals/EditUserModal";
+import { AuditDetailModal } from "../components/modals/AuditDetailModal";
 
 interface DashboardPageProps {
   user: any;
@@ -46,7 +48,7 @@ interface DashboardPageProps {
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onLogout }) => {
-  const [activeNav, setActiveNav] = useState<"overview" | "products" | "policies" | "licenses" | "gateways" | "settings" | "team">("overview");
+  const [activeNav, setActiveNav] = useState<"overview" | "products" | "policies" | "licenses" | "gateways" | "settings" | "team" | "audit">("overview");
 
   // RBAC Permission Flags
   const isOwner = user?.role === "owner";
@@ -121,6 +123,35 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
   const [editingUser, setEditingUser] = useState<any | null>(null);
   const [isEditUserOpen, setIsEditUserOpen] = useState(false);
 
+  // Audit Logs state
+  const [auditLogsList, setAuditLogsList] = useState<any[]>([]);
+  const [auditPagination, setAuditPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
+  const [loadingAudit, setLoadingAudit] = useState(false);
+  const [auditFilterAction, setAuditFilterAction] = useState("all");
+  const [auditFilterResourceType, setAuditFilterResourceType] = useState("all");
+  const [auditSearchQuery, setAuditSearchQuery] = useState("");
+  const [inspectingAuditLog, setInspectingAuditLog] = useState<any | null>(null);
+  const [isAuditDetailOpen, setIsAuditDetailOpen] = useState(false);
+
+  const loadAuditLogs = async (page = 1) => {
+    setLoadingAudit(true);
+    try {
+      const res = await api.audit.list({
+        page,
+        limit: 20,
+        action: auditFilterAction !== "all" ? auditFilterAction : undefined,
+        resourceType: auditFilterResourceType !== "all" ? auditFilterResourceType : undefined,
+        query: auditSearchQuery.trim() || undefined,
+      });
+      setAuditLogsList(res.items || []);
+      setAuditPagination(res.pagination || { page: 1, limit: 20, total: 0, totalPages: 1 });
+    } catch (err) {
+      console.error("Failed to load audit logs", err);
+    } finally {
+      setLoadingAudit(false);
+    }
+  };
+
   useEffect(() => {
     loadSettings();
     loadDashboardData();
@@ -128,6 +159,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
     loadEnvCheck();
     loadTeamUsers();
   }, []);
+
+  useEffect(() => {
+    if (activeNav === "audit") {
+      loadAuditLogs(1);
+    }
+  }, [activeNav, auditFilterAction, auditFilterResourceType]);
+
 
   const loadTeamUsers = async () => {
     setLoadingTeam(true);
@@ -428,6 +466,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
               <Users className="w-4 h-4" />
               <span>Team & Access</span>
             </button>
+
+            <button
+              onClick={() => setActiveNav("audit")}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeNav === "audit" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              }`}
+            >
+              <History className="w-4 h-4" />
+              <span>Audit Logs</span>
+            </button>
           </nav>
         </div>
 
@@ -459,7 +507,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
         {/* Top bar */}
         <header className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm px-8 flex items-center justify-between sticky top-0 z-10">
           <h2 className="text-lg font-semibold text-white capitalize">
-            {activeNav === "gateways" ? "Payment Gateways & Webhooks" : activeNav}
+            {activeNav === "gateways" ? "Payment Gateways & Webhooks" : activeNav === "audit" ? "Audit Logs & Activity Stream" : activeNav}
           </h2>
           <div className="flex items-center gap-3">
             <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
@@ -1389,6 +1437,216 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
               )}
             </div>
           )}
+
+          {/* 8. AUDIT LOGS TAB */}
+          {activeNav === "audit" && (
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                    <History className="w-5 h-5 text-indigo-400" />
+                    Audit Logs & Operations Stream
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Immutable chronological record of administrative changes across this instance.
+                  </p>
+                </div>
+                <button
+                  onClick={() => loadAuditLogs(auditPagination.page)}
+                  disabled={loadingAudit}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl border border-slate-700 transition-colors cursor-pointer self-start sm:self-auto"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingAudit ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+              </div>
+
+              {/* Filters Bar */}
+              <div className="bg-slate-900 border border-slate-800/80 p-4 rounded-xl flex flex-col sm:flex-row gap-3 items-center justify-between">
+                {/* Search */}
+                <div className="relative w-full sm:w-80">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Filter by operator, resource or action..."
+                    value={auditSearchQuery}
+                    onChange={(e) => setAuditSearchQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && loadAuditLogs(1)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                  />
+                </div>
+
+                {/* Dropdowns */}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <select
+                    value={auditFilterResourceType}
+                    onChange={(e) => setAuditFilterResourceType(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="all">All Resources</option>
+                    <option value="license">Licenses</option>
+                    <option value="product">Products</option>
+                    <option value="policy">Policies</option>
+                    <option value="user">Team Users</option>
+                    <option value="settings">Settings</option>
+                    <option value="webhook">Webhooks</option>
+                    <option value="auth">Authentication</option>
+                  </select>
+
+                  <select
+                    value={auditFilterAction}
+                    onChange={(e) => setAuditFilterAction(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="all">All Actions</option>
+                    <option value="license.create">license.create</option>
+                    <option value="license.update">license.update</option>
+                    <option value="license.revoke">license.revoke</option>
+                    <option value="license.suspend">license.suspend</option>
+                    <option value="license.reinstate">license.reinstate</option>
+                    <option value="license.rotate_key">license.rotate_key</option>
+                    <option value="license.machine_unbind">license.machine_unbind</option>
+                    <option value="product.create">product.create</option>
+                    <option value="product.update">product.update</option>
+                    <option value="product.delete">product.delete</option>
+                    <option value="policy.create">policy.create</option>
+                    <option value="policy.update">policy.update</option>
+                    <option value="policy.delete">policy.delete</option>
+                    <option value="user.create">user.create</option>
+                    <option value="user.update">user.update</option>
+                    <option value="user.delete">user.delete</option>
+                    <option value="settings.update">settings.update</option>
+                    <option value="webhook.create">webhook.create</option>
+                    <option value="webhook.delete">webhook.delete</option>
+                    <option value="webhook.test">webhook.test</option>
+                    <option value="auth.login">auth.login</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Logs Table */}
+              <div className="bg-slate-900 border border-slate-800/80 rounded-xl overflow-hidden">
+                {loadingAudit ? (
+                  <div className="p-12 text-center text-slate-400 text-sm flex items-center justify-center gap-2">
+                    <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+                    Loading audit stream...
+                  </div>
+                ) : auditLogsList.length === 0 ? (
+                  <div className="p-12 text-center text-slate-400 text-sm">
+                    No audit records match the selected criteria.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-800 bg-slate-950/40 text-slate-400 font-medium uppercase tracking-wider text-[11px]">
+                          <th className="py-3 px-4">Timestamp</th>
+                          <th className="py-3 px-4">Operator</th>
+                          <th className="py-3 px-4">Action</th>
+                          <th className="py-3 px-4">Resource</th>
+                          <th className="py-3 px-4">Client IP</th>
+                          <th className="py-3 px-4 text-right">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {auditLogsList.map((log) => {
+                          const isDelete = log.action.includes("delete") || log.action.includes("revoke");
+                          const isCreate = log.action.includes("create") || log.action.includes("reinstate");
+                          const isUpdate = log.action.includes("update") || log.action.includes("rotate");
+                          const isSuspend = log.action.includes("suspend");
+
+                          const badgeClass = isDelete
+                            ? "bg-rose-500/10 text-rose-400 border-rose-500/30"
+                            : isCreate
+                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                            : isUpdate
+                            ? "bg-sky-500/10 text-sky-400 border-sky-500/30"
+                            : isSuspend
+                            ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                            : "bg-purple-500/10 text-purple-400 border-purple-500/30";
+
+                          return (
+                            <tr key={log.id} className="hover:bg-slate-800/30 transition-colors">
+                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">
+                                {new Date(log.createdAt).toLocaleString()}
+                              </td>
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                <span className="font-medium text-slate-200">{log.userEmail}</span>
+                              </td>
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                <span
+                                  className={`inline-block px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${badgeClass}`}
+                                >
+                                  {log.action}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                <div className="flex items-center gap-1.5 font-mono">
+                                  <span className="text-[10px] uppercase font-bold text-slate-500">
+                                    {log.resourceType}
+                                  </span>
+                                  {log.resourceId && (
+                                    <span className="text-indigo-300 truncate max-w-[140px]" title={log.resourceId}>
+                                      {log.resourceId}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">
+                                {log.ip || "127.0.0.1"}
+                              </td>
+                              <td className="py-3 px-4 text-right whitespace-nowrap">
+                                <button
+                                  onClick={() => {
+                                    setInspectingAuditLog(log);
+                                    setIsAuditDetailOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  View Details
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Pagination */}
+                {auditPagination.total > 0 && (
+                  <div className="flex items-center justify-between px-4 py-3 border-t border-slate-800 bg-slate-950/20 text-xs text-slate-400">
+                    <div>
+                      Showing {(auditPagination.page - 1) * auditPagination.limit + 1} to{" "}
+                      {Math.min(auditPagination.page * auditPagination.limit, auditPagination.total)} of{" "}
+                      {auditPagination.total} entries
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => loadAuditLogs(auditPagination.page - 1)}
+                        disabled={auditPagination.page <= 1}
+                        className="px-3 py-1 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                      >
+                        Previous
+                      </button>
+                      <span>
+                        Page {auditPagination.page} of {auditPagination.totalPages || 1}
+                      </span>
+                      <button
+                        onClick={() => loadAuditLogs(auditPagination.page + 1)}
+                        disabled={auditPagination.page >= auditPagination.totalPages}
+                        className="px-3 py-1 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1467,6 +1725,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
         onSuccess={loadTeamUsers}
         userToEdit={editingUser}
         currentUserId={user.id}
+      />
+
+      <AuditDetailModal
+        isOpen={isAuditDetailOpen}
+        onClose={() => {
+          setIsAuditDetailOpen(false);
+          setInspectingAuditLog(null);
+        }}
+        auditLog={inspectingAuditLog}
       />
     </div>
   );

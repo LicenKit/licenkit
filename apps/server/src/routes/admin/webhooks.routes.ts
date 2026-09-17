@@ -8,6 +8,7 @@ import { webhookEndpoints, webhookEvents, products } from "../../infra/db/schema
 import { bufferToHex, computeHmacSha256, computeOutboundWebhookSignature } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, AppError } from "../../middleware/error";
+import { recordAuditLog } from "../../infra/audit";
 
 export const adminWebhooksRouter = new Hono<AppContext>();
 
@@ -137,6 +138,19 @@ adminWebhooksRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     updatedAt: now,
   });
 
+  await recordAuditLog({
+    c,
+    action: "webhook.create",
+    resourceType: "webhook",
+    resourceId: endpointId,
+    details: {
+      productId: input.productId,
+      productName,
+      url: input.url,
+      events: input.events,
+    },
+  });
+
   return c.json(
     {
       success: true,
@@ -205,6 +219,19 @@ adminWebhooksRouter.post("/:id/test", requireRole(["owner", "admin"]), async (c)
     clearTimeout(timeoutId);
     const durationMs = Date.now() - startTime;
 
+    await recordAuditLog({
+      c,
+      action: "webhook.test",
+      resourceType: "webhook",
+      resourceId: id,
+      details: {
+        url: endpoint.url,
+        delivered: response.ok,
+        status: response.status,
+        durationMs,
+      },
+    });
+
     return c.json({
       success: true,
       data: {
@@ -245,6 +272,17 @@ adminWebhooksRouter.delete("/:id", requireRole(["owner", "admin"]), async (c) =>
   }
 
   await db.delete(webhookEndpoints).where(eq(webhookEndpoints.id, id));
+
+  await recordAuditLog({
+    c,
+    action: "webhook.delete",
+    resourceType: "webhook",
+    resourceId: id,
+    details: {
+      url: existing.url,
+      productId: existing.productId,
+    },
+  });
 
   return c.json({
     success: true,

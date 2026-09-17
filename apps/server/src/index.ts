@@ -13,6 +13,7 @@ import { adminPoliciesRouter } from "./routes/admin/policies.routes";
 import { adminLicensesRouter } from "./routes/admin/licenses.routes";
 import { adminWebhooksRouter } from "./routes/admin/webhooks.routes";
 import { adminStatsRouter } from "./routes/admin/stats.routes";
+import { adminAuditRouter } from "./routes/admin/audit.routes";
 import { webhookRouter } from "./routes/webhook.routes";
 import { handleQueueBatch, type WebhookMessage } from "./queue/consumer";
 
@@ -51,6 +52,7 @@ admin.route("/policies", adminPoliciesRouter);
 admin.route("/licenses", adminLicensesRouter);
 admin.route("/webhooks", adminWebhooksRouter);
 admin.route("/stats", adminStatsRouter);
+admin.route("/audit-logs", adminAuditRouter);
 
 api.route("/admin", admin);
 api.route("/webhooks", webhookRouter);

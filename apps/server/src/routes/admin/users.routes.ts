@@ -8,6 +8,7 @@ import { users } from "../../infra/db/schema";
 import { hashPassword } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
 import { AppError, ConflictError, NotFoundError } from "../../middleware/error";
+import { recordAuditLog } from "../../infra/audit";
 
 export const adminUsersRouter = new Hono<AppContext>();
 
@@ -78,6 +79,18 @@ adminUsersRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     updatedAt: now,
   });
 
+  await recordAuditLog({
+    c,
+    action: "user.create",
+    resourceType: "user",
+    resourceId: userId,
+    details: {
+      email: input.email,
+      name: input.name,
+      role: input.role,
+    },
+  });
+
   return c.json(
     {
       success: true,
@@ -141,6 +154,20 @@ adminUsersRouter.patch("/:id", requireRole(["owner"]), async (c) => {
 
   await db.update(users).set(updates).where(eq(users.id, targetId));
 
+  await recordAuditLog({
+    c,
+    action: "user.update",
+    resourceType: "user",
+    resourceId: targetId,
+    details: {
+      email: target.email,
+      changedRole: input.role,
+      changedActive: input.isActive,
+      changedName: input.name,
+      passwordReset: input.password !== undefined,
+    },
+  });
+
   const updated = await db
     .select({
       id: users.id,
@@ -183,6 +210,18 @@ adminUsersRouter.delete("/:id", requireRole(["owner"]), async (c) => {
   }
 
   await db.delete(users).where(eq(users.id, targetId));
+
+  await recordAuditLog({
+    c,
+    action: "user.delete",
+    resourceType: "user",
+    resourceId: targetId,
+    details: {
+      email: target.email,
+      name: target.name,
+      role: target.role,
+    },
+  });
 
   return c.json({
     success: true,

@@ -179,3 +179,24 @@ export const webhookEvents = sqliteTable("webhook_events", {
   index("idx_webhook_events_account").on(table.accountId),
   index("idx_webhook_events_dir_status").on(table.direction, table.status, table.createdAt),
 ]);
+
+// 12. 管理员细粒度操作审计流水表 (Audit Logs)
+export const auditLogs = sqliteTable("audit_logs", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull(),
+  userId: text("user_id").notNull(),
+  userEmail: text("user_email").notNull(),
+  action: text("action").notNull(),
+  resourceType: text("resource_type").notNull(),
+  resourceId: text("resource_id"),
+  details: text("details").notNull().default("{}"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  index("idx_audit_logs_account_created").on(table.accountId, table.createdAt),
+  index("idx_audit_logs_user").on(table.accountId, table.userId, table.createdAt),
+  index("idx_audit_logs_action").on(table.accountId, table.action, table.createdAt),
+  index("idx_audit_logs_resource").on(table.accountId, table.resourceType, table.resourceId),
+]);
+

@@ -7,6 +7,7 @@ import { getTenantDB } from "../../infra/db";
 import { policies, products, licenses } from "../../infra/db/schema";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, AppError, ConflictError } from "../../middleware/error";
+import { recordAuditLog } from "../../infra/audit";
 
 export const adminPoliciesRouter = new Hono<AppContext>();
 
@@ -173,6 +174,21 @@ adminPoliciesRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     updatedAt: now,
   });
 
+  await recordAuditLog({
+    c,
+    action: "policy.create",
+    resourceType: "policy",
+    resourceId: policyId,
+    details: {
+      productId: input.productId,
+      productName: product.name,
+      name: input.name,
+      duration: input.duration,
+      scheme: input.scheme,
+      maxMachines: input.maxMachines,
+    },
+  });
+
   return c.json(
     {
       success: true,
@@ -270,6 +286,17 @@ adminPoliciesRouter.patch("/:id", requireRole(["owner", "admin", "member"]), asy
     .where(and(eq(policies.id, policyId), eq(policies.accountId, accountId)))
     .get();
 
+  await recordAuditLog({
+    c,
+    action: "policy.update",
+    resourceType: "policy",
+    resourceId: policyId,
+    details: {
+      name: updated?.name,
+      updatedFields: Object.keys(input),
+    },
+  });
+
   return c.json({
     success: true,
     data: formatPolicy(updated!),
@@ -307,6 +334,17 @@ adminPoliciesRouter.delete("/:id", requireRole(["owner", "admin"]), async (c) =>
   }
 
   await db.delete(policies).where(and(eq(policies.id, policyId), eq(policies.accountId, accountId)));
+
+  await recordAuditLog({
+    c,
+    action: "policy.delete",
+    resourceType: "policy",
+    resourceId: policyId,
+    details: {
+      name: policy.name,
+      productId: policy.productId,
+    },
+  });
 
   return c.json({
     success: true,

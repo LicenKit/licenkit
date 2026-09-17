@@ -8,6 +8,13 @@
       "when": 1789553546270,
       "tag": "0000_sloppy_green_goblin",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789635282125,
+      "tag": "0001_friendly_kronos",
+      "breakpoints": true
     }
   ]
 }

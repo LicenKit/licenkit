@@ -9,6 +9,7 @@ import { generateLicenseKey } from "../../infra/crypto";
 import { broadcastOutboundEvent } from "../../infra/events/broadcast";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, AppError, ConflictError } from "../../middleware/error";
+import { recordAuditLog } from "../../infra/audit";
 
 export const adminLicensesRouter = new Hono<AppContext>();
 
@@ -214,6 +215,20 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin", "member"]), async (
     input.productId
   );
 
+  await recordAuditLog({
+    c,
+    action: "license.create",
+    resourceType: "license",
+    resourceId: licenseId,
+    details: {
+      key,
+      customerEmail: input.customerEmail.toLowerCase().trim(),
+      productId: input.productId,
+      policyId: input.policyId,
+      expiresAt,
+    },
+  });
+
   return c.json(
     {
       success: true,
@@ -365,6 +380,18 @@ adminLicensesRouter.patch("/:id", requireRole(["owner", "admin", "member"]), asy
     license.productId
   );
 
+  await recordAuditLog({
+    c,
+    action: "license.update",
+    resourceType: "license",
+    resourceId: id,
+    details: {
+      key: license.key,
+      status: input.status || license.status,
+      expiresAt: input.expiresAt,
+    },
+  });
+
   return c.json({
     success: true,
     data: { message: "License updated successfully" },
@@ -401,6 +428,17 @@ adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin", "memb
       .where(and(eq(licenses.id, id), eq(licenses.accountId, accountId))),
     db.delete(machines).where(eq(machines.licenseId, id)),
   ]);
+
+  await recordAuditLog({
+    c,
+    action: "license.rotate_key",
+    resourceType: "license",
+    resourceId: id,
+    details: {
+      oldKey: license.key,
+      newKey,
+    },
+  });
 
   return c.json({
     success: true,
@@ -450,6 +488,17 @@ adminLicensesRouter.post("/:id/revoke", requireRole(["owner", "admin", "member"]
     license.productId
   );
 
+  await recordAuditLog({
+    c,
+    action: "license.revoke",
+    resourceType: "license",
+    resourceId: id,
+    details: {
+      key: license.key,
+      productId: license.productId,
+    },
+  });
+
   return c.json({
     success: true,
     data: { message: "License revoked and all machine seats cleared." },
@@ -492,6 +541,16 @@ adminLicensesRouter.post("/:id/suspend", requireRole(["owner", "admin", "member"
     license.productId
   );
 
+  await recordAuditLog({
+    c,
+    action: "license.suspend",
+    resourceType: "license",
+    resourceId: id,
+    details: {
+      key: license.key,
+    },
+  });
+
   return c.json({
     success: true,
     data: { message: "License suspended" },
@@ -533,6 +592,16 @@ adminLicensesRouter.post("/:id/reinstate", requireRole(["owner", "admin", "membe
     },
     license.productId
   );
+
+  await recordAuditLog({
+    c,
+    action: "license.reinstate",
+    resourceType: "license",
+    resourceId: id,
+    details: {
+      key: license.key,
+    },
+  });
 
   return c.json({
     success: true,
@@ -582,6 +651,19 @@ adminLicensesRouter.delete("/:id/machines/:machineId", requireRole(["owner", "ad
       },
       license.productId
     );
+
+    await recordAuditLog({
+      c,
+      action: "license.machine_unbind",
+      resourceType: "license",
+      resourceId: licenseId,
+      details: {
+        machineId,
+        fingerprint: machine.fingerprint,
+        platform: machine.platform,
+        name: machine.name,
+      },
+    });
   }
 
   return c.json({

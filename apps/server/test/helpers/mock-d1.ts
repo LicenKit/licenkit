@@ -74,15 +74,22 @@ export function createMockD1(sqliteDb?: Database.Database): any {
 }
 
 export function applyMigrations(sqliteDb: Database.Database): void {
-  const sqlPath = path.resolve(__dirname, "../../drizzle/0000_sloppy_green_goblin.sql");
-  const rawSql = fs.readFileSync(sqlPath, "utf-8");
-  const statements = rawSql
-    .split("--> statement-breakpoint")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const drizzleDir = path.resolve(__dirname, "../../drizzle");
+  const sqlFiles = fs
+    .readdirSync(drizzleDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
 
-  for (const statement of statements) {
-    sqliteDb.exec(statement);
+  for (const file of sqlFiles) {
+    const rawSql = fs.readFileSync(path.join(drizzleDir, file), "utf-8");
+    const statements = rawSql
+      .split("--> statement-breakpoint")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    for (const statement of statements) {
+      sqliteDb.exec(statement);
+    }
   }
 }
 

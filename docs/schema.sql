@@ -215,3 +215,24 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_dir_status ON webhook_events(direc
 CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_events_inbound_dedup 
 ON webhook_events(account_id, provider, event_id) 
 WHERE direction = 'inbound';
+
+-- 12. 管理员细粒度操作审计流水表 (Audit Logs)
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,                       -- 审计日志全局 ID，如 "aud_01J8X9N9..."
+    account_id TEXT NOT NULL,                  -- 所属租户 accounts(id)
+    user_id TEXT NOT NULL,                     -- 操作员 users(id)
+    user_email TEXT NOT NULL,                  -- 操作员邮箱快照
+    action TEXT NOT NULL,                      -- 操作动作 (如 "license.create", "license.revoke")
+    resource_type TEXT NOT NULL,               -- 目标资源类型 (如 "license", "product", "policy", "user", "settings", "webhook", "auth")
+    resource_id TEXT,                          -- 目标资源标识 (如 "lic_01J...", "prd_01J...")
+    details TEXT NOT NULL DEFAULT '{}',        -- 结构化操作详情/快照 JSON (脱敏)
+    ip TEXT,                                   -- 操作员客户端 IP 地址
+    user_agent TEXT,                           -- 操作员客户端 User-Agent
+    created_at TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_account_created ON audit_logs(account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(account_id, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(account_id, action, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(account_id, resource_type, resource_id);
+
