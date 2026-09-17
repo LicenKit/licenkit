@@ -4,9 +4,9 @@ import { eq } from "drizzle-orm";
 import type { AppContext } from "../../types";
 import { getTenantDB } from "../../infra/db";
 import { systemSettings, accounts } from "../../infra/db/schema";
-import { encryptEnvelope, decryptEnvelope } from "../../infra/crypto";
+import { encryptEnvelope, decryptEnvelope, getStorageEncryptionKey } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
-import { NotFoundError } from "../../middleware/error";
+import { NotFoundError, AppError } from "../../middleware/error";
 
 export const adminSettingsRouter = new Hono<AppContext>();
 
@@ -30,9 +30,10 @@ adminSettingsRouter.get("/", async (c) => {
     lemonsqueezy: { enabled: false, webhook_secret_masked: "" },
   };
 
-  if (account.paymentConfigs && c.env.STORAGE_ENCRYPTION_KEY) {
+  if (account.paymentConfigs) {
+    const encKey = getStorageEncryptionKey(c.env);
     try {
-      const decrypted = await decryptEnvelope(account.paymentConfigs, c.env.STORAGE_ENCRYPTION_KEY);
+      const decrypted = await decryptEnvelope(account.paymentConfigs, encKey);
       const parsed = JSON.parse(decrypted);
       for (const provider of ["paddle", "stripe", "lemonsqueezy"] as const) {
         if (parsed[provider]) {
@@ -44,8 +45,13 @@ adminSettingsRouter.get("/", async (c) => {
           };
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to decrypt payment configs", e);
+      throw new AppError(
+        "DECRYPTION_FAILED",
+        "Failed to decrypt payment configurations. Ensure STORAGE_ENCRYPTION_KEY matches the one used to encrypt.",
+        500
+      );
     }
   }
 
@@ -110,7 +116,7 @@ adminSettingsRouter.put("/", requireRole(["owner", "admin"]), async (c) => {
 
   // 2. Update payment configurations if provided
   if (input.payment_configs) {
-    const encKey = c.env.STORAGE_ENCRYPTION_KEY || "licenkit-default-storage-key-32b";
+    const encKey = getStorageEncryptionKey(c.env);
 
     // Merge with existing configs if present so unmentioned providers or blank secrets aren't overwritten
     let existingConfig: Record<string, any> = {};
@@ -118,8 +124,13 @@ adminSettingsRouter.put("/", requireRole(["owner", "admin"]), async (c) => {
     if (existingAccount?.paymentConfigs) {
       try {
         existingConfig = JSON.parse(await decryptEnvelope(existingAccount.paymentConfigs, encKey));
-      } catch (e) {
+      } catch (e: any) {
         console.error("Failed to decrypt existing payment configs", e);
+        throw new AppError(
+          "DECRYPTION_FAILED",
+          "Failed to decrypt existing payment configurations. Verify STORAGE_ENCRYPTION_KEY.",
+          500
+        );
       }
     }
 
@@ -144,6 +155,87 @@ adminSettingsRouter.put("/", requireRole(["owner", "admin"]), async (c) => {
     success: true,
     data: {
       message: "Settings updated successfully",
+    },
+  });
+});
+
+// GET /api/v1/admin/settings/env-check
+adminSettingsRouter.get("/env-check", async (c) => {
+  const env = c.env;
+  const storageKey = env.STORAGE_ENCRYPTION_KEY?.trim() || "";
+  const jwtSec = env.JWT_SECRET?.trim() || "";
+
+  const storageKeyStatus = !storageKey
+    ? "missing"
+    : storageKey.length < 16
+    ? "insecure"
+    : "ready";
+
+  const jwtSecretStatus = !jwtSec
+    ? "missing"
+    : jwtSec.length < 16
+    ? "insecure"
+    : "ready";
+
+  const items = [
+    {
+      key: "STORAGE_ENCRYPTION_KEY",
+      label: "Storage Master Key (KEK)",
+      category: "secret",
+      required: true,
+      status: storageKeyStatus,
+      length: storageKey ? storageKey.length : 0,
+      description: "AES-256-GCM master key protecting payment secrets & Ed25519 private keys in database.",
+      fixHint: "Configure in apps/server/.dev.vars (local) or run 'npx wrangler secret put STORAGE_ENCRYPTION_KEY' (production).",
+    },
+    {
+      key: "JWT_SECRET",
+      label: "JWT Authentication Secret",
+      category: "secret",
+      required: true,
+      status: jwtSecretStatus,
+      length: jwtSec ? jwtSec.length : 0,
+      description: "HMAC-SHA256 secret for signing and verifying administrator session tokens.",
+      fixHint: "Configure in apps/server/.dev.vars (local) or run 'npx wrangler secret put JWT_SECRET' (production).",
+    },
+    {
+      key: "DB",
+      label: "Cloudflare D1 Database",
+      category: "binding",
+      required: true,
+      status: env.DB ? "ready" : "missing",
+      description: "Relational SQLite database for all platform state.",
+      fixHint: "Ensure [[d1_databases]] binding is active in wrangler.jsonc.",
+    },
+    {
+      key: "KEYS_KV",
+      label: "Cloudflare KV",
+      category: "binding",
+      required: false,
+      status: env.KEYS_KV ? "ready" : "missing",
+      description: "Fast edge cache for client public keys.",
+      fixHint: "Ensure kv_namespaces binding is active in wrangler.jsonc.",
+    },
+    {
+      key: "EVENT_QUEUE",
+      label: "Cloudflare Queues (Producer)",
+      category: "binding",
+      required: false,
+      status: env.EVENT_QUEUE ? "ready" : "missing",
+      description: "Asynchronous delivery pipeline for outbound webhooks.",
+      fixHint: "Ensure queues.producers binding is active in wrangler.jsonc.",
+    },
+  ];
+
+  const allReady = items.filter((i) => i.required).every((i) => i.status === "ready");
+
+  return c.json({
+    success: true,
+    data: {
+      environment: env.ENVIRONMENT || "development",
+      version: env.APP_VERSION || "1.0.0",
+      all_ready: allReady,
+      items,
     },
   });
 });

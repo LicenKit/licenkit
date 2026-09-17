@@ -5,17 +5,12 @@ import { eq, and, desc, sql, like, or } from "drizzle-orm";
 import type { AppContext } from "../../types";
 import { getTenantDB } from "../../infra/db";
 import { licenses, policies, machines, products } from "../../infra/db/schema";
+import { generateLicenseKey } from "../../infra/crypto";
+import { broadcastOutboundEvent } from "../../infra/events/broadcast";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, AppError, ConflictError } from "../../middleware/error";
 
 export const adminLicensesRouter = new Hono<AppContext>();
-
-function generateLicenseKey(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const part = (len: number) =>
-    Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  return `LIC-${part(4)}-${part(4)}-${part(4)}-${part(4)}`;
-}
 
 function formatLicense(l: any) {
   const metadata = typeof l.metadata === "string" ? JSON.parse(l.metadata || "{}") : (l.metadata || {});
@@ -202,6 +197,23 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     throw err;
   }
 
+  await broadcastOutboundEvent(
+    c.env,
+    db,
+    accountId,
+    "license.created",
+    {
+      id: licenseId,
+      key,
+      customerEmail: input.customerEmail.toLowerCase().trim(),
+      productId: input.productId,
+      policyId: input.policyId,
+      status: "active",
+      expiresAt,
+    },
+    input.productId
+  );
+
   return c.json(
     {
       success: true,
@@ -331,6 +343,28 @@ adminLicensesRouter.patch("/:id", requireRole(["owner", "admin"]), async (c) => 
     .set(updateData)
     .where(and(eq(licenses.id, id), eq(licenses.accountId, accountId)));
 
+  const eventType =
+    input.status === "revoked"
+      ? "license.revoked"
+      : input.status === "suspended"
+      ? "license.suspended"
+      : "license.updated";
+
+  await broadcastOutboundEvent(
+    c.env,
+    db,
+    accountId,
+    eventType,
+    {
+      id: license.id,
+      key: license.key,
+      productId: license.productId,
+      status: input.status || license.status,
+      expiresAt: input.expiresAt !== undefined ? input.expiresAt : license.expiresAt,
+    },
+    license.productId
+  );
+
   return c.json({
     success: true,
     data: { message: "License updated successfully" },
@@ -402,6 +436,20 @@ adminLicensesRouter.post("/:id/revoke", requireRole(["owner", "admin"]), async (
     db.delete(machines).where(eq(machines.licenseId, id)),
   ]);
 
+  await broadcastOutboundEvent(
+    c.env,
+    db,
+    accountId,
+    "license.revoked",
+    {
+      id: license.id,
+      key: license.key,
+      productId: license.productId,
+      status: "revoked",
+    },
+    license.productId
+  );
+
   return c.json({
     success: true,
     data: { message: "License revoked and all machine seats cleared." },
@@ -415,10 +463,34 @@ adminLicensesRouter.post("/:id/suspend", requireRole(["owner", "admin"]), async 
   const accountId = c.get("accountId")!;
   const now = new Date().toISOString();
 
+  const license = await db
+    .select()
+    .from(licenses)
+    .where(and(eq(licenses.id, id), eq(licenses.accountId, accountId)))
+    .get();
+
+  if (!license) {
+    throw new NotFoundError("License not found");
+  }
+
   await db
     .update(licenses)
     .set({ status: "suspended", suspendedAt: now, updatedAt: now })
     .where(and(eq(licenses.id, id), eq(licenses.accountId, accountId)));
+
+  await broadcastOutboundEvent(
+    c.env,
+    db,
+    accountId,
+    "license.suspended",
+    {
+      id: license.id,
+      key: license.key,
+      productId: license.productId,
+      status: "suspended",
+    },
+    license.productId
+  );
 
   return c.json({
     success: true,
@@ -433,10 +505,34 @@ adminLicensesRouter.post("/:id/reinstate", requireRole(["owner", "admin"]), asyn
   const accountId = c.get("accountId")!;
   const now = new Date().toISOString();
 
+  const license = await db
+    .select()
+    .from(licenses)
+    .where(and(eq(licenses.id, id), eq(licenses.accountId, accountId)))
+    .get();
+
+  if (!license) {
+    throw new NotFoundError("License not found");
+  }
+
   await db
     .update(licenses)
     .set({ status: "active", suspendedAt: null, updatedAt: now })
     .where(and(eq(licenses.id, id), eq(licenses.accountId, accountId)));
+
+  await broadcastOutboundEvent(
+    c.env,
+    db,
+    accountId,
+    "license.updated",
+    {
+      id: license.id,
+      key: license.key,
+      productId: license.productId,
+      status: "active",
+    },
+    license.productId
+  );
 
   return c.json({
     success: true,
@@ -453,7 +549,7 @@ adminLicensesRouter.delete("/:id/machines/:machineId", requireRole(["owner", "ad
 
   // Verify license belongs to tenant
   const license = await db
-    .select({ id: licenses.id })
+    .select()
     .from(licenses)
     .where(and(eq(licenses.id, licenseId), eq(licenses.accountId, accountId)))
     .get();
@@ -462,9 +558,31 @@ adminLicensesRouter.delete("/:id/machines/:machineId", requireRole(["owner", "ad
     throw new NotFoundError("License not found");
   }
 
-  await db
-    .delete(machines)
-    .where(and(eq(machines.id, machineId), eq(machines.licenseId, licenseId)));
+  const machine = await db
+    .select()
+    .from(machines)
+    .where(and(eq(machines.id, machineId), eq(machines.licenseId, licenseId)))
+    .get();
+
+  if (machine) {
+    await db
+      .delete(machines)
+      .where(and(eq(machines.id, machineId), eq(machines.licenseId, licenseId)));
+
+    await broadcastOutboundEvent(
+      c.env,
+      db,
+      accountId,
+      "client.deactivated",
+      {
+        licenseId: license.id,
+        key: license.key,
+        machineId: machine.id,
+        fingerprint: machine.fingerprint,
+      },
+      license.productId
+    );
+  }
 
   return c.json({
     success: true,

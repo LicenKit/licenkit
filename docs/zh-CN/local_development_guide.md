@@ -147,7 +147,7 @@ pnpm run dev
 初始化完成后，前端将自动持久化 Token 并进入控制台主界面：
 1. **Overview 概览**：查看产品数、许可证数、Ed25519 签名引擎状态；
 2. **Gateways & Webhooks 支付网关**：
-   - 查看 **Paddle (Default)** 与 **Stripe** Tab 切换；
+   - 查看 **Paddle** 与 **Stripe** Tab 切换；
    - 实时看到当前租户专属的回调地址：
      ```text
      http://localhost:5173/api/v1/webhooks/paddle/acc_...

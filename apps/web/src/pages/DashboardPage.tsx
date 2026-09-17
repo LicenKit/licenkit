@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { api } from "../lib/api-client";
+import { api, type EnvCheckResponse } from "../lib/api-client";
 import {
   KeyRound,
   LayoutDashboard,
@@ -23,6 +23,11 @@ import {
   Edit3,
   Search,
   Filter,
+  Trash2,
+  Send,
+  Lock,
+  RefreshCw,
+  CheckCircle2,
 } from "lucide-react";
 import { CreateProductModal } from "../components/modals/CreateProductModal";
 import { CreatePolicyModal } from "../components/modals/CreatePolicyModal";
@@ -30,6 +35,7 @@ import { IssueLicenseModal } from "../components/modals/IssueLicenseModal";
 import { EditProductModal } from "../components/modals/EditProductModal";
 import { EditPolicyModal } from "../components/modals/EditPolicyModal";
 import { LicenseDetailModal } from "../components/modals/LicenseDetailModal";
+import { CreateWebhookModal } from "../components/modals/CreateWebhookModal";
 
 interface DashboardPageProps {
   user: any;
@@ -80,10 +86,82 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
   // Copy tracking for keys inside tables/cards
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // Outbound Webhook state
+  const [isCreateWebhookOpen, setIsCreateWebhookOpen] = useState(false);
+  const [webhooksList, setWebhooksList] = useState<any[]>([]);
+  const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
+  const [testWebhookResult, setTestWebhookResult] = useState<{ id: string; success: boolean; message: string } | null>(null);
+
+  // Environment & Health state
+  const [envCheck, setEnvCheck] = useState<EnvCheckResponse | null>(null);
+  const [loadingEnvCheck, setLoadingEnvCheck] = useState(false);
+
   useEffect(() => {
     loadSettings();
     loadDashboardData();
+    loadWebhooks();
+    loadEnvCheck();
   }, []);
+
+  const loadEnvCheck = async () => {
+    setLoadingEnvCheck(true);
+    try {
+      const res = await api.settings.getEnvCheck();
+      setEnvCheck(res);
+    } catch (err) {
+      console.error("Failed to load environment diagnostic checklist", err);
+    } finally {
+      setLoadingEnvCheck(false);
+    }
+  };
+
+  const loadWebhooks = async () => {
+    try {
+      const res = await api.webhooks.listEndpoints();
+      setWebhooksList(res.items || []);
+    } catch (e) {
+      console.error("Failed to load webhooks", e);
+    }
+  };
+
+  const handleTestWebhook = async (endpointId: string) => {
+    setTestingWebhookId(endpointId);
+    setTestWebhookResult(null);
+    try {
+      const res = await api.webhooks.testEndpoint(endpointId);
+      if (res?.delivered) {
+        setTestWebhookResult({
+          id: endpointId,
+          success: true,
+          message: `HTTP ${res.status} (${res.durationMs}ms) - Test ping delivered successfully!`,
+        });
+      } else {
+        setTestWebhookResult({
+          id: endpointId,
+          success: false,
+          message: `HTTP ${res?.status || "Error"} (${res?.durationMs || 0}ms) - ${res?.statusText || "Delivery failed"}`,
+        });
+      }
+    } catch (err: any) {
+      setTestWebhookResult({
+        id: endpointId,
+        success: false,
+        message: err.message || "Failed to reach endpoint",
+      });
+    } finally {
+      setTestingWebhookId(null);
+    }
+  };
+
+  const handleDeleteWebhook = async (endpointId: string) => {
+    if (!window.confirm("Are you sure you want to delete this outbound webhook endpoint?")) return;
+    try {
+      await api.webhooks.deleteEndpoint(endpointId);
+      loadWebhooks();
+    } catch (err: any) {
+      alert(err.message || "Failed to delete webhook endpoint");
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -817,8 +895,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                       Configure your payment provider's webhook secret to automatically issue licenses upon checkout.
                     </p>
                   </div>
-                  {/* Tab Switcher: Paddle (Default) vs Stripe vs Lemon Squeezy */}
-                  <div className="bg-slate-900 border border-slate-700 rounded-lg p-1 flex items-center gap-1">
+                  {/* Tab Switcher: Paddle vs Stripe vs Lemon Squeezy */}
+                  <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5">
                     {(["paddle", "stripe", "lemonsqueezy"] as const).map((p) => (
                       <button
                         key={p}
@@ -833,7 +911,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                             : "text-slate-400 hover:text-white"
                         }`}
                       >
-                        {p === "lemonsqueezy" ? "Lemon Squeezy" : p === "paddle" ? "Paddle (Default)" : "Stripe"}
+                        {p === "lemonsqueezy" ? "Lemon Squeezy" : p === "paddle" ? "Paddle" : "Stripe"}
                       </button>
                     ))}
                   </div>
@@ -926,49 +1004,199 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                       broadcast via Cloudflare Queues to your webhook endpoints.
                     </p>
                   </div>
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs font-medium text-white rounded-lg transition-colors">
+                  <button
+                    onClick={() => setIsCreateWebhookOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors shadow"
+                  >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Add Endpoint</span>
                   </button>
                 </div>
-                <div className="text-center py-6 border border-dashed border-slate-700 rounded-lg text-slate-400 text-xs">
-                  No custom outbound endpoints configured yet. Click "Add Endpoint" to stream events to your email provider or automation webhook.
-                </div>
+
+                {webhooksList.length === 0 ? (
+                  <div className="text-center py-8 border border-dashed border-slate-700 rounded-lg text-slate-400 text-xs">
+                    No custom outbound endpoints configured yet. Click "Add Endpoint" to stream events to your email provider or automation webhook.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-700/60 border border-slate-700/80 rounded-lg overflow-hidden bg-slate-900/50">
+                    {webhooksList.map((wh) => (
+                      <div key={wh.id} className="p-4 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono font-medium text-indigo-400 bg-indigo-950/60 border border-indigo-800/50 px-2 py-0.5 rounded">
+                              {wh.productName}
+                            </span>
+                            <span className="text-sm font-mono text-white font-medium break-all">
+                              {wh.url}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleTestWebhook(wh.id)}
+                              disabled={testingWebhookId === wh.id}
+                              className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-medium rounded-md transition-colors border border-slate-700"
+                            >
+                              <Send className="w-3 h-3" />
+                              <span>{testingWebhookId === wh.id ? "Testing..." : "Send Test"}</span>
+                            </button>
+                            <button
+                              onClick={() => handleDeleteWebhook(wh.id)}
+                              className="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition-colors"
+                              title="Delete Endpoint"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="text-slate-500 text-[11px]">Events:</span>
+                          {(wh.events || ["*"]).map((e: string) => (
+                            <span
+                              key={e}
+                              className="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded text-[11px] font-mono border border-slate-700"
+                            >
+                              {e}
+                            </span>
+                          ))}
+                          <span className="text-slate-600 text-[11px] ml-auto font-mono">
+                            Secret: {wh.secretMasked}
+                          </span>
+                        </div>
+
+                        {testWebhookResult && testWebhookResult.id === wh.id && (
+                          <div
+                            className={`p-2.5 rounded-lg text-xs flex items-center justify-between ${
+                              testWebhookResult.success
+                                ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-300"
+                                : "bg-rose-500/10 border border-rose-500/30 text-rose-300"
+                            }`}
+                          >
+                            <span>{testWebhookResult.message}</span>
+                            <button
+                              onClick={() => setTestWebhookResult(null)}
+                              className="text-slate-400 hover:text-slate-200 ml-2"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           {/* 6. SETTINGS TAB */}
           {activeNav === "settings" && (
-            <div className="max-w-2xl bg-slate-800/50 border border-slate-700/70 rounded-xl p-6 space-y-4">
-              <h3 className="text-base font-semibold text-white mb-2">Instance & Domain Settings</h3>
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Instance Name</label>
-                <input
-                  type="text"
-                  defaultValue={settingsData?.system?.instance_name || "LicenKit Hub"}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                />
+            <div className="max-w-2xl space-y-6">
+              {/* Card 1: Environment & Infrastructure Health Checklist */}
+              <div className="bg-slate-800/50 border border-slate-700/70 rounded-xl p-6 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-700/60 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-indigo-400">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">Environment & Secrets Checklist</h3>
+                      <p className="text-xs text-slate-400">
+                        Zero In-Code Secrets baseline. Live diagnosis of Cloudflare Bindings & Master Keys.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-indigo-300 capitalize">
+                      {envCheck?.environment || "development"}
+                    </span>
+                    <button
+                      onClick={loadEnvCheck}
+                      disabled={loadingEnvCheck}
+                      className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors border border-slate-700"
+                      title="Refresh Environment Diagnosis"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingEnvCheck ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+                </div>
+
+                {loadingEnvCheck ? (
+                  <div className="text-xs text-slate-400 py-3">Refreshing credentials checklist...</div>
+                ) : (
+                  <div className="space-y-2">
+                    {envCheck?.items.map((item) => (
+                      <div
+                        key={item.key}
+                        className="flex items-start justify-between p-3 rounded-lg bg-slate-900/60 border border-slate-700/50"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono font-semibold text-white">{item.key}</span>
+                            <span className="text-[10px] text-slate-400 font-normal">({item.label})</span>
+                            {item.required && (
+                              <span className="text-[9px] uppercase px-1 py-0.2 rounded bg-indigo-950 text-indigo-400 border border-indigo-800">
+                                Required
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400">{item.description}</p>
+                          {item.status !== "ready" && (
+                            <p className="text-[11px] font-mono text-amber-300 bg-amber-950/40 border border-amber-800/40 px-2 py-0.5 rounded mt-1 select-all">
+                              {item.fixHint}
+                            </p>
+                          )}
+                        </div>
+                        <div className="shrink-0 ml-3">
+                          {item.status === "ready" ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/50 px-2 py-0.5 rounded">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Configured</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-400 bg-rose-950/60 border border-rose-800/50 px-2 py-0.5 rounded">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span className="uppercase">{item.status}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">App URL</label>
-                <input
-                  type="url"
-                  defaultValue={settingsData?.system?.app_url || window.location.origin}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">API Base URL</label>
-                <input
-                  type="url"
-                  placeholder="Defaults to App URL/api/v1 (Zero CORS)"
-                  defaultValue={settingsData?.system?.api_base_url || ""}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  When left blank, the API runs directly at <code>/api/v1/*</code> on the same domain as this dashboard.
-                </p>
+
+              {/* Card 2: Instance & Domain Settings */}
+              <div className="bg-slate-800/50 border border-slate-700/70 rounded-xl p-6 space-y-4">
+                <h3 className="text-base font-semibold text-white mb-2">Instance & Domain Settings</h3>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Instance Name</label>
+                  <input
+                    type="text"
+                    defaultValue={settingsData?.system?.instance_name || "LicenKit Hub"}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">App URL</label>
+                  <input
+                    type="url"
+                    defaultValue={settingsData?.system?.app_url || window.location.origin}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">API Base URL</label>
+                  <input
+                    type="url"
+                    placeholder="Defaults to App URL/api/v1 (Zero CORS)"
+                    defaultValue={settingsData?.system?.api_base_url || ""}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    When left blank, the API runs directly at <code>/api/v1/*</code> on the same domain as this dashboard.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -1049,6 +1277,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
         }}
         onSuccess={loadDashboardData}
         licenseId={inspectingLicenseId}
+      />
+
+      <CreateWebhookModal
+        isOpen={isCreateWebhookOpen}
+        onClose={() => setIsCreateWebhookOpen(false)}
+        onSuccess={loadWebhooks}
+        products={productsList}
       />
     </div>
   );

@@ -5,7 +5,7 @@ import { eq, and, desc } from "drizzle-orm";
 import type { AppContext } from "../../types";
 import { getTenantDB } from "../../infra/db";
 import { webhookEndpoints, webhookEvents, products } from "../../infra/db/schema";
-import { bufferToHex } from "../../infra/crypto";
+import { bufferToHex, computeHmacSha256 } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError } from "../../middleware/error";
 
@@ -17,25 +17,45 @@ adminWebhooksRouter.get("/", async (c) => {
   const accountId = c.get("accountId")!;
 
   const list = await db
-    .select()
+    .select({
+      id: webhookEndpoints.id,
+      accountId: webhookEndpoints.accountId,
+      productId: webhookEndpoints.productId,
+      productName: products.name,
+      url: webhookEndpoints.url,
+      secret: webhookEndpoints.secret,
+      events: webhookEndpoints.events,
+      isActive: webhookEndpoints.isActive,
+      createdAt: webhookEndpoints.createdAt,
+      updatedAt: webhookEndpoints.updatedAt,
+    })
     .from(webhookEndpoints)
+    .leftJoin(products, eq(webhookEndpoints.productId, products.id))
     .where(eq(webhookEndpoints.accountId, accountId))
     .all();
 
   return c.json({
     success: true,
     data: {
-      items: list.map((w) => ({
-        ...w,
-        events: JSON.parse(w.events),
-        secretMasked: "••••••••" + w.secret.slice(-4),
-      })),
+      items: list.map((w) => {
+        let eventsList: string[] = ["*"];
+        try {
+          eventsList = JSON.parse(w.events);
+        } catch {}
+
+        return {
+          ...w,
+          productName: w.productId === "*" ? "All Products" : w.productName || "Unknown Product",
+          events: eventsList,
+          secretMasked: "••••••••" + w.secret.slice(-4),
+        };
+      }),
     },
   });
 });
 
 const CreateEndpointSchema = z.object({
-  productId: z.string(),
+  productId: z.string().default("*"),
   url: z.string().url(),
   events: z.array(z.string()).default(["*"]),
 });
@@ -48,14 +68,19 @@ adminWebhooksRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
   const db = getTenantDB(c);
   const accountId = c.get("accountId")!;
 
-  const product = await db
-    .select()
-    .from(products)
-    .where(and(eq(products.id, input.productId), eq(products.accountId, accountId)))
-    .get();
+  let productName = "All Products";
 
-  if (!product) {
-    throw new NotFoundError("Product not found");
+  if (input.productId !== "*") {
+    const product = await db
+      .select()
+      .from(products)
+      .where(and(eq(products.id, input.productId), eq(products.accountId, accountId)))
+      .get();
+
+    if (!product) {
+      throw new NotFoundError("Product not found");
+    }
+    productName = product.name;
   }
 
   const endpointId = `whe_${ulid().toLowerCase()}`;
@@ -80,6 +105,8 @@ adminWebhooksRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
       success: true,
       data: {
         id: endpointId,
+        productId: input.productId,
+        productName,
         url: input.url,
         secret, // Show once on creation
         events: input.events,
@@ -87,6 +114,78 @@ adminWebhooksRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     },
     201
   );
+});
+
+// POST /api/v1/admin/webhooks/:id/test
+adminWebhooksRouter.post("/:id/test", requireRole(["owner", "admin"]), async (c) => {
+  const id = c.req.param("id");
+  const db = getTenantDB(c);
+  const accountId = c.get("accountId")!;
+
+  const endpoint = await db
+    .select()
+    .from(webhookEndpoints)
+    .where(and(eq(webhookEndpoints.id, id), eq(webhookEndpoints.accountId, accountId)))
+    .get();
+
+  if (!endpoint) {
+    throw new NotFoundError("Webhook endpoint not found");
+  }
+
+  const now = new Date().toISOString();
+  const testPayload = JSON.stringify({
+    id: `evt_test_${ulid().toLowerCase()}`,
+    event: "test.ping",
+    created_at: now,
+    data: {
+      message: "Test ping from LicenKit webhook dispatcher",
+      endpoint_id: endpoint.id,
+      timestamp: now,
+    },
+  });
+
+  const signatureHex = await computeHmacSha256(testPayload, endpoint.secret);
+  const startTime = Date.now();
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(endpoint.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LicenKit-Signature": signatureHex,
+        "User-Agent": "LicenKit-Webhook-Dispatcher/1.0",
+      },
+      body: testPayload,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    const durationMs = Date.now() - startTime;
+
+    return c.json({
+      success: true,
+      data: {
+        status: response.status,
+        statusText: response.statusText,
+        durationMs,
+        delivered: response.ok,
+      },
+    });
+  } catch (err: any) {
+    return c.json(
+      {
+        success: false,
+        error: {
+          message: err.message || "Failed to reach endpoint",
+          durationMs: Date.now() - startTime,
+        },
+      },
+      400
+    );
+  }
 });
 
 // DELETE /api/v1/admin/webhooks/:id

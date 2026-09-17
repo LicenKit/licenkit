@@ -3,13 +3,18 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError } from "zod";
 
 export class AppError extends Error {
+  code: string;
+  status: ContentfulStatusCode;
+
   constructor(
-    public code: string,
+    code: string,
     message: string,
-    public status: ContentfulStatusCode = 400
+    status: ContentfulStatusCode = 400
   ) {
     super(message);
     this.name = "AppError";
+    this.code = code;
+    this.status = status;
   }
 }
 
@@ -37,17 +42,23 @@ export class ConflictError extends AppError {
   }
 }
 
+export class ConfigurationError extends AppError {
+  constructor(message = "System configuration error.") {
+    super("CONFIGURATION_ERROR", message, 500);
+  }
+}
+
 export const errorHandler: ErrorHandler = (err, c) => {
-  if (err instanceof AppError) {
+  if (err instanceof AppError || (err && (err as any).code === "CONFIGURATION_ERROR")) {
     return c.json(
       {
         success: false,
         error: {
-          code: err.code,
+          code: (err as any).code || "APP_ERROR",
           message: err.message,
         },
       },
-      err.status
+      (err as any).status || 500
     );
   }
 

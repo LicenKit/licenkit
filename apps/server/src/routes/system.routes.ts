@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import type { AppContext } from "../types";
 import { getTenantDB } from "../infra/db";
 import { systemSettings, accounts, users } from "../infra/db/schema";
-import { hashPassword, signJWT } from "../infra/crypto";
+import { hashPassword, signJWT, getJwtSecret, getStorageEncryptionKey } from "../infra/crypto";
 import { setupGuard } from "../middleware/auth";
 import { AppError } from "../middleware/error";
 
@@ -42,6 +42,87 @@ systemRouter.get("/status", async (c) => {
       api_base_url: resolvedApiBaseUrl,
       allow_signup: current.allowSignup,
       version: c.env.APP_VERSION || "1.0.0",
+    },
+  });
+});
+
+// GET /api/v1/system/env-check
+systemRouter.get("/env-check", async (c) => {
+  const env = c.env;
+  const storageKey = env.STORAGE_ENCRYPTION_KEY?.trim() || "";
+  const jwtSec = env.JWT_SECRET?.trim() || "";
+
+  const storageKeyStatus = !storageKey
+    ? "missing"
+    : storageKey.length < 16
+    ? "insecure"
+    : "ready";
+
+  const jwtSecretStatus = !jwtSec
+    ? "missing"
+    : jwtSec.length < 16
+    ? "insecure"
+    : "ready";
+
+  const items = [
+    {
+      key: "STORAGE_ENCRYPTION_KEY",
+      label: "Storage Encryption Key (KEK)",
+      category: "secret",
+      required: true,
+      status: storageKeyStatus,
+      length: storageKey ? storageKey.length : 0,
+      description: "AES-256-GCM master key protecting payment webhook secrets & Ed25519 private keys in database.",
+      fixHint: "Add STORAGE_ENCRYPTION_KEY to apps/server/.dev.vars (local) or run 'npx wrangler secret put STORAGE_ENCRYPTION_KEY' (production).",
+    },
+    {
+      key: "JWT_SECRET",
+      label: "JWT Session Secret",
+      category: "secret",
+      required: true,
+      status: jwtSecretStatus,
+      length: jwtSec ? jwtSec.length : 0,
+      description: "HMAC-SHA256 secret for signing and verifying administrator login session tokens.",
+      fixHint: "Add JWT_SECRET to apps/server/.dev.vars (local) or run 'npx wrangler secret put JWT_SECRET' (production).",
+    },
+    {
+      key: "DB",
+      label: "Cloudflare D1 Database",
+      category: "binding",
+      required: true,
+      status: env.DB ? "ready" : "missing",
+      description: "Relational database binding for multi-tenant licensing engine.",
+      fixHint: "Ensure [[d1_databases]] binding is configured in wrangler.jsonc.",
+    },
+    {
+      key: "KEYS_KV",
+      label: "Cloudflare KV Namespace",
+      category: "binding",
+      required: false,
+      status: env.KEYS_KV ? "ready" : "missing",
+      description: "Edge read-only KV namespace for public keys and fast lookup.",
+      fixHint: "Configure kv_namespaces binding in wrangler.jsonc if edge key caching is needed.",
+    },
+    {
+      key: "EVENT_QUEUE",
+      label: "Cloudflare Queues (Producer)",
+      category: "binding",
+      required: false,
+      status: env.EVENT_QUEUE ? "ready" : "missing",
+      description: "Asynchronous queue pipeline for outbound webhook broadcasting and retries.",
+      fixHint: "Configure queues.producers binding in wrangler.jsonc.",
+    },
+  ];
+
+  const allReady = items.filter((i) => i.required).every((i) => i.status === "ready");
+
+  return c.json({
+    success: true,
+    data: {
+      environment: env.ENVIRONMENT || "development",
+      version: env.APP_VERSION || "1.0.0",
+      all_ready: allReady,
+      items,
     },
   });
 });
@@ -112,8 +193,9 @@ systemRouter.post("/setup", setupGuard, async (c) => {
     }),
   ]);
 
-  // Sign session JWT
-  const jwtSecret = c.env.JWT_SECRET || "licenkit-development-jwt-secret-do-not-use-in-production";
+  // Early check: Ensure STORAGE_ENCRYPTION_KEY and JWT_SECRET are valid
+  getStorageEncryptionKey(c.env);
+  const jwtSecret = getJwtSecret(c.env);
   const sessionToken = await signJWT(
     {
       userId,

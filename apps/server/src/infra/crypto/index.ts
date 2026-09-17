@@ -4,6 +4,15 @@
  * Zero external cryptographic library dependencies.
  */
 
+export class ConfigurationError extends Error {
+  code = "CONFIGURATION_ERROR";
+  status = 500;
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigurationError";
+  }
+}
+
 // --- Base64 Utilities ---
 export function bufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -219,7 +228,70 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
   }
 }
 
+/**
+ * Retrieves and strictly validates the Storage Encryption Key (KEK).
+ * Zero in-code fallback: throws ConfigurationError if missing or insecure.
+ */
+export function getStorageEncryptionKey(env: { STORAGE_ENCRYPTION_KEY?: string }): string {
+  const key = env?.STORAGE_ENCRYPTION_KEY?.trim();
+  if (!key) {
+    throw new ConfigurationError(
+      "STORAGE_ENCRYPTION_KEY is required. Please configure it in .dev.vars (local development) or via 'npx wrangler secret put STORAGE_ENCRYPTION_KEY' (production)."
+    );
+  }
+  if (key.length < 16) {
+    throw new ConfigurationError(
+      "STORAGE_ENCRYPTION_KEY must be at least 16 characters long for secure AES-256-GCM envelope encryption."
+    );
+  }
+  return key;
+}
+
+/**
+ * Retrieves and strictly validates the JWT Authentication Secret.
+ * Zero in-code fallback: throws ConfigurationError if missing or insecure.
+ */
+export function getJwtSecret(env: { JWT_SECRET?: string }): string {
+  const secret = env?.JWT_SECRET?.trim();
+  if (!secret) {
+    throw new ConfigurationError(
+      "JWT_SECRET is required. Please configure it in .dev.vars (local development) or via 'npx wrangler secret put JWT_SECRET' (production)."
+    );
+  }
+  if (secret.length < 16) {
+    throw new ConfigurationError(
+      "JWT_SECRET must be at least 16 characters long."
+    );
+  }
+  return secret;
+}
+
 // --- 4. Webhook HMAC-SHA256 Signature Verification ---
+export function hexToBuffer(hex: string): Uint8Array {
+  const cleanHex = hex.trim().toLowerCase();
+  if (cleanHex.length % 2 !== 0) {
+    throw new Error("Invalid hex string length");
+  }
+  const bytes = new Uint8Array(cleanHex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(cleanHex.substring(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+export async function computeHmacSha256(payload: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
+  return bufferToHex(signature);
+}
+
 export async function verifyHmacSha256(
   payload: string,
   secret: string,
@@ -232,14 +304,125 @@ export async function verifyHmacSha256(
       encoder.encode(secret),
       { name: "HMAC", hash: "SHA-256" },
       false,
-      ["sign"]
+      ["verify"]
     );
-    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-    const calculatedHex = bufferToHex(signature);
-    return calculatedHex.toLowerCase() === expectedSignatureHex.toLowerCase();
+    const signatureBytes = hexToBuffer(expectedSignatureHex);
+    return await crypto.subtle.verify("HMAC", key, signatureBytes, encoder.encode(payload));
   } catch {
     return false;
   }
+}
+
+/**
+ * Verifies official Paddle Billing webhook signature (`Paddle-Signature` header).
+ * Format: `ts=1695287625;h1=028b03063806013a270f2095f32b4b248a318f7...`
+ * Signature is computed over `${ts}:${rawBody}` using the webhook endpoint secret.
+ */
+export async function verifyPaddleSignature(
+  rawBody: string,
+  signatureHeader: string | null | undefined,
+  secretKey: string,
+  toleranceSeconds: number = 300
+): Promise<boolean> {
+  if (!signatureHeader || !secretKey) return false;
+
+  try {
+    const parts = signatureHeader.split(";").map((p) => p.trim());
+    let ts: string | null = null;
+    let h1: string | null = null;
+
+    for (const part of parts) {
+      const [k, v] = part.split("=");
+      if (k === "ts") ts = v;
+      if (k === "h1") h1 = v;
+    }
+
+    if (!ts || !h1) return false;
+
+    // Check timestamp drift (anti-replay)
+    const timestampSec = parseInt(ts, 10);
+    if (isNaN(timestampSec)) return false;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Math.abs(nowSec - timestampSec) > toleranceSeconds) {
+      return false;
+    }
+
+    const dataToSign = `${ts}:${rawBody}`;
+    return await verifyHmacSha256(dataToSign, secretKey, h1);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verifies official Stripe webhook signature (`Stripe-Signature` header).
+ * Format: `t=1492774577,v1=5257a869e7ece2259f4a0ce354813b2bdec514f7263cb372f9e8a78624f97759,v0=...`
+ * Signature is computed over `${t}.${rawBody}` using the endpoint secret (`whsec_...`).
+ */
+export async function verifyStripeSignature(
+  rawBody: string,
+  signatureHeader: string | null | undefined,
+  secretKey: string,
+  toleranceSeconds: number = 300
+): Promise<boolean> {
+  if (!signatureHeader || !secretKey) return false;
+
+  try {
+    const items = signatureHeader.split(",").map((i) => i.trim());
+    let timestamp: string | null = null;
+    const signatures: string[] = [];
+
+    for (const item of items) {
+      const [k, v] = item.split("=");
+      if (k === "t") timestamp = v;
+      if (k === "v1" && v) signatures.push(v);
+    }
+
+    if (!timestamp || signatures.length === 0) return false;
+
+    const timestampSec = parseInt(timestamp, 10);
+    if (isNaN(timestampSec)) return false;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Math.abs(nowSec - timestampSec) > toleranceSeconds) {
+      return false;
+    }
+
+    const dataToSign = `${timestamp}.${rawBody}`;
+    for (const sig of signatures) {
+      const isValid = await verifyHmacSha256(dataToSign, secretKey, sig);
+      if (isValid) return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verifies Lemon Squeezy webhook signature (`x-signature` header).
+ * Signature is computed over `rawBody` using the endpoint secret.
+ */
+export async function verifyLemonSqueezySignature(
+  rawBody: string,
+  signatureHeader: string | null | undefined,
+  secretKey: string
+): Promise<boolean> {
+  if (!signatureHeader || !secretKey) return false;
+  return await verifyHmacSha256(rawBody, secretKey, signatureHeader);
+}
+
+/**
+ * Standard formatted license key generator: `LIC-XXXX-XXXX-XXXX-XXXX`
+ * Uses Crockford base32 alphabet (no easily confused 0, O, 1, I).
+ */
+export function generateLicenseKey(prefix = "LIC"): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const part = (len: number) =>
+    Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+  return `${prefix}-${part(4)}-${part(4)}-${part(4)}-${part(4)}`;
 }
 
 // --- 5. Ed25519 Key Generation, Import, Signing & Verification ---

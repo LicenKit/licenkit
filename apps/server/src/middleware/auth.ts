@@ -1,12 +1,10 @@
 import type { MiddlewareHandler } from "hono";
 import type { AppContext } from "../types";
 import { UnauthorizedError, ForbiddenError } from "./error";
-import { verifyJWT } from "../infra/crypto";
+import { verifyJWT, getJwtSecret } from "../infra/crypto";
 import { getTenantDB } from "../infra/db";
 import { systemSettings } from "../infra/db/schema";
 import { eq } from "drizzle-orm";
-
-const DEFAULT_JWT_SECRET = "licenkit-development-jwt-secret-do-not-use-in-production";
 
 /**
  * Validates Bearer Session JWT Token.
@@ -19,7 +17,7 @@ export const sessionAuth: MiddlewareHandler<AppContext> = async (c, next) => {
   }
 
   const token = authHeader.substring(7).trim();
-  const secret = c.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+  const secret = getJwtSecret(c.env);
   const payload = await verifyJWT(token, secret);
 
   if (!payload) {

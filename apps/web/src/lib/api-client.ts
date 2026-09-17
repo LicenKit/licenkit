@@ -12,6 +12,24 @@ export class ApiError extends Error {
   }
 }
 
+export interface EnvCheckItem {
+  key: string;
+  label: string;
+  category: "secret" | "binding";
+  required: boolean;
+  status: "ready" | "missing" | "insecure";
+  length?: number;
+  description: string;
+  fixHint: string;
+}
+
+export interface EnvCheckResponse {
+  environment: string;
+  version: string;
+  all_ready: boolean;
+  items: EnvCheckItem[];
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("licenkit_token");
   const headers = new Headers(options.headers || {});
@@ -50,6 +68,7 @@ export const api = {
   },
   system: {
     getStatus: () => request<{ initialized: boolean; instanceName?: string; instance_name?: string; appUrl?: string; app_url?: string; apiBaseUrl?: string; api_base_url?: string; version: string }>("/system/status"),
+    getEnvCheck: () => request<EnvCheckResponse>("/system/env-check"),
     setup: (body: any) => request<any>("/system/setup", { method: "POST", body: JSON.stringify(body) }),
   },
   auth: {
@@ -63,6 +82,7 @@ export const api = {
   },
   settings: {
     get: () => request<{ system: any; account: any }>("/admin/settings"),
+    getEnvCheck: () => request<EnvCheckResponse>("/admin/settings/env-check"),
     update: (body: any) => request<{ message: string }>("/admin/settings", { method: "PUT", body: JSON.stringify(body) }),
   },
   products: {
@@ -115,6 +135,7 @@ export const api = {
   webhooks: {
     listEndpoints: () => request<{ items: any[] }>("/admin/webhooks"),
     createEndpoint: (body: any) => request<any>("/admin/webhooks", { method: "POST", body: JSON.stringify(body) }),
+    testEndpoint: (id: string) => request<any>(`/admin/webhooks/${id}/test`, { method: "POST" }),
     deleteEndpoint: (id: string) => request<any>(`/admin/webhooks/${id}`, { method: "DELETE" }),
     listEvents: () => request<{ items: any[] }>("/admin/webhooks/events"),
   },

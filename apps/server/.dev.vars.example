@@ -1,0 +1,19 @@
+# ==============================================================================
+# LicenKit Local Development Secrets Template
+# ==============================================================================
+# Instructions:
+# 1. Copy this file to `apps/server/.dev.vars` (which is already gitignored).
+# 2. In Cloudflare Workers local mode, Wrangler automatically loads variables
+#    from `.dev.vars` into `env`.
+# 3. For production deployment, set these secrets via Wrangler CLI:
+#      npx wrangler secret put STORAGE_ENCRYPTION_KEY
+#      npx wrangler secret put JWT_SECRET
+# ==============================================================================
+
+# Platform Master Key Encryption Key (KEK) - Min 16 chars (recommended 32 chars)
+# Used to AES-256-GCM encrypt payment webhook secrets and product Ed25519 private keys.
+STORAGE_ENCRYPTION_KEY=licenkit_local_dev_storage_encryption_key_32b!
+
+# JWT Authentication Secret - Min 16 chars (recommended 32 chars)
+# Used to HMAC-SHA256 sign and verify admin session tokens.
+JWT_SECRET=licenkit_local_dev_jwt_auth_secret_key_32b!

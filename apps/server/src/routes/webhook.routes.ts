@@ -1,10 +1,18 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import type { AppContext } from "../types";
 import { getTenantDB } from "../infra/db";
-import { accounts, webhookEvents, webhookEndpoints, licenses, policies } from "../infra/db/schema";
-import { decryptEnvelope } from "../infra/crypto";
+import { accounts, webhookEvents, licenses, policies } from "../infra/db/schema";
+import {
+  decryptEnvelope,
+  getStorageEncryptionKey,
+  verifyPaddleSignature,
+  verifyStripeSignature,
+  verifyLemonSqueezySignature,
+  generateLicenseKey,
+} from "../infra/crypto";
+import { broadcastOutboundEvent } from "../infra/events/broadcast";
 import { AppError, NotFoundError } from "../middleware/error";
 
 export const webhookRouter = new Hono<AppContext>();
@@ -27,19 +35,51 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
     throw new NotFoundError("Account not found or inactive");
   }
 
-  // Decrypt payment config to get webhook secret
+  // 2. Decrypt payment config to get webhook secret
   let webhookSecret = "";
-  if (account.paymentConfigs && c.env.STORAGE_ENCRYPTION_KEY) {
+  if (account.paymentConfigs) {
+    const encKey = getStorageEncryptionKey(c.env);
     try {
-      const decrypted = await decryptEnvelope(account.paymentConfigs, c.env.STORAGE_ENCRYPTION_KEY);
+      const decrypted = await decryptEnvelope(account.paymentConfigs, encKey);
       const parsed = JSON.parse(decrypted);
       webhookSecret = parsed[provider]?.webhook_secret || "";
-    } catch (e) {
-      console.error("Failed to decrypt webhook secret", e);
+    } catch (e: any) {
+      console.error(`Failed to decrypt webhook secret for provider ${provider}:`, e);
+      throw new AppError(
+        "DECRYPTION_FAILED",
+        `Failed to decrypt payment configuration for ${provider}. Please verify STORAGE_ENCRYPTION_KEY.`,
+        500
+      );
     }
   }
 
-  // Parse webhook payload
+  // Strict check: if no webhook secret is configured, reject inbound request to prevent spoofing
+  if (!webhookSecret && provider !== "custom") {
+    throw new AppError("PAYMENT_CONFIG_MISSING", `Webhook secret for ${provider} is not configured`, 400);
+  }
+
+  // 3. Cryptographic Signature Verification
+  if (provider === "paddle") {
+    const signatureHeader = c.req.header("paddle-signature");
+    const isValid = await verifyPaddleSignature(rawBody, signatureHeader, webhookSecret);
+    if (!isValid) {
+      throw new AppError("INVALID_SIGNATURE", "Paddle signature verification failed", 401);
+    }
+  } else if (provider === "stripe") {
+    const signatureHeader = c.req.header("stripe-signature");
+    const isValid = await verifyStripeSignature(rawBody, signatureHeader, webhookSecret);
+    if (!isValid) {
+      throw new AppError("INVALID_SIGNATURE", "Stripe signature verification failed", 401);
+    }
+  } else if (provider === "lemonsqueezy") {
+    const signatureHeader = c.req.header("x-signature");
+    const isValid = await verifyLemonSqueezySignature(rawBody, signatureHeader, webhookSecret);
+    if (!isValid) {
+      throw new AppError("INVALID_SIGNATURE", "Lemon Squeezy signature verification failed", 401);
+    }
+  }
+
+  // 4. Parse webhook payload
   let payload: any;
   try {
     payload = JSON.parse(rawBody);
@@ -48,10 +88,25 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
   }
 
   // Extract external event_id and event_type
-  let externalEventId = payload.id || payload.event_id || payload.alert_id || null;
-  let eventType = payload.type || payload.event_type || payload.alert_name || "unknown";
+  let externalEventId: string | null = null;
+  let eventType = "unknown";
 
-  // Check idempotency for inbound events
+  if (provider === "paddle") {
+    externalEventId = payload.event_id || payload.id || null;
+    eventType = payload.event_type || payload.type || "unknown";
+  } else if (provider === "stripe") {
+    externalEventId = payload.id || null;
+    eventType = payload.type || "unknown";
+  } else if (provider === "lemonsqueezy") {
+    externalEventId = payload.meta?.custom_data?.event_id || payload.data?.id || null;
+    eventType = payload.meta?.event_name || "unknown";
+  } else {
+    externalEventId = payload.id || payload.event_id || null;
+    eventType = payload.type || payload.event_type || "unknown";
+  }
+
+  // 5. 3D Idempotency Check: (accountId, provider, externalEventId)
+  let existingRecord: { id: string; status: string } | null = null;
   if (externalEventId) {
     const existing = await db
       .select({ id: webhookEvents.id, status: webhookEvents.status })
@@ -65,62 +120,86 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
       )
       .get();
 
-    if (existing && existing.status === "processed") {
-      // Return 200 immediately for idempotent duplicate
-      return c.json({ success: true, message: "Duplicate event already processed" }, 200);
+    if (existing) {
+      if (existing.status === "processed") {
+        return c.json({ success: true, message: "Duplicate event already processed" }, 200);
+      }
+      existingRecord = existing;
     }
   }
 
-  const inboundEventId = `evt_${ulid().toLowerCase()}`;
+  const inboundEventId = existingRecord ? existingRecord.id : `evt_${ulid().toLowerCase()}`;
   const now = new Date().toISOString();
 
-  // Record inbound event
-  await db.insert(webhookEvents).values({
-    id: inboundEventId,
-    accountId,
-    provider,
-    direction: "inbound",
-    eventId: externalEventId,
-    eventType,
-    payload: rawBody,
-    status: "processed",
-    attempts: 1,
-    createdAt: now,
-    processedAt: now,
-  });
+  // 6. Automated Fulfillment & Business Processing
+  let fulfillmentResult: { licenseId?: string; action: string } = { action: "ignored" };
 
-  // Query outbound endpoints matching tenant and push notifications to EVENT_QUEUE
-  const endpoints = await db
-    .select()
-    .from(webhookEndpoints)
-    .where(and(eq(webhookEndpoints.accountId, accountId), eq(webhookEndpoints.isActive, true)))
-    .all();
-
-  if (endpoints.length > 0 && c.env.EVENT_QUEUE) {
-    for (const ep of endpoints) {
-      const outboundId = `evt_${ulid().toLowerCase()}`;
+  try {
+    if (provider === "paddle") {
+      fulfillmentResult = await handlePaddleFulfillment(c.env, db, accountId, eventType, payload);
+    } else if (provider === "stripe") {
+      fulfillmentResult = await handleStripeFulfillment(c.env, db, accountId, eventType, payload);
+    }
+  } catch (err: any) {
+    console.error(`Fulfillment error for ${provider} event ${eventType}:`, err);
+    // Record event as failed for auditing
+    if (existingRecord) {
+      await db
+        .update(webhookEvents)
+        .set({
+          status: "failed",
+          lastError: err.message || "Fulfillment error",
+          attempts: sql`${webhookEvents.attempts} + 1`,
+          payload: rawBody,
+          processedAt: now,
+        })
+        .where(eq(webhookEvents.id, existingRecord.id));
+    } else {
       await db.insert(webhookEvents).values({
-        id: outboundId,
+        id: inboundEventId,
         accountId,
-        provider: "internal",
-        direction: "outbound",
-        endpointId: ep.id,
+        provider,
+        direction: "inbound",
+        eventId: externalEventId,
         eventType,
         payload: rawBody,
-        status: "pending",
-        attempts: 0,
+        status: "failed",
+        lastError: err.message || "Fulfillment error",
+        attempts: 1,
         createdAt: now,
-      });
-
-      // Send to Cloudflare Queue
-      await c.env.EVENT_QUEUE.send({
-        eventId: outboundId,
-        endpointId: ep.id,
-        url: ep.url,
-        secret: ep.secret,
-        payload: rawBody,
+        processedAt: now,
       });
     }
+
+    throw err;
+  }
+
+  // 7. Record inbound event as processed
+  if (existingRecord) {
+    await db
+      .update(webhookEvents)
+      .set({
+        status: "processed",
+        lastError: null,
+        attempts: sql`${webhookEvents.attempts} + 1`,
+        payload: rawBody,
+        processedAt: now,
+      })
+      .where(eq(webhookEvents.id, existingRecord.id));
+  } else {
+    await db.insert(webhookEvents).values({
+      id: inboundEventId,
+      accountId,
+      provider,
+      direction: "inbound",
+      eventId: externalEventId,
+      eventType,
+      payload: rawBody,
+      status: "processed",
+      attempts: 1,
+      createdAt: now,
+      processedAt: now,
+    });
   }
 
   return c.json({
@@ -128,6 +207,355 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
     data: {
       received: true,
       event_id: inboundEventId,
+      fulfillment: fulfillmentResult,
     },
   });
 });
+
+/**
+ * Handles Paddle Billing events fulfillment:
+ * - transaction.completed / transaction.paid: Issue license based on price ID or custom policy ID
+ * - subscription.canceled / subscription.past_due: Revoke or suspend matching license
+ */
+async function handlePaddleFulfillment(
+  env: any,
+  db: any,
+  accountId: string,
+  eventType: string,
+  payload: any
+): Promise<{ licenseId?: string; action: string }> {
+  const data = payload.data || {};
+
+  if (eventType === "transaction.completed" || eventType === "transaction.paid") {
+    const customData = data.custom_data || {};
+    const customerEmail =
+      data.customer?.email || customData.customer_email || customData.email || "customer@paddle.com";
+
+    // Extract price IDs from items
+    const items = data.items || data.details?.line_items || [];
+    const priceIds: string[] = items.map((i: any) => i.price?.id || i.price_id).filter(Boolean);
+
+    // Fetch tenant policies
+    const allPolicies = await db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+      .all();
+
+    let matchedPolicy: typeof policies.$inferSelect | null = null;
+
+    // 1. Match by custom_data.policy_id
+    if (customData.policy_id) {
+      matchedPolicy = allPolicies.find((p: any) => p.id === customData.policy_id) || null;
+    }
+
+    // 2. Match by paddle_price_id in metadata
+    if (!matchedPolicy && priceIds.length > 0) {
+      for (const p of allPolicies) {
+        let meta: Record<string, any> = {};
+        try {
+          meta = typeof p.metadata === "string" ? JSON.parse(p.metadata || "{}") : p.metadata || {};
+        } catch {}
+
+        if (meta.paddle_price_id && priceIds.includes(meta.paddle_price_id)) {
+          matchedPolicy = p;
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback: single active policy
+    if (!matchedPolicy && allPolicies.length === 1) {
+      matchedPolicy = allPolicies[0];
+    }
+
+    if (!matchedPolicy) {
+      return { action: "no_matching_policy" };
+    }
+
+    // Issue License
+    const licenseId = `lic_${ulid().toLowerCase()}`;
+    const key = generateLicenseKey();
+    const now = new Date();
+
+    let expiresAt: string | null = null;
+    if (data.billing_period?.ends_at) {
+      expiresAt = new Date(data.billing_period.ends_at).toISOString();
+    } else if (matchedPolicy.duration) {
+      expiresAt = new Date(now.getTime() + matchedPolicy.duration * 1000).toISOString();
+    }
+
+    const metadataObj = {
+      external_provider: "paddle",
+      external_transaction_id: data.id || null,
+      external_subscription_id: data.subscription_id || null,
+      external_customer_id: data.customer_id || null,
+      ...customData,
+    };
+
+    await db.insert(licenses).values({
+      id: licenseId,
+      accountId,
+      productId: matchedPolicy.productId,
+      policyId: matchedPolicy.id,
+      key,
+      customerEmail: customerEmail.toLowerCase().trim(),
+      status: "active",
+      metadata: JSON.stringify(metadataObj),
+      expiresAt,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
+
+    const issuedLicense = {
+      id: licenseId,
+      key,
+      customerEmail,
+      productId: matchedPolicy.productId,
+      policyId: matchedPolicy.id,
+      status: "active",
+      expiresAt,
+    };
+
+    // Broadcast outbound event
+    await broadcastOutboundEvent(
+      env,
+      db,
+      accountId,
+      "license.created",
+      issuedLicense,
+      matchedPolicy.productId
+    );
+
+    return { licenseId, action: "license_issued" };
+  }
+
+  if (eventType === "subscription.canceled" || eventType === "subscription.past_due") {
+    const subscriptionId = data.id;
+    if (!subscriptionId) return { action: "no_subscription_id" };
+
+    // Find license linked to this subscription ID
+    const allLicenses = await db
+      .select()
+      .from(licenses)
+      .where(eq(licenses.accountId, accountId))
+      .all();
+
+    const targetLicense = allLicenses.find((l: any) => {
+      try {
+        const meta = typeof l.metadata === "string" ? JSON.parse(l.metadata || "{}") : l.metadata || {};
+        return (
+          meta.external_subscription_id === subscriptionId ||
+          meta.externalSubscriptionId === subscriptionId
+        );
+      } catch {
+        return false;
+      }
+    });
+
+    if (!targetLicense) {
+      return { action: "subscription_license_not_found" };
+    }
+
+    const newStatus = eventType === "subscription.canceled" ? "revoked" : "suspended";
+    const nowIso = new Date().toISOString();
+
+    await db
+      .update(licenses)
+      .set({
+        status: newStatus,
+        suspendedAt: newStatus === "suspended" ? nowIso : targetLicense.suspendedAt,
+        updatedAt: nowIso,
+      })
+      .where(eq(licenses.id, targetLicense.id));
+
+    const updatedLicense = {
+      ...targetLicense,
+      status: newStatus,
+    };
+
+    await broadcastOutboundEvent(
+      env,
+      db,
+      accountId,
+      newStatus === "revoked" ? "license.revoked" : "license.suspended",
+      updatedLicense,
+      targetLicense.productId
+    );
+
+    return { licenseId: targetLicense.id, action: `license_${newStatus}` };
+  }
+
+  return { action: "unhandled_event" };
+}
+
+/**
+ * Handles Stripe events fulfillment:
+ * - checkout.session.completed: Issue license based on metadata or matching stripe_price_id
+ * - customer.subscription.deleted: Revoke matching license
+ */
+async function handleStripeFulfillment(
+  env: any,
+  db: any,
+  accountId: string,
+  eventType: string,
+  payload: any
+): Promise<{ licenseId?: string; action: string }> {
+  const session = payload.data?.object || {};
+
+  if (eventType === "checkout.session.completed") {
+    const customerEmail =
+      session.customer_details?.email || session.customer_email || "customer@stripe.com";
+    const metadata = session.metadata || {};
+    const subscriptionId = session.subscription || null;
+    const customerId = session.customer || null;
+
+    const allPolicies = await db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+      .all();
+
+    let matchedPolicy: typeof policies.$inferSelect | null = null;
+
+    // 1. Match by metadata.policy_id or client_reference_id
+    if (metadata.policy_id) {
+      matchedPolicy = allPolicies.find((p: any) => p.id === metadata.policy_id) || null;
+    } else if (session.client_reference_id) {
+      matchedPolicy = allPolicies.find((p: any) => p.id === session.client_reference_id) || null;
+    }
+
+    // 2. Match by metadata.stripe_price_id
+    if (!matchedPolicy && metadata.stripe_price_id) {
+      for (const p of allPolicies) {
+        let meta: Record<string, any> = {};
+        try {
+          meta = typeof p.metadata === "string" ? JSON.parse(p.metadata || "{}") : p.metadata || {};
+        } catch {}
+
+        if (meta.stripe_price_id === metadata.stripe_price_id) {
+          matchedPolicy = p;
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback: single active policy
+    if (!matchedPolicy && allPolicies.length === 1) {
+      matchedPolicy = allPolicies[0];
+    }
+
+    if (!matchedPolicy) {
+      return { action: "no_matching_policy" };
+    }
+
+    // Issue License
+    const licenseId = `lic_${ulid().toLowerCase()}`;
+    const key = generateLicenseKey();
+    const now = new Date();
+
+    let expiresAt: string | null = null;
+    if (matchedPolicy.duration) {
+      expiresAt = new Date(now.getTime() + matchedPolicy.duration * 1000).toISOString();
+    }
+
+    const metadataObj = {
+      external_provider: "stripe",
+      external_checkout_session_id: session.id || null,
+      external_subscription_id: subscriptionId,
+      external_customer_id: customerId,
+      ...metadata,
+    };
+
+    await db.insert(licenses).values({
+      id: licenseId,
+      accountId,
+      productId: matchedPolicy.productId,
+      policyId: matchedPolicy.id,
+      key,
+      customerEmail: customerEmail.toLowerCase().trim(),
+      status: "active",
+      metadata: JSON.stringify(metadataObj),
+      expiresAt,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
+
+    const issuedLicense = {
+      id: licenseId,
+      key,
+      customerEmail,
+      productId: matchedPolicy.productId,
+      policyId: matchedPolicy.id,
+      status: "active",
+      expiresAt,
+    };
+
+    // Broadcast outbound event
+    await broadcastOutboundEvent(
+      env,
+      db,
+      accountId,
+      "license.created",
+      issuedLicense,
+      matchedPolicy.productId
+    );
+
+    return { licenseId, action: "license_issued" };
+  }
+
+  if (eventType === "customer.subscription.deleted") {
+    const subscriptionId = session.id;
+    if (!subscriptionId) return { action: "no_subscription_id" };
+
+    const allLicenses = await db
+      .select()
+      .from(licenses)
+      .where(eq(licenses.accountId, accountId))
+      .all();
+
+    const targetLicense = allLicenses.find((l: any) => {
+      try {
+        const meta = typeof l.metadata === "string" ? JSON.parse(l.metadata || "{}") : l.metadata || {};
+        return (
+          meta.external_subscription_id === subscriptionId ||
+          meta.externalSubscriptionId === subscriptionId
+        );
+      } catch {
+        return false;
+      }
+    });
+
+    if (!targetLicense) {
+      return { action: "subscription_license_not_found" };
+    }
+
+    const nowIso = new Date().toISOString();
+
+    await db
+      .update(licenses)
+      .set({
+        status: "revoked",
+        updatedAt: nowIso,
+      })
+      .where(eq(licenses.id, targetLicense.id));
+
+    const updatedLicense = {
+      ...targetLicense,
+      status: "revoked",
+    };
+
+    await broadcastOutboundEvent(
+      env,
+      db,
+      accountId,
+      "license.revoked",
+      updatedLicense,
+      targetLicense.productId
+    );
+
+    return { licenseId: targetLicense.id, action: "license_revoked" };
+  }
+
+  return { action: "unhandled_event" };
+}

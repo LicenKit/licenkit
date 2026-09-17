@@ -8,10 +8,12 @@ import { licenses, policies, machines, productTrials, products, cryptoKeys } fro
 import {
   decryptEnvelope,
   signOfflineToken,
+  getStorageEncryptionKey,
   type OfflineTokenHeader,
   type OfflineLicenseClaims,
   type OfflineTrialClaims,
 } from "../infra/crypto";
+import { broadcastOutboundEvent } from "../infra/events/broadcast";
 import { AppError, ConflictError, NotFoundError } from "../middleware/error";
 
 export const clientRouter = new Hono<AppContext>();
@@ -133,7 +135,7 @@ clientRouter.post("/activate", async (c) => {
   const input = ActivateSchema.parse(body);
 
   const db = getTenantDB(c, input.account_id);
-  const encKey = c.env.STORAGE_ENCRYPTION_KEY || "licenkit-default-storage-key-32b";
+  const encKey = getStorageEncryptionKey(c.env);
 
   // 1. Fetch license and linked policy
   const license = await db
@@ -257,6 +259,22 @@ clientRouter.post("/activate", async (c) => {
     token = await signOfflineToken(header, claims, keyInfo.privateKeyPkcs8);
   }
 
+  await broadcastOutboundEvent(
+    c.env,
+    db,
+    input.account_id,
+    "client.activated",
+    {
+      licenseId: license.id,
+      key: license.key,
+      machineId,
+      fingerprint: input.fingerprint,
+      platform: input.platform || null,
+      reused: isReused,
+    },
+    license.productId
+  );
+
   return c.json({
     success: true,
     data: {
@@ -289,7 +307,7 @@ clientRouter.post("/validate", async (c) => {
   const input = ValidateSchema.parse(body);
 
   const db = getTenantDB(c, input.account_id);
-  const encKey = c.env.STORAGE_ENCRYPTION_KEY || "licenkit-default-storage-key-32b";
+  const encKey = getStorageEncryptionKey(c.env);
 
   const license = await db
     .select()
@@ -416,6 +434,19 @@ clientRouter.post("/deactivate", async (c) => {
     .delete(machines)
     .where(and(eq(machines.licenseId, license.id), eq(machines.fingerprint, input.fingerprint)));
 
+  await broadcastOutboundEvent(
+    c.env,
+    db,
+    input.account_id,
+    "client.deactivated",
+    {
+      licenseId: license.id,
+      key: license.key,
+      fingerprint: input.fingerprint,
+    },
+    license.productId
+  );
+
   return c.json({
     success: true,
     data: {
@@ -437,7 +468,7 @@ clientRouter.post("/trial", async (c) => {
   const input = TrialSchema.parse(body);
 
   const db = getTenantDB(c, input.account_id);
-  const encKey = c.env.STORAGE_ENCRYPTION_KEY || "licenkit-default-storage-key-32b";
+  const encKey = getStorageEncryptionKey(c.env);
 
   const product = await db
     .select()

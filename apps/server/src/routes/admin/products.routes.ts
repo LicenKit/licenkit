@@ -5,7 +5,7 @@ import { eq, and, sql } from "drizzle-orm";
 import type { AppContext } from "../../types";
 import { getTenantDB } from "../../infra/db";
 import { products, cryptoKeys, policies, licenses } from "../../infra/db/schema";
-import { generateEd25519KeyPair, validateAndImportEd25519KeyPair, encryptEnvelope } from "../../infra/crypto";
+import { generateEd25519KeyPair, validateAndImportEd25519KeyPair, encryptEnvelope, getStorageEncryptionKey } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, ConflictError, AppError } from "../../middleware/error";
 
@@ -107,7 +107,7 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
   }
 
   const kid = `kid_${ulid().toLowerCase()}`;
-  const encKey = c.env.STORAGE_ENCRYPTION_KEY || "licenkit-default-storage-key-32b";
+  const encKey = getStorageEncryptionKey(c.env);
   const encryptedKeyMaterial = await encryptEnvelope(keyPair.privateKeyPkcs8Base64, encKey);
 
   await db.batch([

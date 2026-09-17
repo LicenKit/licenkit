@@ -27,8 +27,8 @@
 | **M04** | **Policies Engine** | Lifetime/subscription duration, hardware seat limit (`maxMachines`), offline grace period, `ed25519` vs `guid` schemes | **P0** | **Completed** | `server/src/routes/admin/policies.routes.ts`<br/>`web/src/components/modals/CreatePolicyModal.tsx`<br/>`web/src/components/modals/EditPolicyModal.tsx` |
 | **M05** | **Licenses Lifecycle** | Formatted key generator (`LIC-XXXX-XXXX-XXXX-XXXX`), manual issuance, suspension/reinstate/revocation, key rotation, seat unbinding | **P0** | **Completed** | `server/src/routes/admin/licenses.routes.ts`<br/>`web/src/components/modals/IssueLicenseModal.tsx`<br/>`web/src/components/modals/LicenseDetailModal.tsx` |
 | **M06** | **Client Activation & Anti-Abuse** | Machine fingerprint binding, atomic seat preemption, heartbeat keep-alive, Ed25519 signed token issuance, trial anti-abuse (`product_trials`) | **P0** | **Completed** | `server/src/routes/client.routes.ts`<br/>`server/src/infra/crypto/index.ts` |
-| **M07** | **Inbound Webhooks & Fulfillment** | Paddle (Default) & Stripe webhook handlers, signature verification, idempotent deduplication, automated license issuance | **P0** | **In Progress** (Routes and dedup ready; signature verification next) | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
-| **M08** | **Outbound Queues & Broadcast** | Pushes business events to Cloudflare Queues; delivers to Resend / Zapier / custom endpoints with HMAC signatures and exponential backoff | **P1** | **Core Completed** (Frontend modal pending) | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
+| **M07** | **Inbound Webhooks & Fulfillment** | Paddle & Stripe webhook handlers, signature verification, idempotent deduplication, automated license issuance | **P0** | **Completed** | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
+| **M08** | **Outbound Queues & Broadcast** | Pushes business events to Cloudflare Queues; delivers to Resend / Zapier / custom endpoints with HMAC signatures and exponential backoff | **P1** | **Completed** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
 | **M09** | **Web Dashboard UI** | Dark-mode high-fidelity SPA console, Paddle/Stripe tab switching, 6 full-featured business modals, advanced search & filtering | **P1** | **Completed** | `web/src/pages/DashboardPage.tsx`<br/>`web/src/components/modals/*`<br/>`web/src/lib/api-client.ts` |
 | **M10** | **Client SDKs** | Native client libraries for macOS (Swift), Windows (C#), and cross-platform CLI | **P2** | **Planned** | Independent repositories (`LicenKit-mac-sdk`, etc.) |
 
@@ -107,11 +107,11 @@
 ### Module M07: Inbound Payment & Fulfillment
 - [x] **M07.1** Encrypted `accounts.payment_configs` store (AES-256-GCM);
 - [x] **M07.2** Universal webhook endpoint with 3D deduplication (`(account_id, provider, event_id)`);
-- [ ] **M07.3** Paddle Billing official signature verification (`Paddle-Signature`);
-- [ ] **M07.4** Stripe official signature verification (`Stripe-Signature`);
-- [ ] **M07.5** Paddle `transaction.completed` event handling and automatic license fulfillment;
-- [ ] **M07.6** Stripe `checkout.session.completed` event handling and automatic fulfillment;
-- [ ] **M07.7** Subscription cancellation and refund handlers (`subscription.canceled` -> revoke license).
+- [x] **M07.3** Paddle Billing official signature verification (`Paddle-Signature`);
+- [x] **M07.4** Stripe official signature verification (`Stripe-Signature`);
+- [x] **M07.5** Paddle `transaction.completed` event handling and automatic license fulfillment;
+- [x] **M07.6** Stripe `checkout.session.completed` event handling and automatic fulfillment;
+- [x] **M07.7** Subscription cancellation and refund handlers (`subscription.canceled` -> revoke license).
 
 ---
 
@@ -122,8 +122,8 @@
 - [x] **M08.4** Cloudflare `EVENT_QUEUE` binding and consumer processor;
 - [x] **M08.5** Outbound HMAC-SHA256 request signing (`X-LicenKit-Signature`);
 - [x] **M08.6** Exponential backoff delivery retries (up to 3 attempts);
-- [ ] **M08.7** Automatic event triggering across all core domain actions;
-- [ ] **M08.8** Admin console webhook configuration modal and test delivery button.
+- [x] **M08.7** Automatic event triggering across all core domain actions;
+- [x] **M08.8** Admin console webhook configuration modal and test delivery button.
 
 ---
 
@@ -138,7 +138,7 @@
 - [x] **M09.8** License issuance modal and advanced filtering toolbar;
 - [x] **M09.9** `LicenseDetailModal` showing bound machine hardware fingerprints;
 - [x] **M09.10** System settings and payment gateway credential updates;
-- [ ] **M09.11** Outbound webhook endpoint management modal.
+- [x] **M09.11** Outbound webhook endpoint management modal.
 
 ---
 

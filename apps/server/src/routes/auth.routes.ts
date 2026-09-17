@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import type { AppContext } from "../types";
 import { getTenantDB } from "../infra/db";
 import { users, accounts } from "../infra/db/schema";
-import { verifyPassword, signJWT } from "../infra/crypto";
+import { verifyPassword, signJWT, getJwtSecret } from "../infra/crypto";
 import { sessionAuth } from "../middleware/auth";
 import { UnauthorizedError } from "../middleware/error";
 
@@ -46,7 +46,7 @@ authRouter.post("/login", async (c) => {
     throw new UnauthorizedError("Tenant account is suspended or disabled");
   }
 
-  const jwtSecret = c.env.JWT_SECRET || "licenkit-development-jwt-secret-do-not-use-in-production";
+  const jwtSecret = getJwtSecret(c.env);
   const sessionToken = await signJWT(
     {
       userId: user.id,

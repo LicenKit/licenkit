@@ -27,8 +27,8 @@
 | **M04** | **授权策略与席位规则引擎 (Policies Engine)** | 买断/订阅有效期计算、设备席位上限 (`maxMachines`)、离线验签宽限期、`ed25519` 签名 vs `guid` 模式、特性标签 | **P0** | **已完成** | `server/src/routes/admin/policies.routes.ts`<br/>`web/src/components/modals/CreatePolicyModal.tsx`<br/>`web/src/components/modals/EditPolicyModal.tsx` |
 | **M05** | **许可证全生命周期管理 (Licenses Lifecycle)** | 格式化激活码生成 (`LIC-XXXX-XXXX-XXXX-XXXX`)、手动发码、挂起/解挂/吊销、到期判定、一键轮换 Key、席位查看与解绑 | **P0** | **已完成** | `server/src/routes/admin/licenses.routes.ts`<br/>`web/src/components/modals/IssueLicenseModal.tsx`<br/>`web/src/components/modals/LicenseDetailModal.tsx` |
 | **M06** | **客户端激活与试用防刷 (Client Activation & Anti-Abuse)** | 硬件指纹采集绑定、原子席位抢占、在线心跳、Ed25519 签名 Token 签发、单表匿名防刷试用 (`product_trials`) | **P0** | **已完成** | `server/src/routes/client.routes.ts`<br/>`server/src/infra/crypto/index.ts` |
-| **M07** | **支付网关入向回调与履约 (Inbound Webhooks & Fulfillment)** | Paddle（默认）与 Stripe 网关入向回调、密文解密验签、精确幂等去重、自动发码与绑定 Policy | **P0** | **待开发** (基础路由与去重已通，待做真实验签履约) | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
-| **M08** | **纯异步出向事件广播流 (Outbound Queues - Option A)** | 业务事件推入 Cloudflare Queues；异步推至 Resend / Zapier / 自建端点；HMAC 签名防篡改与指数重试、端点管理与日志审计 | **P1** | **核心通道已完成** (待前端配置弹窗) | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
+| **M07** | **支付网关入向回调与履约 (Inbound Webhooks & Fulfillment)** | Paddle 与 Stripe 网关入向回调、密文解密验签、精确幂等去重、自动发码与绑定 Policy | **P0** | **已完成** | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
+| **M08** | **纯异步出向事件广播流 (Outbound Queues - Option A)** | 业务事件推入 Cloudflare Queues；异步推至 Resend / Zapier / 自建端点；HMAC 签名防篡改与指数重试、端点管理与日志审计 | **P1** | **已完成** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
 | **M09** | **管理控制台前端 SPA (Web Dashboard UI)** | 现代化暗色控制台、Paddle/Stripe Tab 切换、6 大全功能业务 Modals、高级搜索与状态筛选、指标卡片与设备解绑 | **P1** | **已完成** | `web/src/pages/DashboardPage.tsx`<br/>`web/src/components/modals/*`<br/>`web/src/lib/api-client.ts` |
 | **M10** | **客户端生态 SDK (Client SDKs)** | 提供各平台原生开发者的接入库（macOS Swift、Windows C#、跨平台 CLI） | **P2** | **规划中** | 独立生态仓库 (`LicenKit-mac-sdk` 等) |
 
@@ -107,11 +107,11 @@
 ### 模块 M07：支付网关入向回调与履约 (Inbound Payment & Fulfillment)
 - [x] **M07.1** `accounts.payment_configs` 密文字段支持，统一存储各支付网关密钥（AES-256-GCM 加密）；
 - [x] **M07.2** 通用入向回调端点与三维幂等防重：`POST /api/v1/webhooks/:provider/:account_id`（基于 `(account_id, provider, event_id)` 唯一索引去重）；
-- [ ] **M07.3** **Paddle Billing 签名真实验证算法**（按 Paddle 官方规范校验 `Paddle-Signature` 标头）；
-- [ ] **M07.4** **Stripe 签名真实验证算法**（按 Stripe 官方规范校验 `Stripe-Signature` 标头）；
-- [ ] **M07.5** Paddle 交易完成事件解析（`transaction.completed` -> 自动按外部价格 ID 匹配 Policy 并生成 License）；
-- [ ] **M07.6** Stripe Checkout 事件解析（`checkout.session.completed` -> 自动匹配生成 License）；
-- [ ] **M07.7** 订阅取消与退费事件处理（`subscription.canceled` -> 自动将关联 License 标记为 `suspended` 或 `revoked`）。
+- [x] **M07.3** **Paddle Billing 签名真实验证算法**（按 Paddle 官方规范校验 `Paddle-Signature` 标头）；
+- [x] **M07.4** **Stripe 签名真实验证算法**（按 Stripe 官方规范校验 `Stripe-Signature` 标头）；
+- [x] **M07.5** Paddle 交易完成事件解析（`transaction.completed` -> 自动按外部价格 ID 匹配 Policy 并生成 License）；
+- [x] **M07.6** Stripe Checkout 事件解析（`checkout.session.completed` -> 自动匹配生成 License）；
+- [x] **M07.7** 订阅取消与退费事件处理（`subscription.canceled` -> 自动将关联 License 标记为 `suspended` 或 `revoked`）。
 
 ---
 
@@ -122,8 +122,8 @@
 - [x] **M08.4** Cloudflare `EVENT_QUEUE` 消息绑定与消费处理器架构；
 - [x] **M08.5** 出向 HTTP POST 附带 `X-LicenKit-Signature`（HMAC-SHA256）防篡改签名计算；
 - [x] **M08.6** 队列投递失败指数退避重试（最大重试 3 次，记录 `lastError`）；
-- [ ] **M08.7** 核心业务事件全量触发入队（在发码、停用、设备解绑时自动调用 queue.send）；
-- [ ] **M08.8** 控制台出向 Webhook 管理模态框与测试事件发送交互。
+- [x] **M08.7** 核心业务事件全量触发入队（在发码、停用、设备解绑时自动调用 queue.send）；
+- [x] **M08.8** 控制台出向 Webhook 管理模态框与测试事件发送交互。
 
 ---
 
@@ -132,13 +132,13 @@
 - [x] **M09.2** 统一 API 客户端（标准 camelCase DTO、自动注入 JWT Header、基准路径解析与零 CORS 同域适配）；
 - [x] **M09.3** `SetupPage` 首次安装向导页面；
 - [x] **M09.4** `LoginPage` 管理员登录页面；
-- [x] **M09.5** `DashboardPage` 暗色高保真控制台与 **Paddle (Default) / Stripe / Lemon Squeezy** Tab 切换交互；
+- [x] **M09.5** `DashboardPage` 暗色高保真控制台与 **Paddle / Stripe / Lemon Squeezy** Tab 切换交互；
 - [x] **M09.6** **产品管理交互**：`CreateProductModal`（自动生成 / 上传私钥并校验）、`EditProductModal`、公钥复制、一次性私钥防误关下载；
 - [x] **M09.7** **策略管理交互**：`CreatePolicyModal`、`EditPolicyModal`（席位上限、有效期、离线宽限期、features 标签、网关价格绑定）；
 - [x] **M09.8** **许可证管理交互**：`IssueLicenseModal`（手动发码）、高级筛选栏（模糊搜索、产品/状态筛选）、挂起/恢复快捷操作；
 - [x] **M09.9** **设备席位管理交互**：`LicenseDetailModal`（查看已激活设备指纹、操作系统、最后心跳、一键强制解绑席位）；
 - [x] **M09.10** **系统设置交互**：保存与更新支付网关 Secret、修改实例名称与基准域名；
-- [ ] **M09.11** **出向 Webhook 交互弹窗**：添加自定义端点 Modal 与监听事件勾选界面。
+- [x] **M09.11** **出向 Webhook 交互弹窗**：添加自定义端点 Modal 与监听事件勾选界面。
 
 ---
 

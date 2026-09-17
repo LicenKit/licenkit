@@ -147,7 +147,7 @@ Navigate to: **`http://localhost:5173`** in your browser.
 Upon completion, the dashboard opens with:
 1. **Overview**: View metrics on products, active licenses, and Ed25519 signing engine status.
 2. **Gateways & Webhooks**:
-   - Toggle between **Paddle (Default)** and **Stripe** tabs.
+   - Toggle between **Paddle** and **Stripe** tabs.
    - Inspect the tenant-specific webhook endpoint URL:
      ```text
      http://localhost:5173/api/v1/webhooks/paddle/acc_...
