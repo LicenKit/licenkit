@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import type { AppContext } from "../types";
+import type { AppContext, UserRole } from "../types";
 import { getTenantDB } from "../infra/db";
 import { users, accounts } from "../infra/db/schema";
 import { verifyPassword, signJWT, getJwtSecret } from "../infra/crypto";
@@ -52,7 +52,7 @@ authRouter.post("/login", async (c) => {
       userId: user.id,
       accountId: user.accountId,
       email: user.email,
-      role: user.role as "owner" | "admin" | "member",
+      role: user.role as UserRole,
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 7 * 86400,
     },

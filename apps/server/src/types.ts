@@ -12,10 +12,12 @@ export interface Env {
   APP_VERSION?: string;
 }
 
+export type UserRole = "owner" | "admin" | "member" | "viewer";
+
 export interface Variables {
   accountId?: string;
   userId?: string;
-  userRole?: "owner" | "admin" | "member";
+  userRole?: UserRole;
   userEmail?: string;
 }
 

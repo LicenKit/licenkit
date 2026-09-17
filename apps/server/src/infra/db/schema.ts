@@ -33,7 +33,7 @@ export const users = sqliteTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   name: text("name").notNull(),
-  role: text("role").notNull().default("owner"), // 'owner' | 'admin' | 'member'
+  role: text("role").notNull().default("owner"), // 'owner' | 'admin' | 'member' | 'viewer'
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

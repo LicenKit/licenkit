@@ -209,7 +209,7 @@ const UpdatePolicySchema = z.object({
 });
 
 // PATCH /api/v1/admin/policies/:id
-adminPoliciesRouter.patch("/:id", requireRole(["owner", "admin"]), async (c) => {
+adminPoliciesRouter.patch("/:id", requireRole(["owner", "admin", "member"]), async (c) => {
   const policyId = c.req.param("id");
   const body = await c.req.json();
   const input = UpdatePolicySchema.parse(body);

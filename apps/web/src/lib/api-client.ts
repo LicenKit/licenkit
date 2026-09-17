@@ -140,14 +140,14 @@ export const api = {
   },
   users: {
     list: () => request<{ items: any[] }>("/admin/users"),
-    create: (body: { email: string; name: string; password: string; role: "admin" | "member" }) =>
+    create: (body: { email: string; name: string; password: string; role: "admin" | "member" | "viewer" }) =>
       request<{ id: string; email: string; name: string; role: string }>("/admin/users", {
         method: "POST",
         body: JSON.stringify(body),
       }),
     update: (
       id: string,
-      body: { name?: string; role?: "admin" | "member"; isActive?: boolean; password?: string }
+      body: { name?: string; role?: "admin" | "member" | "viewer"; isActive?: boolean; password?: string }
     ) =>
       request<{ id: string; email: string; name: string; role: string; isActive: boolean }>(
         `/admin/users/${id}`,

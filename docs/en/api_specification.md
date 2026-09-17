@@ -67,6 +67,17 @@
 | `/api/v1/admin/*` | Dashboard SPA & Automation Scripts | `Authorization: Bearer <session_token>` | Admin Session JWT issued via `/auth/login` |
 | `/api/v1/webhooks/:provider/:account_id` | Payment Gateways | Inbound HMAC Signature Verification | Verified against decrypted gateway secret for that tenant |
 
+### 4-Tier Dashboard RBAC Matrix
+
+Enforced strictly via API route middleware guards (`requireRole`) and Fail-Fast exceptions:
+
+| Role | Read (GET) | Issue / Revoke / Suspend / Unbind | Edit Products / Policies | Create / Delete Products & Policies | Manage Webhooks & Settings | Invite Members (admin/member/viewer) | Edit / Delete Members |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **owner** (Workspace Owner) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (Self-deletion protected) |
+| **admin** (Business Admin) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **member** (Operations) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **viewer** (Read-Only) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
 ---
 
 ## 3. System Status & Setup API (`/api/v1/system/*`)
@@ -377,7 +388,33 @@
 
 ---
 
-### 3. Products (`/api/v1/admin/products`)
+### 3. Team Management (`/api/v1/admin/users`)
+- **List Members**: `GET /api/v1/admin/users` (Available to all logged-in roles)
+- **Invite Member**: `POST /api/v1/admin/users` (`owner` and `admin` only)
+  ```json
+  {
+    "name": "Bob Cooper",
+    "email": "bob@screenstudio.com",
+    "password": "InitialPassword123!",
+    "role": "member" // "admin" | "member" | "viewer" (defaults to "member")
+  }
+  ```
+- **Update Member**: `PATCH /api/v1/admin/users/:id` (`owner` only)
+  - Modifies member profile, role, active status, or resets password.
+  - Invariants: Owner cannot be demoted, and cannot deactivate own user account.
+  ```json
+  {
+    "name": "Bob Cooper",
+    "role": "admin",
+    "isActive": true,
+    "password": "NewSecurePassword123!"
+  }
+  ```
+- **Delete Member**: `DELETE /api/v1/admin/users/:id` (`owner` only; self-deletion forbidden).
+
+---
+
+### 4. Products (`/api/v1/admin/products`)
 - **List Products**: `GET /api/v1/admin/products`
 - **Create Product**: `POST /api/v1/admin/products`
   - Supports `keyMode: "auto"` (platform generated) or `keyMode: "upload"` (custom private key).
@@ -397,7 +434,7 @@
 
 ---
 
-### 4. Policies (`/api/v1/admin/policies`)
+### 5. Policies (`/api/v1/admin/policies`)
 - **Create Policy**: `POST /api/v1/admin/policies`
   ```json
   {
@@ -423,7 +460,7 @@
 
 ---
 
-### 5. Licenses (`/api/v1/admin/licenses`)
+### 6. Licenses (`/api/v1/admin/licenses`)
 - **Manually Issue License**: `POST /api/v1/admin/licenses`
   ```json
   {
@@ -445,7 +482,7 @@
 
 ---
 
-### 6. Outbound Webhooks (`/api/v1/admin/webhooks`)
+### 7. Outbound Webhooks (`/api/v1/admin/webhooks`)
 - **Register Webhook Endpoint**: `POST /api/v1/admin/webhooks`
   ```json
   {

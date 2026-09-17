@@ -205,7 +205,7 @@ const UpdateProductSchema = z.object({
 });
 
 // PATCH /api/v1/admin/products/:id
-adminProductsRouter.patch("/:id", requireRole(["owner", "admin"]), async (c) => {
+adminProductsRouter.patch("/:id", requireRole(["owner", "admin", "member"]), async (c) => {
   const productId = c.req.param("id");
   const body = await c.req.json();
   const input = UpdateProductSchema.parse(body);

@@ -20,6 +20,7 @@ interface LicenseDetailModalProps {
   onClose: () => void;
   onSuccess: () => void;
   licenseId: string | null;
+  readOnly?: boolean;
 }
 
 export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
@@ -27,6 +28,7 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
   onClose,
   onSuccess,
   licenseId,
+  readOnly = false,
 }) => {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -232,15 +234,17 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
                     {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedKey ? "Copied" : "Copy"}</span>
                   </button>
-                  <button
-                    onClick={handleRotateKey}
-                    disabled={actionLoading}
-                    title="Rotate Key (Invalidate old key & kick devices)"
-                    className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white rounded-lg font-medium transition-colors border border-slate-700 shrink-0"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Rotate Key</span>
-                  </button>
+                  {!readOnly && (
+                    <button
+                      onClick={handleRotateKey}
+                      disabled={actionLoading}
+                      title="Rotate Key (Invalidate old key & kick devices)"
+                      className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white rounded-lg font-medium transition-colors border border-slate-700 shrink-0"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Rotate Key</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Metadata Grid */}
@@ -300,7 +304,7 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
                       </span>
                     )}
                   </div>
-                  {!isEditingExpiry && (
+                  {!readOnly && !isEditingExpiry && (
                     <button
                       onClick={() => setIsEditingExpiry(true)}
                       className="text-[11px] text-indigo-400 hover:text-indigo-300 underline"
@@ -353,14 +357,16 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
                           </div>
                         </div>
 
-                        <button
-                          onClick={() => handleUnbindMachine(m.id, m.name)}
-                          disabled={actionLoading}
-                          className="flex items-center gap-1 px-2.5 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors border border-red-500/20"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Unbind Seat</span>
-                        </button>
+                        {!readOnly && (
+                          <button
+                            onClick={() => handleUnbindMachine(m.id, m.name)}
+                            disabled={actionLoading}
+                            className="flex items-center gap-1 px-2.5 py-1 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors border border-red-500/20"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Unbind Seat</span>
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -370,26 +376,30 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
               {/* Danger Zone Actions */}
               <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleToggleSuspend}
-                    disabled={actionLoading}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                      data.status === "active"
-                        ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30"
-                        : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-                    }`}
-                  >
-                    {data.status === "active" ? "Suspend License" : "Reinstate License"}
-                  </button>
+                  {!readOnly && (
+                    <>
+                      <button
+                        onClick={handleToggleSuspend}
+                        disabled={actionLoading}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                          data.status === "active"
+                            ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30"
+                            : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                        }`}
+                      >
+                        {data.status === "active" ? "Suspend License" : "Reinstate License"}
+                      </button>
 
-                  {data.status !== "revoked" && (
-                    <button
-                      onClick={handleRevoke}
-                      disabled={actionLoading}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/30 transition-colors"
-                    >
-                      Revoke Permanently
-                    </button>
+                      {data.status !== "revoked" && (
+                        <button
+                          onClick={handleRevoke}
+                          disabled={actionLoading}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/30 transition-colors"
+                        >
+                          Revoke Permanently
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
 

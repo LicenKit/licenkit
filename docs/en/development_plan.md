@@ -52,7 +52,7 @@
 - [x] **M02.2** WebCrypto PBKDF2-HMAC-SHA256 salted password hashing & constant-time comparison;
 - [x] **M02.3** WebCrypto HMAC-SHA256 Session JWT issuance & validation (7-day duration);
 - [x] **M02.4** `sessionAuth` middleware injecting authenticated context;
-- [x] **M02.5** Team member management & role switching (`PATCH /api/v1/admin/users/:id` & dashboard integration);
+- [x] **M02.5** Team member management & 4-tier RBAC matrix (Owner/Admin/Member/Viewer, `PATCH /api/v1/admin/users/:id` & dashboard integration);
 - [ ] **M02.6** Member invitation workflow via outbound webhooks;
 - [ ] **M02.7** Detailed audit log for administrative actions.
 

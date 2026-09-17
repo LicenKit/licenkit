@@ -67,6 +67,17 @@
 | `/api/v1/admin/*` | 管理后台 / 脚本自动化调用 | `Authorization: Bearer <session_token>` | 自然人登录凭证 (JWT，通过 `/auth/login` 获取)，前端控制台与自动化脚本通用 |
 | `/api/v1/webhooks/:provider/:account_id` | 外部支付网关回调 | 请求头签名 HMAC 验证 | 根据 URL 中 `account_id` 与 `provider` 解密网关密钥验签 |
 
+### 后台管理四级角色权限矩阵 (RBAC Matrix)
+
+系统基于 API 路由守卫与 Fail-Fast 原则，严格执行四级角色访问控制：
+
+| 角色 (Role) | 读权限 (GET) | 手动发码 / 吊销 / 挂起 / 解绑 | 编辑产品 / 策略 | 创建 / 删除产品与策略 | 配置 Webhook / 系统设置 | 邀请成员 (admin/member/viewer) | 编辑 / 删除成员 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **owner** (空间所有者) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (防自删保护) |
+| **admin** (业务管理员) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **member** (运营骨干) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **viewer** (只读审计) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
 ---
 
 ## 三、 系统状态与首次安装向导接口 (System Setup API - `/api/v1/system/*`)
@@ -456,18 +467,29 @@
 ---
 
 ### 3. 团队成员管理 (`/api/v1/admin/users`)
-- **获取当前租户成员列表**：`GET /api/v1/admin/users`
-- **邀请/创建新成员**：`POST /api/v1/admin/users`
+- **获取当前租户成员列表**：`GET /api/v1/admin/users`（所有登录角色可用）
+- **邀请/创建新成员**：`POST /api/v1/admin/users`（仅限 `owner` 与 `admin`）
   - **请求参数**：
     ```json
     {
       "name": "Bob (Engineer)",
       "email": "bob@screenstudio.com",
       "password": "InitialPassword123!",
-      "role": "admin"
+      "role": "member" // 可选: "admin" | "member" | "viewer"（默认 "member"）
     }
     ```
-- **移除团队成员**：`DELETE /api/v1/admin/users/:id`（阻断删除自身或最后一个 `owner`）
+- **修改成员信息**：`PATCH /api/v1/admin/users/:id`（仅限 `owner`）
+  - **功能描述**：支持修改成员姓名、角色（`role`）、激活/停用状态（`isActive`）以及重置登录密码。防误操作：禁止降级工作区 Owner，禁止停用自身。
+  - **请求参数**（所有字段均可选）：
+    ```json
+    {
+      "name": "Bob Cooper",
+      "role": "admin",
+      "isActive": true,
+      "password": "NewSecurePassword123!"
+    }
+    ```
+- **移除团队成员**：`DELETE /api/v1/admin/users/:id`（仅限 `owner`，防误操作保护：禁止删除自身账号）
 
 ---
 

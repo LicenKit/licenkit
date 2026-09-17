@@ -48,6 +48,22 @@ interface DashboardPageProps {
 export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onLogout }) => {
   const [activeNav, setActiveNav] = useState<"overview" | "products" | "policies" | "licenses" | "gateways" | "settings" | "team">("overview");
 
+  // RBAC Permission Flags
+  const isOwner = user?.role === "owner";
+  const isAdmin = user?.role === "admin";
+  const isMember = user?.role === "member";
+  const isViewer = user?.role === "viewer";
+
+  const canCreateProduct = isOwner || isAdmin;
+  const canEditProduct = !isViewer;
+  const canCreatePolicy = isOwner || isAdmin;
+  const canEditPolicy = !isViewer;
+  const canManageLicenses = !isViewer;
+  const canManageWebhooks = isOwner || isAdmin;
+  const canManageSettings = isOwner || isAdmin;
+  const canAddMember = isOwner || isAdmin;
+  const canEditMember = isOwner;
+
   // Webhook & Gateway state
   const [paymentProvider, setPaymentProvider] = useState<"paddle" | "stripe" | "lemonsqueezy">("paddle");
   const [settingsData, setSettingsData] = useState<any>(null);
@@ -419,7 +435,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
         <div className="pt-4 border-t border-slate-800/80">
           <div className="flex items-center justify-between px-2 py-1">
             <div className="overflow-hidden pr-2">
-              <div className="text-sm font-medium text-white truncate">{user.name}</div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-medium text-white truncate">{user.name}</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded uppercase font-semibold tracking-wider bg-slate-800 text-indigo-300 border border-slate-700 shrink-0">
+                  {user.role}
+                </span>
+              </div>
               <div className="text-xs text-slate-400 truncate">{user.email}</div>
             </div>
             <button
@@ -483,21 +504,25 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   issue licenses with asymmetric Ed25519 digital signatures, and automate order fulfillment with Paddle or Stripe.
                 </p>
                 <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setIsCreateProductOpen(true)}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors shadow"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Create Product</span>
-                  </button>
-                  <button
-                    onClick={() => setIsIssueLicenseOpen(true)}
-                    disabled={productsList.length === 0 || policiesList.length === 0}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors border border-slate-700"
-                  >
-                    <Key className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Issue License</span>
-                  </button>
+                  {canCreateProduct && (
+                    <button
+                      onClick={() => setIsCreateProductOpen(true)}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Create Product</span>
+                    </button>
+                  )}
+                  {canManageLicenses && (
+                    <button
+                      onClick={() => setIsIssueLicenseOpen(true)}
+                      disabled={productsList.length === 0 || policiesList.length === 0}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors border border-slate-700 cursor-pointer"
+                    >
+                      <Key className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Issue License</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -511,13 +536,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <h3 className="text-base font-semibold text-white">Software Catalog</h3>
                   <p className="text-xs text-slate-400">Manage software products, trial durations, and Ed25519 public keys.</p>
                 </div>
-                <button
-                  onClick={() => setIsCreateProductOpen(true)}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors shadow"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Create Product</span>
-                </button>
+                {canCreateProduct && (
+                  <button
+                    onClick={() => setIsCreateProductOpen(true)}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Create Product</span>
+                  </button>
+                )}
               </div>
 
               {productsList.length === 0 ? (
@@ -529,12 +556,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
                     Create your first product to generate an automatic Ed25519 cryptography signing key.
                   </p>
-                  <button
-                    onClick={() => setIsCreateProductOpen(true)}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors"
-                  >
-                    Create Product
-                  </button>
+                  {canCreateProduct && (
+                    <button
+                      onClick={() => setIsCreateProductOpen(true)}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      Create Product
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -566,16 +595,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                             >
                               {p.isActive ? "Active" : "Inactive"}
                             </span>
-                            <button
-                              onClick={() => {
-                                setEditingProduct(p);
-                                setIsEditProductOpen(true);
-                              }}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/60 transition-colors"
-                              title="Edit Product"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
+                            {canEditProduct && (
+                              <button
+                                onClick={() => {
+                                  setEditingProduct(p);
+                                  setIsEditProductOpen(true);
+                                }}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/60 transition-colors cursor-pointer"
+                                title="Edit Product"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         <p className="text-xs text-slate-400 mb-4 line-clamp-2">
@@ -638,14 +669,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <h3 className="text-base font-semibold text-white">Licensing Policies</h3>
                   <p className="text-xs text-slate-400">Configure machine seat limits, expiration intervals, and offline verification rules.</p>
                 </div>
-                <button
-                  onClick={() => setIsCreatePolicyOpen(true)}
-                  disabled={productsList.length === 0}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors shadow"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Create Policy</span>
-                </button>
+                {canCreatePolicy && (
+                  <button
+                    onClick={() => setIsCreatePolicyOpen(true)}
+                    disabled={productsList.length === 0}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Create Policy</span>
+                  </button>
+                )}
               </div>
 
               {policiesList.length === 0 ? (
@@ -659,12 +692,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                       ? "Please create a product first before creating a policy."
                       : "Create a policy to define how many devices a customer can activate and license duration."}
                   </p>
-                  <button
-                    onClick={() => (productsList.length === 0 ? setIsCreateProductOpen(true) : setIsCreatePolicyOpen(true))}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors"
-                  >
-                    {productsList.length === 0 ? "Create Product First" : "Create Policy"}
-                  </button>
+                  {canCreatePolicy && (
+                    <button
+                      onClick={() => (productsList.length === 0 ? setIsCreateProductOpen(true) : setIsCreatePolicyOpen(true))}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      {productsList.length === 0 ? "Create Product First" : "Create Policy"}
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl overflow-hidden">
@@ -722,16 +757,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                             </span>
                           </td>
                           <td className="py-3.5 px-4 text-right">
-                            <button
-                              onClick={() => {
-                                setEditingPolicy(pol);
-                                setIsEditPolicyOpen(true);
-                              }}
-                              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] transition-colors border border-slate-700 inline-flex items-center gap-1"
-                            >
-                              <Edit3 className="w-3 h-3" />
-                              <span>Edit</span>
-                            </button>
+                            {canEditPolicy && (
+                              <button
+                                onClick={() => {
+                                  setEditingPolicy(pol);
+                                  setIsEditPolicyOpen(true);
+                                }}
+                                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] transition-colors border border-slate-700 inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -750,14 +787,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <h3 className="text-base font-semibold text-white">Issued Licenses</h3>
                   <p className="text-xs text-slate-400">Issue, audit, suspend, and reinstate customer activation keys.</p>
                 </div>
-                <button
-                  onClick={() => setIsIssueLicenseOpen(true)}
-                  disabled={productsList.length === 0 || policiesList.length === 0}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors shadow"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Issue License</span>
-                </button>
+                {canManageLicenses && (
+                  <button
+                    onClick={() => setIsIssueLicenseOpen(true)}
+                    disabled={productsList.length === 0 || policiesList.length === 0}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Issue License</span>
+                  </button>
+                )}
               </div>
 
               {/* Search & Filter Bar */}
@@ -891,20 +930,22 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                                 <Monitor className="w-3 h-3" />
                                 <span>Seats</span>
                               </button>
-                              {lic.status === "active" ? (
-                                <button
-                                  onClick={() => handleSuspendLicense(lic.id)}
-                                  className="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-[11px] transition-colors border border-amber-500/30"
-                                >
-                                  Suspend
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => handleReinstateLicense(lic.id)}
-                                  className="px-2.5 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] transition-colors border border-emerald-500/30"
-                                >
-                                  Reinstate
-                                </button>
+                              {canManageLicenses && (
+                                lic.status === "active" ? (
+                                  <button
+                                    onClick={() => handleSuspendLicense(lic.id)}
+                                    className="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-[11px] transition-colors border border-amber-500/30 cursor-pointer"
+                                  >
+                                    Suspend
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => handleReinstateLicense(lic.id)}
+                                    className="px-2.5 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] transition-colors border border-emerald-500/30 cursor-pointer"
+                                  >
+                                    Reinstate
+                                  </button>
+                                )
                               )}
                             </div>
                           </td>
@@ -1017,13 +1058,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                     {paymentSaveMessage ? (
                       <span className="text-xs text-emerald-400 font-medium">{paymentSaveMessage}</span>
                     ) : <span />}
-                    <button
-                      onClick={handleSavePaymentConfig}
-                      disabled={isSavingPayment || !webhookSecretInput.trim()}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium text-white rounded-lg transition-colors shadow"
-                    >
-                      {isSavingPayment ? "Saving..." : "Save Webhook Secret (AES-256-GCM Encrypted)"}
-                    </button>
+                    {canManageSettings && (
+                      <button
+                        onClick={handleSavePaymentConfig}
+                        disabled={isSavingPayment || !webhookSecretInput.trim()}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                      >
+                        {isSavingPayment ? "Saving..." : "Save Webhook Secret (AES-256-GCM Encrypted)"}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1038,13 +1081,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                       broadcast via Cloudflare Queues to your webhook endpoints.
                     </p>
                   </div>
-                  <button
-                    onClick={() => setIsCreateWebhookOpen(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors shadow"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Endpoint</span>
-                  </button>
+                  {canManageWebhooks && (
+                    <button
+                      onClick={() => setIsCreateWebhookOpen(true)}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Endpoint</span>
+                    </button>
+                  )}
                 </div>
 
                 {webhooksList.length === 0 ? (
@@ -1064,23 +1109,25 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                               {wh.url}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => handleTestWebhook(wh.id)}
-                              disabled={testingWebhookId === wh.id}
-                              className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-medium rounded-md transition-colors border border-slate-700"
-                            >
-                              <Send className="w-3 h-3" />
-                              <span>{testingWebhookId === wh.id ? "Testing..." : "Send Test"}</span>
-                            </button>
-                            <button
-                              onClick={() => handleDeleteWebhook(wh.id)}
-                              className="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition-colors"
-                              title="Delete Endpoint"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          {canManageWebhooks && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleTestWebhook(wh.id)}
+                                disabled={testingWebhookId === wh.id}
+                                className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-medium rounded-md transition-colors border border-slate-700 cursor-pointer"
+                              >
+                                <Send className="w-3 h-3" />
+                                <span>{testingWebhookId === wh.id ? "Testing..." : "Send Test"}</span>
+                              </button>
+                              <button
+                                onClick={() => handleDeleteWebhook(wh.id)}
+                                className="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition-colors cursor-pointer"
+                                title="Delete Endpoint"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -1243,7 +1290,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <h3 className="text-sm font-medium text-white">Team Members</h3>
                   <p className="text-xs text-slate-400">Collaborate with administrators and team members.</p>
                 </div>
-                {(user.role === "owner" || user.role === "admin") && (
+                {canAddMember && (
                   <button
                     onClick={() => setIsCreateUserOpen(true)}
                     className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-xl transition-all cursor-pointer shadow-md shadow-indigo-600/20"
@@ -1301,14 +1348,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                                 ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
                                 : u.role === "admin"
                                 ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
-                                : "bg-slate-700/50 text-slate-400 border border-slate-700"
+                                : u.role === "member"
+                                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                                : "bg-sky-500/20 text-sky-400 border border-sky-500/30"
                             }`}
                           >
                             {u.role}
                           </span>
 
                           {/* Action buttons: Only owner can edit roles or delete others */}
-                          {user.role === "owner" && (
+                          {canEditMember && (
                             <div className="flex items-center gap-1">
                               <button
                                 onClick={() => {
@@ -1393,6 +1442,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
         }}
         onSuccess={loadDashboardData}
         licenseId={inspectingLicenseId}
+        readOnly={!canManageLicenses}
       />
 
       <CreateWebhookModal

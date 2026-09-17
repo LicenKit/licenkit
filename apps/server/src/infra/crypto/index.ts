@@ -155,7 +155,7 @@ export interface JWTPayload {
   userId: string;
   accountId: string;
   email: string;
-  role: "owner" | "admin" | "member";
+  role: "owner" | "admin" | "member" | "viewer";
   exp: number; // Unix timestamp in seconds
   iat: number;
 }

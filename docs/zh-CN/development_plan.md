@@ -51,7 +51,7 @@
 - [x] **M02.2** WebCrypto PBKDF2-HMAC-SHA256 密码加盐散列与常量时间比对；
 - [x] **M02.3** WebCrypto 原生 HMAC-SHA256 Session JWT 签发与解析（7 天有效期）；
 - [x] **M02.4** `sessionAuth` 中间件（自动从 `Authorization: Bearer <token>` 提取身份并注入 Context）；
-- [x] **M02.5** 团队成员管理：支持多角色（Owner/Admin/Member）权限管控、新增成员、角色切换升降级、账号冻结与密码重置（`PATCH /api/v1/admin/users/:id` 与前端控制台联动）；
+- [x] **M02.5** 团队成员管理：支持四级角色（Owner/Admin/Member/Viewer）权限管控矩阵、新增成员、角色切换升降级、账号冻结与密码重置（`PATCH /api/v1/admin/users/:id` 与前端控制台联动）；
 - [ ] **M02.6** 成员邀请机制：通过出向 Webhook 发送邀请链接并在前端设置独立密码；
 - [ ] **M02.7** 细粒度操作审计：记录各管理员的操作流水日志。
 

@@ -125,7 +125,7 @@ const IssueLicenseSchema = z.object({
 });
 
 // POST /api/v1/admin/licenses
-adminLicensesRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
+adminLicensesRouter.post("/", requireRole(["owner", "admin", "member"]), async (c) => {
   const body = await c.req.json();
   const input = IssueLicenseSchema.parse(body);
 
@@ -297,7 +297,7 @@ const UpdateLicenseSchema = z.object({
 });
 
 // PATCH /api/v1/admin/licenses/:id
-adminLicensesRouter.patch("/:id", requireRole(["owner", "admin"]), async (c) => {
+adminLicensesRouter.patch("/:id", requireRole(["owner", "admin", "member"]), async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json();
   const input = UpdateLicenseSchema.parse(body);
@@ -372,7 +372,7 @@ adminLicensesRouter.patch("/:id", requireRole(["owner", "admin"]), async (c) => 
 });
 
 // POST /api/v1/admin/licenses/:id/rotate-key
-adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin"]), async (c) => {
+adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin", "member"]), async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json().catch(() => ({}));
   const customKey = body?.key ? String(body.key).trim().toUpperCase() : null;
@@ -412,7 +412,7 @@ adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin"]), asy
 });
 
 // POST /api/v1/admin/licenses/:id/revoke
-adminLicensesRouter.post("/:id/revoke", requireRole(["owner", "admin"]), async (c) => {
+adminLicensesRouter.post("/:id/revoke", requireRole(["owner", "admin", "member"]), async (c) => {
   const id = c.req.param("id");
   const db = getTenantDB(c);
   const accountId = c.get("accountId")!;
@@ -457,7 +457,7 @@ adminLicensesRouter.post("/:id/revoke", requireRole(["owner", "admin"]), async (
 });
 
 // POST /api/v1/admin/licenses/:id/suspend
-adminLicensesRouter.post("/:id/suspend", requireRole(["owner", "admin"]), async (c) => {
+adminLicensesRouter.post("/:id/suspend", requireRole(["owner", "admin", "member"]), async (c) => {
   const id = c.req.param("id");
   const db = getTenantDB(c);
   const accountId = c.get("accountId")!;
@@ -499,7 +499,7 @@ adminLicensesRouter.post("/:id/suspend", requireRole(["owner", "admin"]), async 
 });
 
 // POST /api/v1/admin/licenses/:id/reinstate
-adminLicensesRouter.post("/:id/reinstate", requireRole(["owner", "admin"]), async (c) => {
+adminLicensesRouter.post("/:id/reinstate", requireRole(["owner", "admin", "member"]), async (c) => {
   const id = c.req.param("id");
   const db = getTenantDB(c);
   const accountId = c.get("accountId")!;
@@ -541,7 +541,7 @@ adminLicensesRouter.post("/:id/reinstate", requireRole(["owner", "admin"]), asyn
 });
 
 // DELETE /api/v1/admin/licenses/:id/machines/:machineId
-adminLicensesRouter.delete("/:id/machines/:machineId", requireRole(["owner", "admin"]), async (c) => {
+adminLicensesRouter.delete("/:id/machines/:machineId", requireRole(["owner", "admin", "member"]), async (c) => {
   const licenseId = c.req.param("id");
   const machineId = c.req.param("machineId");
   const db = getTenantDB(c);

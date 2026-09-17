@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { api } from "../../lib/api-client";
-import { X, UserPlus, Loader2, AlertCircle, Shield, User } from "lucide-react";
+import { X, UserPlus, Loader2, AlertCircle, Shield, User, Eye } from "lucide-react";
 
 interface CreateUserModalProps {
   isOpen: boolean;
@@ -15,7 +15,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({ isOpen, onClos
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
+  const [role, setRole] = useState<"admin" | "member" | "viewer">("member");
 
   if (!isOpen) return null;
 
@@ -133,7 +133,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({ isOpen, onClos
 
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1.5">Role & Permissions</label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <button
                 type="button"
                 onClick={() => setRole("admin")}
@@ -148,7 +148,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({ isOpen, onClos
                   <span>Admin</span>
                 </div>
                 <span className="text-[11px] text-slate-400 leading-tight">
-                  Full access to products, licenses, and webhooks.
+                  Full product, policy, webhook & team invite management.
                 </span>
               </button>
 
@@ -157,16 +157,34 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({ isOpen, onClos
                 onClick={() => setRole("member")}
                 className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
                   role === "member"
-                    ? "bg-indigo-600/15 border-indigo-500 text-white"
+                    ? "bg-emerald-600/15 border-emerald-500 text-white"
                     : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:border-slate-600"
                 }`}
               >
                 <div className="flex items-center gap-1.5 text-xs font-semibold">
-                  <User className="w-3.5 h-3.5 text-slate-400" />
+                  <User className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Member</span>
                 </div>
                 <span className="text-[11px] text-slate-400 leading-tight">
-                  Read-only view of dashboard stats and licenses.
+                  Issue, revoke licenses & edit products/policies.
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setRole("viewer")}
+                className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                  role === "viewer"
+                    ? "bg-sky-600/15 border-sky-500 text-white"
+                    : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:border-slate-600"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-xs font-semibold">
+                  <Eye className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Viewer</span>
+                </div>
+                <span className="text-[11px] text-slate-400 leading-tight">
+                  Read-only view of products, policies & licenses.
                 </span>
               </button>
             </div>

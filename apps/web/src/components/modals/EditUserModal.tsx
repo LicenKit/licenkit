@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../lib/api-client";
-import { X, UserCog, Loader2, AlertCircle, Shield, User, CheckCircle, Ban, Key } from "lucide-react";
+import { X, UserCog, Loader2, AlertCircle, Shield, User, Eye, CheckCircle, Ban, Key } from "lucide-react";
 
 interface EditUserModalProps {
   isOpen: boolean;
@@ -27,7 +27,7 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
+  const [role, setRole] = useState<"admin" | "member" | "viewer">("member");
   const [isActive, setIsActive] = useState(true);
   const [newPassword, setNewPassword] = useState("");
 
@@ -37,7 +37,7 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
   useEffect(() => {
     if (userToEdit) {
       setName(userToEdit.name || "");
-      setRole((userToEdit.role as "admin" | "member") || "member");
+      setRole((userToEdit.role as "admin" | "member" | "viewer") || "member");
       setIsActive(userToEdit.isActive !== false);
       setNewPassword("");
       setError(null);
@@ -137,7 +137,7 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
           {!isOwner && (
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">Role & Permissions</label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <button
                   type="button"
                   onClick={() => setRole("admin")}
@@ -152,7 +152,7 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
                     <span>Admin</span>
                   </div>
                   <span className="text-[11px] text-slate-400 leading-tight">
-                    Full management of licenses and products.
+                    Full product, policy, webhook & team management.
                   </span>
                 </button>
 
@@ -161,16 +161,34 @@ export const EditUserModal: React.FC<EditUserModalProps> = ({
                   onClick={() => setRole("member")}
                   className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
                     role === "member"
-                      ? "bg-indigo-600/15 border-indigo-500 text-white"
+                      ? "bg-emerald-600/15 border-emerald-500 text-white"
                       : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:border-slate-600"
                   }`}
                 >
                   <div className="flex items-center gap-1.5 text-xs font-semibold">
-                    <User className="w-3.5 h-3.5 text-slate-400" />
+                    <User className="w-3.5 h-3.5 text-emerald-400" />
                     <span>Member</span>
                   </div>
                   <span className="text-[11px] text-slate-400 leading-tight">
-                    Read-only view of dashboard and stats.
+                    Issue, revoke licenses & edit products/policies.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setRole("viewer")}
+                  className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                    role === "viewer"
+                      ? "bg-sky-600/15 border-sky-500 text-white"
+                      : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:border-slate-600"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 text-xs font-semibold">
+                    <Eye className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Viewer</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400 leading-tight">
+                    Read-only view of products, policies & licenses.
                   </span>
                 </button>
               </div>

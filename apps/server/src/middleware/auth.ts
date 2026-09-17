@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from "hono";
-import type { AppContext } from "../types";
+import type { AppContext, UserRole } from "../types";
 import { UnauthorizedError, ForbiddenError } from "./error";
 import { verifyJWT, getJwtSecret } from "../infra/crypto";
 import { getTenantDB } from "../infra/db";
@@ -35,7 +35,7 @@ export const sessionAuth: MiddlewareHandler<AppContext> = async (c, next) => {
 /**
  * Role-Based Access Control Guard
  */
-export function requireRole(allowedRoles: ("owner" | "admin" | "member")[]): MiddlewareHandler<AppContext> {
+export function requireRole(allowedRoles: UserRole[]): MiddlewareHandler<AppContext> {
   return async (c, next) => {
     const role = c.get("userRole");
     if (!role || !allowedRoles.includes(role)) {

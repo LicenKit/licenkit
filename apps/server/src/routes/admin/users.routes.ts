@@ -41,7 +41,7 @@ const CreateUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1),
   password: z.string().min(8),
-  role: z.enum(["admin", "member"]).default("member"),
+  role: z.enum(["admin", "member", "viewer"]).default("member"),
 });
 
 // POST /api/v1/admin/users
@@ -94,7 +94,7 @@ adminUsersRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
 
 const UpdateUserSchema = z.object({
   name: z.string().min(1).optional(),
-  role: z.enum(["admin", "member"]).optional(),
+  role: z.enum(["admin", "member", "viewer"]).optional(),
   isActive: z.boolean().optional(),
   password: z.string().min(8).optional(),
 });
