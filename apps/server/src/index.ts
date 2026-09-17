@@ -65,7 +65,8 @@ app.all("*", async (c) => {
   return c.text("LicenKit Server is running. Static assets binding not configured.", 404);
 });
 
-// Export Cloudflare Workers Handlers
+// Export Cloudflare Workers Handlers and App instance
+export { app };
 export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch<WebhookMessage>, env: Env): Promise<void> {
