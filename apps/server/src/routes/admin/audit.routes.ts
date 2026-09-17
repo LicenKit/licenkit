@@ -90,6 +90,8 @@ adminAuditRouter.get("/", async (c) => {
     };
   });
 
+  const totalPages = Math.ceil(total / limit);
+
   return c.json({
     success: true,
     data: {
@@ -98,7 +100,9 @@ adminAuditRouter.get("/", async (c) => {
         page,
         limit,
         total,
-        totalPages: Math.ceil(total / limit),
+        totalItems: total,
+        totalPages,
+        hasNext: page < totalPages,
       },
     },
   });

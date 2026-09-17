@@ -152,7 +152,10 @@ adminUsersRouter.patch("/:id", requireRole(["owner"]), async (c) => {
     updates.passwordHash = await hashPassword(input.password);
   }
 
-  await db.update(users).set(updates).where(eq(users.id, targetId));
+  await db
+    .update(users)
+    .set(updates)
+    .where(and(eq(users.id, targetId), eq(users.accountId, accountId)));
 
   await recordAuditLog({
     c,
@@ -178,7 +181,7 @@ adminUsersRouter.patch("/:id", requireRole(["owner"]), async (c) => {
       updatedAt: users.updatedAt,
     })
     .from(users)
-    .where(eq(users.id, targetId))
+    .where(and(eq(users.id, targetId), eq(users.accountId, accountId)))
     .get();
 
   return c.json({
@@ -209,7 +212,13 @@ adminUsersRouter.delete("/:id", requireRole(["owner"]), async (c) => {
     throw new NotFoundError("User not found");
   }
 
-  await db.delete(users).where(eq(users.id, targetId));
+  if (target.role === "owner") {
+    throw new AppError("CANNOT_DELETE_OWNER", "The workspace owner cannot be deleted", 400);
+  }
+
+  await db
+    .delete(users)
+    .where(and(eq(users.id, targetId), eq(users.accountId, accountId)));
 
   await recordAuditLog({
     c,

@@ -321,7 +321,9 @@ describe("Admin Audit Logs Service & API (M02.7)", () => {
     expect(resAll.status).toBe(200);
     const allJson = await resAll.json();
     expect(allJson.data.pagination.total).toBe(3);
+    expect(allJson.data.pagination.totalItems).toBe(3);
     expect(allJson.data.pagination.totalPages).toBe(2);
+    expect(allJson.data.pagination.hasNext).toBe(true);
     expect(allJson.data.items.length).toBe(2);
     // Ordered desc by createdAt
     expect(allJson.data.items[0].id).toBe("aud_03");
