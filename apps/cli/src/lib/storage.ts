@@ -12,8 +12,8 @@ export interface StoredLicenseData {
   machineId?: string;
   activatedAt?: string;
   lastValidatedAt?: string;
-  tokenExpiresAt?: string;
-  licenseExpiresAt?: string | null;
+  tokenExpiresAt?: string | number;
+  licenseExpiresAt?: string | number | null;
   policy?: {
     name: string;
     maxMachines: number;

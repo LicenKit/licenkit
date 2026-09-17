@@ -97,9 +97,14 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     console.log(`  ${pc.gray("Fingerprint:")}     ${fingerprint}`);
     console.log(`  ${pc.gray("Policy:")}          ${result.policy?.name}`);
     console.log(`  ${pc.gray("Max Machines:")}    ${result.policy?.max_machines}`);
-    console.log(`  ${pc.gray("Entitlements:")}    ${result.policy?.features?.length ? result.policy.features.join(", ") : "(None)"}`);
-    console.log(`  ${pc.gray("Grace Expires:")}   ${result.token_expires_at || "N/A"}`);
-    console.log(`  ${pc.gray("License Expires:")} ${result.license_expires_at || "Perpetual (Never)"}`);
+    const formatTimestamp = (val: number | string | null | undefined, fallback: string) => {
+      if (!val) return fallback;
+      if (typeof val === "number") return new Date(val * 1000).toISOString();
+      return String(val);
+    };
+
+    console.log(`  ${pc.gray("Grace Expires:")}   ${formatTimestamp(result.token_expires_at, "N/A")}`);
+    console.log(`  ${pc.gray("License Expires:")} ${formatTimestamp(result.license_expires_at, "Perpetual (Never)")}`);
     if (publicKey) {
       console.log(`  ${pc.gray("Public Key:")}      ${pc.green("Cached for offline verification")}`);
     }

@@ -41,12 +41,18 @@ export async function validateCommand(): Promise<void> {
 
     saveStoredLicense(stored);
 
+    const formatTimestamp = (val: number | string | null | undefined, fallback: string) => {
+      if (!val) return fallback;
+      if (typeof val === "number") return new Date(val * 1000).toISOString();
+      return String(val);
+    };
+
     console.log();
     console.log(pc.bold(pc.green("✔ License validated successfully (Heartbeat recorded)")));
     console.log(`  ${pc.gray("Key:")}            ${pc.bold(stored.licenseKey)}`);
     console.log(`  ${pc.gray("Status:")}         ${pc.green("ACTIVE")}`);
-    console.log(`  ${pc.gray("Token Expires:")}  ${result.token_expires_at || stored.tokenExpiresAt || "N/A"}`);
-    console.log(`  ${pc.gray("Last Heartbeat:")} ${result.last_heartbeat_at || stored.lastValidatedAt}`);
+    console.log(`  ${pc.gray("Token Expires:")}  ${formatTimestamp(result.token_expires_at || stored.tokenExpiresAt, "N/A")}`);
+    console.log(`  ${pc.gray("Last Heartbeat:")} ${formatTimestamp(result.last_heartbeat_at || stored.lastValidatedAt, "N/A")}`);
     console.log();
   } catch (err: any) {
     console.error();

@@ -225,7 +225,8 @@ clientRouter.post("/activate", async (c) => {
   // 5. Generate Offline Ed25519 Token if scheme == 'ed25519'
   const features = typeof policy.features === "string" ? JSON.parse(policy.features || "[]") : policy.features || [];
   let token: string | null = null;
-  let tokenExpiresAt: string | null = null;
+  let tokenExpiresTimestamp: number | null = null;
+  let tokenExpiresIso: string | null = null;
 
   if (policy.scheme === "ed25519") {
     const keyInfo = await getActiveProductKey(db, input.account_id, license.productId, encKey);
@@ -235,7 +236,8 @@ clientRouter.post("/activate", async (c) => {
 
     const offlineGracePeriod = policy.offlineGracePeriod ?? 2592000;
     const expInfo = calculateOfflineExpiration(license.expiresAt, offlineGracePeriod);
-    tokenExpiresAt = expInfo.offlineExpIso;
+    tokenExpiresTimestamp = expInfo.offlineExpTimestamp;
+    tokenExpiresIso = expInfo.offlineExpIso;
 
     const header: OfflineTokenHeader = {
       alg: "Ed25519",
@@ -275,6 +277,8 @@ clientRouter.post("/activate", async (c) => {
     license.productId
   );
 
+  const licenseExpTimestamp = license.expiresAt ? Math.floor(new Date(license.expiresAt).getTime() / 1000) : null;
+
   return c.json({
     success: true,
     data: {
@@ -283,8 +287,10 @@ clientRouter.post("/activate", async (c) => {
       machine_id: machineId,
       scheme: policy.scheme,
       token,
-      token_expires_at: tokenExpiresAt,
-      license_expires_at: license.expiresAt,
+      token_expires_at: tokenExpiresTimestamp,
+      license_expires_at: licenseExpTimestamp,
+      token_expires_at_iso: tokenExpiresIso,
+      license_expires_at_iso: license.expiresAt,
       policy: {
         name: policy.name,
         max_machines: policy.maxMachines,
@@ -361,7 +367,8 @@ clientRouter.post("/validate", async (c) => {
 
   // If Ed25519 scheme, refresh offline signed token with extended grace period
   let token: string | null = null;
-  let tokenExpiresAt: string | null = null;
+  let tokenExpiresTimestamp: number | null = null;
+  let tokenExpiresIso: string | null = null;
 
   if (policy.scheme === "ed25519") {
     const keyInfo = await getActiveProductKey(db, input.account_id, license.productId, encKey);
@@ -369,7 +376,8 @@ clientRouter.post("/validate", async (c) => {
       const features = typeof policy.features === "string" ? JSON.parse(policy.features || "[]") : policy.features || [];
       const offlineGracePeriod = policy.offlineGracePeriod ?? 2592000;
       const expInfo = calculateOfflineExpiration(license.expiresAt, offlineGracePeriod);
-      tokenExpiresAt = expInfo.offlineExpIso;
+      tokenExpiresTimestamp = expInfo.offlineExpTimestamp;
+      tokenExpiresIso = expInfo.offlineExpIso;
 
       const header: OfflineTokenHeader = {
         alg: "Ed25519",
@@ -394,15 +402,21 @@ clientRouter.post("/validate", async (c) => {
     }
   }
 
+  const licenseExpTimestamp = license.expiresAt ? Math.floor(new Date(license.expiresAt).getTime() / 1000) : null;
+  const heartbeatTimestamp = Math.floor(new Date(now).getTime() / 1000);
+
   return c.json({
     success: true,
     data: {
       valid: true,
       scheme: policy.scheme,
       token,
-      token_expires_at: tokenExpiresAt,
-      license_expires_at: license.expiresAt,
-      last_heartbeat_at: now,
+      token_expires_at: tokenExpiresTimestamp,
+      license_expires_at: licenseExpTimestamp,
+      token_expires_at_iso: tokenExpiresIso,
+      license_expires_at_iso: license.expiresAt,
+      last_heartbeat_at: heartbeatTimestamp,
+      last_heartbeat_at_iso: now,
     },
   });
 });

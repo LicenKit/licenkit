@@ -64,8 +64,10 @@ export interface ActivateResponse {
   machine_id: string;
   scheme: string;
   token: string | null;
-  token_expires_at: string | null;
-  license_expires_at: string | null;
+  token_expires_at: number | string | null;
+  license_expires_at: number | string | null;
+  token_expires_at_iso?: string | null;
+  license_expires_at_iso?: string | null;
   policy: {
     name: string;
     max_machines: number;
@@ -98,9 +100,12 @@ export interface ValidateResponse {
   valid: boolean;
   scheme?: string;
   token?: string | null;
-  token_expires_at?: string | null;
-  license_expires_at?: string | null;
-  last_heartbeat_at?: string;
+  token_expires_at?: number | string | null;
+  license_expires_at?: number | string | null;
+  token_expires_at_iso?: string | null;
+  license_expires_at_iso?: string | null;
+  last_heartbeat_at?: number | string;
+  last_heartbeat_at_iso?: string;
   reason?: string;
 }
 
