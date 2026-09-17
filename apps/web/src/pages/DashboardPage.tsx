@@ -29,7 +29,6 @@ import {
   RefreshCw,
   CheckCircle2,
   History,
-  Download,
 } from "lucide-react";
 import { CreateProductModal } from "../components/modals/CreateProductModal";
 import { CreatePolicyModal } from "../components/modals/CreatePolicyModal";
@@ -104,7 +103,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
   const [licenseProductFilter, setLicenseProductFilter] = useState("");
   const [licenseStatusFilter, setLicenseStatusFilter] = useState("all");
   const [licenseSeatFilter, setLicenseSeatFilter] = useState("all");
-  const [isExporting, setIsExporting] = useState(false);
 
   // Copy tracking for keys inside tables/cards
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -311,23 +309,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
   useEffect(() => {
     loadFilteredLicenses();
   }, [licenseSearchQuery, licenseProductFilter, licenseStatusFilter, licenseSeatFilter]);
-
-  const handleExportCsv = async () => {
-    try {
-      setIsExporting(true);
-      await api.licenses.downloadExport({
-        query: licenseSearchQuery.trim() || undefined,
-        productId: licenseProductFilter || undefined,
-        status: licenseStatusFilter !== "all" ? licenseStatusFilter : undefined,
-        seatStatus: licenseSeatFilter !== "all" ? licenseSeatFilter : undefined,
-      });
-    } catch (e: any) {
-      console.error("Failed to export CSV", e);
-      alert("Failed to export CSV: " + (e.message || "Unknown error"));
-    } finally {
-      setIsExporting(false);
-    }
-  };
 
   const handleCopyText = (text: string, identifier: string) => {
     navigator.clipboard.writeText(text);
@@ -858,15 +839,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <p className="text-xs text-slate-400">Issue, audit, suspend, and reinstate customer activation keys.</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleExportCsv}
-                    disabled={isExporting}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
-                    title="Export filtered licenses as CSV"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>{isExporting ? "Exporting..." : "Export CSV"}</span>
-                  </button>
                   {canManageLicenses && (
                     <button
                       onClick={() => setIsIssueLicenseOpen(true)}

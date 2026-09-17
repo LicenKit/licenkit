@@ -128,10 +128,14 @@ adminLicensesRouter.get("/", async (c) => {
   });
 });
 
-function escapeCsvCell(val: any): string {
+export function escapeCsvCell(val: any): string {
   if (val === null || val === undefined) return "";
-  const s = String(val);
-  if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+  let s = String(val);
+  // Formula Injection prevention: prepend single quote if cell begins with =, +, -, @, \t, \r
+  if (/^[=+\-@\t\r]/.test(s)) {
+    s = `'${s}`;
+  }
+  if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r") || s.startsWith("'")) {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
@@ -237,7 +241,7 @@ export async function cleanExpiredUnusedLicenses(db: any, targetAccountId?: stri
   const conditions = [
     eq(licenses.status, "active"),
     eq(licenses.source, "manual"),
-    sql`${licenses.createdAt} <= datetime('now', '-30 days')`,
+    sql`datetime(${licenses.createdAt}) <= datetime('now', '-30 days')`,
     sql`NOT EXISTS (SELECT 1 FROM machines WHERE machines.license_id = ${licenses.id})`,
   ];
   if (targetAccountId) {

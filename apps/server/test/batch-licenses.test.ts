@@ -5,7 +5,7 @@ import { hashPassword, signJWT, encryptEnvelope, generateLicenseKey } from "../s
 import * as schema from "../src/infra/db/schema";
 import { drizzle } from "drizzle-orm/d1";
 import { eq, and } from "drizzle-orm";
-import { cleanExpiredUnusedLicenses } from "../src/routes/admin/licenses.routes";
+import { cleanExpiredUnusedLicenses, escapeCsvCell } from "../src/routes/admin/licenses.routes";
 
 describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Tests", () => {
   let testEnv: TestEnvContext;
@@ -344,6 +344,23 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       updatedAt: thirtyFiveDaysAgo,
     });
 
+    // 1b. Boundary case: exactly 30 days and 2 hours ago (within 30-31d window)
+    // Under raw ISO string lexicographical comparison ("...T...Z" <= "... ..."), 'T' > ' ' would fail.
+    // Standardizing via sqlite datetime() ensures this critical boundary is correctly cleaned.
+    const thirtyDaysAndTwoHoursAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000)).toISOString();
+    await db.insert(schema.licenses).values({
+      id: "lic_threshold_unused",
+      accountId,
+      productId,
+      policyId,
+      key: "LIC-THRS-UNUS-0000-0004",
+      customerEmail: null,
+      source: "manual",
+      status: "active",
+      createdAt: thirtyDaysAndTwoHoursAgo,
+      updatedAt: thirtyDaysAndTwoHoursAgo,
+    });
+
     // 2. Old used license (older than 30d, but has machine seat) -> should NOT be revoked
     await db.insert(schema.licenses).values({
       id: "lic_old_used",
@@ -381,12 +398,16 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
 
     // Execute cleanup function
     const cleaned = await cleanExpiredUnusedLicenses(db, accountId);
-    expect(cleaned).toBe(1);
+    expect(cleaned).toBe(2);
 
     // Verify states
     const oldUnused = await db.select().from(schema.licenses).where(eq(schema.licenses.id, "lic_old_unused")).get();
     expect(oldUnused.status).toBe("revoked");
     expect(oldUnused.revokeReason).toBe("EXPIRED_30_DAYS_UNUSED");
+
+    const thresholdUnused = await db.select().from(schema.licenses).where(eq(schema.licenses.id, "lic_threshold_unused")).get();
+    expect(thresholdUnused.status).toBe("revoked");
+    expect(thresholdUnused.revokeReason).toBe("EXPIRED_30_DAYS_UNUSED");
 
     const oldUsed = await db.select().from(schema.licenses).where(eq(schema.licenses.id, "lic_old_used")).get();
     expect(oldUsed.status).toBe("active");
@@ -460,5 +481,56 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
     const csvUnused = await resUnused.text();
     expect(csvUnused).toContain("LIC-CSVE-UNUS-0000-0001");
     expect(csvUnused).not.toContain("LIC-CSVE-USED-0000-0002");
+  });
+
+  it("should properly escape CSV cells and protect against CSV Formula Injection", () => {
+    // 1. Basic cases
+    expect(escapeCsvCell(null)).toBe("");
+    expect(escapeCsvCell(undefined)).toBe("");
+    expect(escapeCsvCell("SimpleText")).toBe("SimpleText");
+    expect(escapeCsvCell(123)).toBe("123");
+
+    // 2. Comma, quotes, newlines
+    expect(escapeCsvCell("Name, with comma")).toBe('"Name, with comma"');
+    expect(escapeCsvCell('Name with "quotes"')).toBe('"Name with ""quotes"""');
+    expect(escapeCsvCell("Line1\nLine2")).toBe('"Line1\nLine2"');
+
+    // 3. Formula Injection defense (=, +, -, @, \t, \r)
+    expect(escapeCsvCell("=1+1")).toBe('"\'=1+1"');
+    expect(escapeCsvCell("@SUM(A1:B2)")).toBe('"\'@SUM(A1:B2)"');
+    expect(escapeCsvCell("-2+3")).toBe('"\'-2+3"');
+    expect(escapeCsvCell("+calc")).toBe('"\'+calc"');
+    expect(escapeCsvCell("\tcmd")).toBe('"\'\tcmd"');
+  });
+
+  it("should safely export CSV when database record contains potential formula injection", async () => {
+    const now = new Date().toISOString();
+    await db.insert(schema.licenses).values({
+      id: "lic_formula_inject",
+      accountId,
+      productId,
+      policyId,
+      key: "LIC-FORM-INJC-0000-0005",
+      customerEmail: "=cmd|' /C calc'!A0@example.com",
+      source: "manual",
+      status: "active",
+      revokeReason: "@DDE('cmd';'/c calc';'__test__')",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const res = await app.request("/api/v1/admin/licenses/export", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`,
+      },
+    }, testEnv.env);
+
+    expect(res.status).toBe(200);
+    const csv = await res.text();
+    // Verify formula-injected email was sanitized with prepended single quote and wrapped in double quotes
+    expect(csv).toContain("\"'=cmd|' /C calc'!A0@example.com\"");
+    // Verify revokeReason was also sanitized
+    expect(csv).toContain("\"'@DDE('cmd';'/c calc';'__test__')\"");
   });
 });

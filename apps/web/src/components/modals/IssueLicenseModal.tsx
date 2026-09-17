@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../lib/api-client";
+import { escapeCsvCell } from "../../lib/csv";
 import { X, Key, Loader2, Sparkles, Check, Copy, Download, Layers, AlertCircle } from "lucide-react";
 
 interface IssueLicenseModalProps {
@@ -71,13 +72,13 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
   const downloadBatchCsv = (items: any[], batchId: string) => {
     const headers = ["License Key", "Product", "Policy", "Customer Email", "Status", "Expires At", "Created At"];
     const rows = items.map((it) => [
-      it.key,
-      it.productName,
-      it.policyName,
-      it.customerEmail || "",
-      it.status,
-      it.expiresAt || "Perpetual",
-      it.createdAt,
+      escapeCsvCell(it.key),
+      escapeCsvCell(it.productName),
+      escapeCsvCell(it.policyName),
+      escapeCsvCell(it.customerEmail || ""),
+      escapeCsvCell(it.status),
+      escapeCsvCell(it.expiresAt || "Perpetual"),
+      escapeCsvCell(it.createdAt),
     ]);
     const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
