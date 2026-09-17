@@ -33,7 +33,8 @@
 licenkit/
 ├── apps/
 │   ├── server/        # 核心授权与 API 引擎 (Hono + Cloudflare Workers + D1 + Drizzle ORM)
-│   └── web/           # 现代管理控制台 SPA (React 19 + Tailwind CSS v4 + Vite)
+│   ├── web/           # 现代管理控制台 SPA (React 19 + Tailwind CSS v4 + Vite)
+│   └── cli/           # 跨平台授权激活与离线验签命令行工具 (Node.js + WebCrypto Ed25519)
 ├── docs/
 │   ├── zh-CN/         # 简体中文全套设计与开发文档
 │   ├── en/            # 完整英文设计与开发文档
@@ -44,6 +45,7 @@ licenkit/
 - **Runtime / Infra**: [Cloudflare Workers](https://workers.cloudflare.com/), [Cloudflare D1](https://developers.cloudflare.com/d1/), [Cloudflare Queues](https://developers.cloudflare.com/queues/)
 - **Backend**: [Hono](https://hono.dev/), [Drizzle ORM](https://orm.drizzle.team/), WebCrypto API (Ed25519, AES-256-GCM, PBKDF2)
 - **Frontend**: [React 19](https://react.dev/), [Vite](https://vitejs.dev/), [Tailwind CSS v4](https://tailwindcss.com/), [Lucide Icons](https://lucide.dev/)
+- **CLI**: [Node.js](https://nodejs.org/), [cac](https://github.com/cacjs/cac), native WebCrypto Ed25519
 - **Package Manager**: [pnpm](https://pnpm.io/) (Workspace)
 
 ---
@@ -73,6 +75,7 @@ licenkit/
    ```bash
    pnpm dev:server   # 仅启动后端 API 引擎
    pnpm dev:web      # 仅启动前端管理面板
+   pnpm dev:cli      # 运行客户端 CLI 工具
    ```
 
 4. **类型检查与构建**：

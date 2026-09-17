@@ -30,7 +30,7 @@
 | **M07** | **支付网关入向回调与履约 (Inbound Webhooks & Fulfillment)** | Paddle、Stripe 与 Lemon Squeezy 网关入向回调、密文解密验签、精确 3D 幂等去重、策略下推查询、自动发码与绑定 Policy | **P0** | **已完成** (全量测试通过) | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
 | **M08** | **纯异步出向事件广播流 (Outbound Queues - Option A)** | 业务事件推入 Cloudflare Queues；异步推至 Resend / Zapier / 自建端点；HMAC 时间戳防重放签名与指数重试、端点管理与日志审计 | **P1** | **已完成** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
 | **M09** | **管理控制台前端 SPA (Web Dashboard UI)** | 现代化暗色控制台、Paddle/Stripe Tab 切换、6 大全功能业务 Modals、高级搜索与状态筛选、指标卡片与设备解绑 | **P1** | **已完成** | `web/src/pages/DashboardPage.tsx`<br/>`web/src/components/modals/*`<br/>`web/src/lib/api-client.ts` |
-| **M10** | **客户端生态 SDK (Client SDKs)** | 提供各平台原生开发者的接入库（macOS Swift、Windows C#、跨平台 CLI） | **P2** | **规划中** | 独立生态仓库 (`LicenKit-mac-sdk` 等) |
+| **M10** | **客户端生态 SDK (Client SDKs)** | 提供各平台原生开发者的接入库（macOS Swift、Windows C#、跨平台 CLI） | **P2** | **推进中** (CLI 工具已就绪) | `apps/cli/`<br/>独立生态仓库 (`LicenKit-mac-sdk` 等) |
 
 ---
 
@@ -153,9 +153,10 @@
   - WMI / SMBIOS 提取主板 UUID 与硬盘特征；
   - CNG / BouncyCastle Ed25519 离线验签；
   - 注册表/加密数据文件本地缓存保护。
-- [ ] **M10.3** **`LicenKit-cli`**（跨平台命令行核验工具）：
-  - Go / Rust / TypeScript 实现的单二进制可执行文件；
-  - 提供 `licenkit activate <key>`、`licenkit check` 等命令行接口。
+- [x] **M10.3** **`LicenKit-cli`**（跨平台命令行核验工具，位于 `apps/cli`）：
+  - 基于 Node.js 20+ 原生 WebCrypto Ed25519 纯算法构建，零外部 C++ 密码学编译依赖；
+  - 跨平台硬件指纹提取（macOS IOKit UUID / Windows MachineGuid / Linux machine-id）；
+  - 提供 `licenkit activate <key>`（在线绑定）、`validate`（心跳探活）、`verify-token`（纯脱网离线数学验签与硬件防盗用防篡改）、`deactivate`（解绑席位）与 `info`（打印硬件指纹与激活状态）。
 
 ---
 

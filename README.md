@@ -33,7 +33,8 @@ LicenKit is organized as a modern **Monorepo**:
 licenkit/
 ├── apps/
 │   ├── server/        # Core licensing & API engine (Hono + Cloudflare Workers + D1 + Drizzle ORM)
-│   └── web/           # Modern admin dashboard SPA (React 19 + Tailwind CSS v4 + Vite)
+│   ├── web/           # Modern admin dashboard SPA (React 19 + Tailwind CSS v4 + Vite)
+│   └── cli/           # Cross-platform licensing & offline verification CLI (Node.js + WebCrypto Ed25519)
 ├── docs/
 │   ├── en/            # Comprehensive English documentation
 │   ├── zh-CN/         # Comprehensive Simplified Chinese documentation
@@ -44,6 +45,7 @@ licenkit/
 - **Runtime / Infra**: [Cloudflare Workers](https://workers.cloudflare.com/), [Cloudflare D1](https://developers.cloudflare.com/d1/), [Cloudflare Queues](https://developers.cloudflare.com/queues/)
 - **Backend**: [Hono](https://hono.dev/), [Drizzle ORM](https://orm.drizzle.team/), WebCrypto API (Ed25519, AES-256-GCM, PBKDF2)
 - **Frontend**: [React 19](https://react.dev/), [Vite](https://vitejs.dev/), [Tailwind CSS v4](https://tailwindcss.com/), [Lucide Icons](https://lucide.dev/)
+- **CLI**: [Node.js](https://nodejs.org/), [cac](https://github.com/cacjs/cac), native WebCrypto Ed25519
 - **Package Manager**: [pnpm](https://pnpm.io/) (Workspace)
 
 ---
@@ -73,6 +75,7 @@ licenkit/
    ```bash
    pnpm dev:server   # Start backend API engine only
    pnpm dev:web      # Start web dashboard only
+   pnpm dev:cli      # Run client CLI tool
    ```
 
 4. **Type check & Build**:

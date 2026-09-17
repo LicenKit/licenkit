@@ -30,7 +30,7 @@
 | **M07** | **Inbound Webhooks & Fulfillment** | Paddle, Stripe & Lemon Squeezy webhook handlers, signature verification, 3D idempotent deduplication, automated license issuance | **P0** | **Completed** | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
 | **M08** | **Outbound Queues & Broadcast** | Pushes business events to Cloudflare Queues; delivers to Resend / Zapier / custom endpoints with HMAC signatures and exponential backoff | **P1** | **Completed** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
 | **M09** | **Web Dashboard UI** | Dark-mode high-fidelity SPA console, Paddle/Stripe tab switching, 6 full-featured business modals, advanced search & filtering | **P1** | **Completed** | `web/src/pages/DashboardPage.tsx`<br/>`web/src/components/modals/*`<br/>`web/src/lib/api-client.ts` |
-| **M10** | **Client SDKs** | Native client libraries for macOS (Swift), Windows (C#), and cross-platform CLI | **P2** | **Planned** | Independent repositories (`LicenKit-mac-sdk`, etc.) |
+| **M10** | **Client SDKs** | Native client libraries for macOS (Swift), Windows (C#), and cross-platform CLI | **P2** | **In Progress** (CLI Ready) | `apps/cli/`<br/>Independent repositories (`LicenKit-mac-sdk`, etc.) |
 
 ---
 
@@ -152,9 +152,10 @@
   - Hardware fingerprint extraction via WMI / SMBIOS;
   - CNG / BouncyCastle Ed25519 verification;
   - Encrypted local cache protection.
-- [ ] **M10.3** **`LicenKit-cli`** (Cross-platform CLI tool):
-  - Standalone binary in Go / Rust / TypeScript;
-  - Commands: `licenkit activate <key>`, `licenkit check`.
+- [x] **M10.3** **`LicenKit-cli`** (Cross-platform CLI tool in `apps/cli`):
+  - Built with native WebCrypto Ed25519 pure algorithm on Node.js 20+, zero external C++ crypto bindings;
+  - Cross-platform hardware fingerprinting (macOS IOKit UUID / Windows MachineGuid / Linux machine-id);
+  - Provides `licenkit activate <key>` (online seat binding), `validate` (heartbeat keep-alive), `verify-token` (zero-network offline mathematical verification with anti-copy protection), `deactivate` (seat release) and `info` (device fingerprint and status).
 
 ---
 
