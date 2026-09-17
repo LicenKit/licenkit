@@ -132,13 +132,17 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
   };
 
   const handleRevoke = async () => {
-    if (!window.confirm("DANGER: Are you sure you want to permanently revoke this license? This will kick all devices and mark the license as revoked.")) {
+    const reason = window.prompt(
+      "DANGER: Are you sure you want to permanently revoke this license? This will kick all devices.\n\nEnter revocation reason (optional):",
+      "Manual revocation"
+    );
+    if (reason === null) {
       return;
     }
 
     setActionLoading(true);
     try {
-      await api.licenses.revoke(licenseId);
+      await api.licenses.revoke(licenseId, reason.trim() || undefined);
       await loadDetails();
       onSuccess();
     } catch (err: any) {
@@ -251,7 +255,9 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-xs border-t border-slate-800/80">
                   <div>
                     <span className="text-slate-500 block">Customer</span>
-                    <span className="text-slate-200 font-medium truncate block">{data.customerEmail}</span>
+                    <span className="text-slate-200 font-medium truncate block">
+                      {data.customerEmail || <span className="text-slate-500 italic">Unassigned</span>}
+                    </span>
                   </div>
                   <div>
                     <span className="text-slate-500 block">Product</span>
@@ -268,6 +274,13 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
                     </span>
                   </div>
                 </div>
+
+                {data.status === "revoked" && data.revokeReason && (
+                  <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-xs">
+                    <span className="font-semibold">Revocation Reason: </span>
+                    <span className="font-mono">{data.revokeReason}</span>
+                  </div>
+                )}
 
                 {/* Expiration bar */}
                 <div className="pt-2 flex items-center justify-between text-xs border-t border-slate-800/80">

@@ -67,11 +67,19 @@ app.all("*", async (c) => {
   return c.text("LicenKit Server is running. Static assets binding not configured.", 404);
 });
 
+import { cleanExpiredUnusedLicenses } from "./routes/admin/licenses.routes";
+import { drizzle } from "drizzle-orm/d1";
+import * as schema from "./infra/db/schema";
+
 // Export Cloudflare Workers Handlers and App instance
 export { app };
 export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch<WebhookMessage>, env: Env): Promise<void> {
     await handleQueueBatch(batch, env);
+  },
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const db = drizzle(env.DB, { schema });
+    await cleanExpiredUnusedLicenses(db);
   },
 };

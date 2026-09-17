@@ -128,8 +128,10 @@ CREATE TABLE IF NOT EXISTS licenses (
     product_id TEXT NOT NULL,                  -- 所属产品 products(id)
     policy_id TEXT NOT NULL,                   -- 关联策略 policies(id)
     key TEXT UNIQUE NOT NULL COLLATE NOCASE,   -- 对外商业激活码，如 "SCR-8820-ABCD-9901" 或 GUID
-    customer_email TEXT NOT NULL COLLATE NOCASE, -- 归属买家邮箱
+    customer_email TEXT COLLATE NOCASE,        -- 归属买家邮箱 (可为 NULL，批量预制发码或无邮箱分发场景)
+    source TEXT NOT NULL DEFAULT 'manual',     -- 发码来源: 'manual' (手动/批量) | 'api' | 'paddle' | 'stripe' | 'lemonsqueezy'
     status TEXT NOT NULL DEFAULT 'active',     -- 'active' | 'suspended' | 'expired' | 'revoked'
+    revoke_reason TEXT,                        -- 吊销原因 (如 'EXPIRED_30_DAYS_UNUSED' 或管理员自定义备注)
     metadata JSON NOT NULL DEFAULT '{}',       -- 外部交易引用，如 {"stripe_customer_id":"cus_123","paddle_txn_id":"txn_456"}
     expires_at TIMESTAMP,                     -- 绝对到期时间 (买断制为 NULL)
     suspended_at TIMESTAMP,                   -- 挂起时间 (如扣费失败时暂停使用)
@@ -141,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_licenses_account_id ON licenses(account_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_product_policy ON licenses(product_id, policy_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_customer_email ON licenses(customer_email);
 CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status);
+CREATE INDEX IF NOT EXISTS idx_licenses_source_status ON licenses(account_id, source, status);
 CREATE INDEX IF NOT EXISTS idx_licenses_created_at ON licenses(created_at DESC);
 
 -- 8. 硬件设备席位绑定表 (Machines - 硬件设备席位绑定)

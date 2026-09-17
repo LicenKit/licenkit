@@ -101,8 +101,10 @@ export const licenses = sqliteTable("licenses", {
   productId: text("product_id").notNull(),
   policyId: text("policy_id").notNull(),
   key: text("key").notNull().unique(),
-  customerEmail: text("customer_email").notNull(),
+  customerEmail: text("customer_email"),
+  source: text("source").notNull().default("manual"), // 'manual' | 'api' | 'paddle' | 'stripe' | 'lemonsqueezy'
   status: text("status").notNull().default("active"), // 'active' | 'suspended' | 'expired' | 'revoked'
+  revokeReason: text("revoke_reason"),
   metadata: text("metadata").notNull().default("{}"),
   expiresAt: text("expires_at"),
   suspendedAt: text("suspended_at"),
@@ -113,6 +115,7 @@ export const licenses = sqliteTable("licenses", {
   index("idx_licenses_product_policy").on(table.productId, table.policyId),
   index("idx_licenses_customer_email").on(table.customerEmail),
   index("idx_licenses_status").on(table.status),
+  index("idx_licenses_source_status").on(table.accountId, table.source, table.status),
   index("idx_licenses_created_at").on(table.createdAt),
 ]);
 

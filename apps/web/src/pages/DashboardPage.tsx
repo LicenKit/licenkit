@@ -29,6 +29,7 @@ import {
   RefreshCw,
   CheckCircle2,
   History,
+  Download,
 } from "lucide-react";
 import { CreateProductModal } from "../components/modals/CreateProductModal";
 import { CreatePolicyModal } from "../components/modals/CreatePolicyModal";
@@ -102,6 +103,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
   const [licenseSearchQuery, setLicenseSearchQuery] = useState("");
   const [licenseProductFilter, setLicenseProductFilter] = useState("");
   const [licenseStatusFilter, setLicenseStatusFilter] = useState("all");
+  const [licenseSeatFilter, setLicenseSeatFilter] = useState("all");
+  const [isExporting, setIsExporting] = useState(false);
 
   // Copy tracking for keys inside tables/cards
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -277,6 +280,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
           query: licenseSearchQuery.trim() || undefined,
           productId: licenseProductFilter || undefined,
           status: licenseStatusFilter !== "all" ? licenseStatusFilter : undefined,
+          seatStatus: licenseSeatFilter !== "all" ? licenseSeatFilter : undefined,
         }).catch(() => ({ items: [] })),
       ]);
       setStats(statsData);
@@ -296,6 +300,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
         query: licenseSearchQuery.trim() || undefined,
         product_id: licenseProductFilter || undefined,
         status: licenseStatusFilter !== "all" ? licenseStatusFilter : undefined,
+        seatStatus: licenseSeatFilter !== "all" ? licenseSeatFilter : undefined,
       }).catch(() => ({ items: [] }));
       setLicensesList(lics.items || []);
     } catch (e) {
@@ -305,7 +310,24 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
 
   useEffect(() => {
     loadFilteredLicenses();
-  }, [licenseSearchQuery, licenseProductFilter, licenseStatusFilter]);
+  }, [licenseSearchQuery, licenseProductFilter, licenseStatusFilter, licenseSeatFilter]);
+
+  const handleExportCsv = async () => {
+    try {
+      setIsExporting(true);
+      await api.licenses.downloadExport({
+        query: licenseSearchQuery.trim() || undefined,
+        productId: licenseProductFilter || undefined,
+        status: licenseStatusFilter !== "all" ? licenseStatusFilter : undefined,
+        seatStatus: licenseSeatFilter !== "all" ? licenseSeatFilter : undefined,
+      });
+    } catch (e: any) {
+      console.error("Failed to export CSV", e);
+      alert("Failed to export CSV: " + (e.message || "Unknown error"));
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const handleCopyText = (text: string, identifier: string) => {
     navigator.clipboard.writeText(text);
@@ -835,16 +857,27 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <h3 className="text-base font-semibold text-white">Issued Licenses</h3>
                   <p className="text-xs text-slate-400">Issue, audit, suspend, and reinstate customer activation keys.</p>
                 </div>
-                {canManageLicenses && (
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setIsIssueLicenseOpen(true)}
-                    disabled={productsList.length === 0 || policiesList.length === 0}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                    onClick={handleExportCsv}
+                    disabled={isExporting}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    title="Export filtered licenses as CSV"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Issue License</span>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{isExporting ? "Exporting..." : "Export CSV"}</span>
                   </button>
-                )}
+                  {canManageLicenses && (
+                    <button
+                      onClick={() => setIsIssueLicenseOpen(true)}
+                      disabled={productsList.length === 0 || policiesList.length === 0}
+                      className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-medium text-white rounded-lg transition-colors shadow cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Issue License</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Search & Filter Bar */}
@@ -884,6 +917,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                     <option value="suspended">Suspended</option>
                     <option value="revoked">Revoked</option>
                   </select>
+                  <select
+                    value={licenseSeatFilter}
+                    onChange={(e) => setLicenseSeatFilter(e.target.value)}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="all">All Seats</option>
+                    <option value="unused">Unused (0 Seats)</option>
+                    <option value="in_use">In Use (≥1 Seat)</option>
+                  </select>
                 </div>
               </div>
 
@@ -894,7 +936,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   </div>
                   <h4 className="text-sm font-semibold text-white mb-1">No licenses found</h4>
                   <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
-                    {licenseSearchQuery || licenseProductFilter || licenseStatusFilter !== "all"
+                    {licenseSearchQuery || licenseProductFilter || licenseStatusFilter !== "all" || licenseSeatFilter !== "all"
                       ? "No licenses match your filter criteria. Try resetting the filters."
                       : "Issue a license key manually to test client activations, or configure payment webhooks to issue licenses automatically."}
                   </p>
@@ -933,13 +975,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                               >
                                 {copiedKey === lic.id ? (
                                   <Check className="w-3 h-3 text-emerald-400" />
-                                ) : (
+                               ) : (
                                   <Copy className="w-3 h-3" />
                                 )}
                               </button>
                             </div>
                           </td>
-                          <td className="py-3.5 px-4 text-slate-200">{lic.customerEmail}</td>
+                          <td className="py-3.5 px-4 text-slate-200">
+                            {lic.customerEmail ? (
+                              <span>{lic.customerEmail}</span>
+                            ) : (
+                              <span className="text-slate-500 italic">Unassigned</span>
+                            )}
+                          </td>
                           <td className="py-3.5 px-4">
                             <div className="text-slate-200 font-medium">{lic.productName}</div>
                             <div className="text-[11px] text-slate-400">{lic.policyName}</div>
@@ -949,17 +997,24 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                             <span className="text-slate-500"> / {lic.maxMachines ?? 1}</span>
                           </td>
                           <td className="py-3.5 px-4">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                                lic.status === "active"
-                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                                  : lic.status === "suspended"
-                                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                  : "bg-red-500/20 text-red-300 border border-red-500/30"
-                              }`}
-                            >
-                              {lic.status}
-                            </span>
+                            <div className="flex flex-col gap-1">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase w-fit ${
+                                  lic.status === "active"
+                                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                    : lic.status === "suspended"
+                                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                    : "bg-red-500/20 text-red-300 border border-red-500/30"
+                                }`}
+                              >
+                                {lic.status}
+                              </span>
+                              {lic.status === "revoked" && lic.revokeReason && (
+                                <span className="text-[10px] text-red-400 font-mono truncate max-w-[130px]" title={lic.revokeReason}>
+                                  {lic.revokeReason === "EXPIRED_30_DAYS_UNUSED" ? "30d Unused" : lic.revokeReason}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3.5 px-4 text-slate-400">
                             {lic.expiresAt

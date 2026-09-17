@@ -89,7 +89,7 @@
 - [x] **M05.5** Advanced pagination and search filters in admin dashboard;
 - [x] **M05.6** One-click key rotation (`rotate-key`) with atomic machine seat clearing;
 - [x] **M05.7** Hardware seat inspection and manual unbinding (`DELETE /api/v1/admin/licenses/:id/machines/:machineId`);
-- [ ] **M05.8** Batch license issuance and CSV export.
+- [x] **M05.8** Batch license issuance (max 10/batch, 100 unused quota cap with truncation, 30-day auto-revoke) and CSV export.
 
 ---
 

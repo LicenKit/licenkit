@@ -39,6 +39,9 @@
     "ENVIRONMENT": "development",
     "APP_VERSION": "1.0.0"
   },
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  },
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",

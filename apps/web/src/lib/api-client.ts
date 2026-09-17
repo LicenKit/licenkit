@@ -117,17 +117,51 @@ export const api = {
       const email = params.customerEmail || params.customer_email;
       if (email) sp.set("customerEmail", email);
       if (params.status && params.status !== "all") sp.set("status", params.status);
+      if (params.seatStatus && params.seatStatus !== "all") sp.set("seatStatus", params.seatStatus);
+      if (params.source && params.source !== "all") sp.set("source", params.source);
       if (params.query) sp.set("query", params.query);
       const qs = sp.toString();
       return request<{ items: any[]; pagination: any }>(`/admin/licenses${qs ? `?${qs}` : ""}`);
     },
     issue: (body: any) => request<any>("/admin/licenses", { method: "POST", body: JSON.stringify(body) }),
+    batchIssue: (body: any) => request<any>("/admin/licenses/batch", { method: "POST", body: JSON.stringify(body) }),
     get: (id: string) => request<any>(`/admin/licenses/${id}`),
     update: (id: string, body: any) => request<any>(`/admin/licenses/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     rotateKey: (id: string, body: any = {}) => request<any>(`/admin/licenses/${id}/rotate-key`, { method: "POST", body: JSON.stringify(body) }),
-    revoke: (id: string) => request<any>(`/admin/licenses/${id}/revoke`, { method: "POST" }),
+    revoke: (id: string, reason?: string) =>
+      request<any>(`/admin/licenses/${id}/revoke`, {
+        method: "POST",
+        body: JSON.stringify({ reason: reason || undefined }),
+      }),
     suspend: (id: string) => request<any>(`/admin/licenses/${id}/suspend`, { method: "POST" }),
     reinstate: (id: string) => request<any>(`/admin/licenses/${id}/reinstate`, { method: "POST" }),
+    cleanExpiredUnused: () => request<any>("/admin/licenses/clean-expired-unused", { method: "POST" }),
+    downloadExport: async (params: any = {}) => {
+      const sp = new URLSearchParams();
+      if (params.productId) sp.set("productId", params.productId);
+      if (params.policyId) sp.set("policyId", params.policyId);
+      if (params.status && params.status !== "all") sp.set("status", params.status);
+      if (params.seatStatus && params.seatStatus !== "all") sp.set("seatStatus", params.seatStatus);
+      if (params.source && params.source !== "all") sp.set("source", params.source);
+      if (params.query) sp.set("query", params.query);
+      const qs = sp.toString();
+      const token = localStorage.getItem("licenkit_session_token");
+      const res = await fetch(`/api/v1/admin/licenses/export${qs ? `?${qs}` : ""}`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) throw new Error("Failed to export CSV");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `licenses-export-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    },
     unbindMachine: (licenseId: string, machineId: string) =>
       request<any>(`/admin/licenses/${licenseId}/machines/${machineId}`, { method: "DELETE" }),
   },
