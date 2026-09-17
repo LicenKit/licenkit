@@ -12,8 +12,8 @@
 > [!IMPORTANT]
 > **当前状态澄清**：
 > - **Phase 0（Monorepo 脚手架与全栈工程链路）**：**100% 完成**（目录规范、Drizzle ORM 11 表建模、构建流水线与双端联动）。
-> - **Phase 1（核心授权管理闭环与控制台高保真 UI）**：**大部完成**。已实现产品、策略、许可证全生命周期管理闭环（含高级分页过滤、发码、吊销/挂起/解挂、一键轮换 Key、解绑设备）、WebCrypto Ed25519 原生密钥生成/导入挑战验签/AES-256-GCM 信封加密、出向队列消费与 HMAC 防篡改签名，以及前端 6 个高保真业务模态框（Modals）。
-> - **当前焦点（Phase 1 收尾项）**：**M06.2 客户端离线 Ed25519 结构化 Token 组装与真实签发**，随后进入 Phase 2（Paddle/Stripe 真实入向验签与自动发码履约）。
+> - **Phase 1（核心授权管理闭环与控制台高保真 UI）**：**100% 完成**。已实现产品、策略、许可证全生命周期管理闭环（含高级分页过滤、发码、吊销/挂起/解挂、一键轮换 Key、解绑设备）、WebCrypto Ed25519 原生密钥生成/导入挑战验签/AES-256-GCM 信封加密、M06.6 离线 Ed25519 结构化 Token 组装与签发（端到端离线数学验签测通），以及前端 6 个高保真业务模态框（Modals）。
+> - **当前焦点（Phase 2 推进项）**：**M07 支付网关入向回调与自动履约**（Paddle/Stripe 签名校验、3D 幂等与策略查询强制下推已完成，待公网真实联调与 Lemon Squeezy 履约补齐）与 **M08 出向广播防重放签名流**。
 
 ---
 
@@ -21,14 +21,14 @@
 
 | 模块编号 | 模块名称 | 核心职责 | 优先级 | 当前状态 | 对应代码与目录 |
 | :--- | :--- | :--- | :---: | :---: | :--- |
-| **M01** | **系统引导与动态域名 (System & Setup)** | 首次部署 Setup 向导、`system_settings` 单例配置、单域名零 CORS 自动解析、参数热更新 | **P0** | **已完成** | `server/src/routes/system.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts`<br/>`web/src/pages/SetupPage.tsx` |
-| **M02** | **身份认证与权限管理 (Auth & RBAC)** | 自然人账号、WebCrypto PBKDF2 密码散列、Session JWT 签发与 Bearer 中间件、多角色管控 | **P0** | **核心已完成** (待做多成员邀请) | `server/src/routes/auth.routes.ts`<br/>`server/src/middleware/auth.ts`<br/>`web/src/pages/LoginPage.tsx` |
+| **M01** | **系统引导与动态域名 (System & Setup)** | 首次部署 Setup 向导、`system_settings` 单例配置、单域名零 CORS 自动解析、参数热更新、环境安全自检 | **P0** | **已完成** | `server/src/routes/system.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts`<br/>`web/src/pages/SetupPage.tsx` |
+| **M02** | **身份认证与权限管理 (Auth & RBAC)** | 自然人账号、WebCrypto PBKDF2 密码散列、Session JWT 签发与 Bearer 中间件、多角色管控 | **P0** | **核心已完成** (管理接口就绪，待前端Team面板联调) | `server/src/routes/auth.routes.ts`<br/>`server/src/routes/admin/users.routes.ts`<br/>`web/src/pages/LoginPage.tsx` |
 | **M03** | **产品与离线密码学引擎 (Products & Crypto)** | 软件产品管理、WebCrypto 原生 Ed25519 密钥对生成、AES-256-GCM 私钥信封加密持久化、私钥导入校验与一次性下载 | **P0** | **已完成** | `server/src/infra/crypto/`<br/>`server/src/routes/admin/products.routes.ts`<br/>`web/src/components/modals/CreateProductModal.tsx` |
 | **M04** | **授权策略与席位规则引擎 (Policies Engine)** | 买断/订阅有效期计算、设备席位上限 (`maxMachines`)、离线验签宽限期、`ed25519` 签名 vs `guid` 模式、特性标签 | **P0** | **已完成** | `server/src/routes/admin/policies.routes.ts`<br/>`web/src/components/modals/CreatePolicyModal.tsx`<br/>`web/src/components/modals/EditPolicyModal.tsx` |
 | **M05** | **许可证全生命周期管理 (Licenses Lifecycle)** | 格式化激活码生成 (`LIC-XXXX-XXXX-XXXX-XXXX`)、手动发码、挂起/解挂/吊销、到期判定、一键轮换 Key、席位查看与解绑 | **P0** | **已完成** | `server/src/routes/admin/licenses.routes.ts`<br/>`web/src/components/modals/IssueLicenseModal.tsx`<br/>`web/src/components/modals/LicenseDetailModal.tsx` |
 | **M06** | **客户端激活与试用防刷 (Client Activation & Anti-Abuse)** | 硬件指纹采集绑定、原子席位抢占、在线心跳、Ed25519 签名 Token 签发、单表匿名防刷试用 (`product_trials`) | **P0** | **已完成** | `server/src/routes/client.routes.ts`<br/>`server/src/infra/crypto/index.ts` |
-| **M07** | **支付网关入向回调与履约 (Inbound Webhooks & Fulfillment)** | Paddle 与 Stripe 网关入向回调、密文解密验签、精确幂等去重、自动发码与绑定 Policy | **P0** | **已完成** | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
-| **M08** | **纯异步出向事件广播流 (Outbound Queues - Option A)** | 业务事件推入 Cloudflare Queues；异步推至 Resend / Zapier / 自建端点；HMAC 签名防篡改与指数重试、端点管理与日志审计 | **P1** | **已完成** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
+| **M07** | **支付网关入向回调与履约 (Inbound Webhooks & Fulfillment)** | Paddle 与 Stripe 网关入向回调、密文解密验签、精确幂等去重、策略下推查询、自动发码与绑定 Policy | **P0** | **核心已完成** (待公网真实联调) | `server/src/routes/webhook.routes.ts`<br/>`server/src/routes/admin/settings.routes.ts` |
+| **M08** | **纯异步出向事件广播流 (Outbound Queues - Option A)** | 业务事件推入 Cloudflare Queues；异步推至 Resend / Zapier / 自建端点；HMAC 时间戳防重放签名与指数重试、端点管理与日志审计 | **P1** | **已完成** | `server/src/queue/consumer.ts`<br/>`server/src/routes/admin/webhooks.routes.ts` |
 | **M09** | **管理控制台前端 SPA (Web Dashboard UI)** | 现代化暗色控制台、Paddle/Stripe Tab 切换、6 大全功能业务 Modals、高级搜索与状态筛选、指标卡片与设备解绑 | **P1** | **已完成** | `web/src/pages/DashboardPage.tsx`<br/>`web/src/components/modals/*`<br/>`web/src/lib/api-client.ts` |
 | **M10** | **客户端生态 SDK (Client SDKs)** | 提供各平台原生开发者的接入库（macOS Swift、Windows C#、跨平台 CLI） | **P2** | **规划中** | 独立生态仓库 (`LicenKit-mac-sdk` 等) |
 
@@ -42,8 +42,7 @@
 - [x] **M01.3** `POST /api/v1/system/setup` 原子初始化批处理（同时创建配置、租户与首位 Owner）；
 - [x] **M01.4** `setupGuard` 并发加锁防刷机制（已初始化实例严格返回 403）；
 - [x] **M01.5** 动态基准域名解析：`api_base_url` 缺省为空时自动继承 `app_url` 并挂载在 `/api/v1/*`（单域名部署零 CORS）；
-- [x] **M01.6** 实例参数热更新：支持在控制台动态修改 `instance_name`、`app_url` 与 `api_base_url`（`PUT /api/v1/admin/settings`）；
-- [ ] **M01.7** 域名健康检查工具：检测前后端 URL 连通性并在控制台给出配置建议。
+- [x] **M01.7** 域名与环境安全健康检查工具：检测前后端 URL 连通性、主密钥与 JWT Secret 配置状态，并在控制台给出安全配置指引（`GET /api/v1/admin/settings/env-check`）。
 
 ---
 
@@ -173,9 +172,9 @@ gantt
     管理端 CRUD 与 camelCase 规范化 :done, p1_1, 2026-09-16, 2d
     控制台 6 大业务 Modals 交互落地 :done, p1_2, 2026-09-16, 2d
     WebCrypto Ed25519 密钥管理闭环  :done, p1_3, 2026-09-17, 1d
-    Ed25519 离线 Token 真实组装签发 :active, p1_4, 2026-09-17, 2d
+    Ed25519 离线 Token 真实组装签发 :done, p1_4, 2026-09-17, 2d
     section 阶段二: 商业网关与出向事件
-    Paddle/Stripe 支付回调实测   :p2_1, 2026-09-20, 3d
+    Paddle/Stripe 支付回调实测   :active, p2_1, 2026-09-20, 3d
     出向 Webhook 与 Resend 发信   :p2_2, 2026-09-23, 3d
     全流程端到端自动化测试       :p2_3, 2026-09-26, 3d
     section 阶段三: 客户端生态 SDK

@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/d1";
 import * as schema from "../infra/db/schema";
 import { eq } from "drizzle-orm";
 import type { Env } from "../types";
+import { computeOutboundWebhookSignature } from "../infra/crypto";
 
 export interface WebhookMessage {
   eventId: string;
@@ -20,26 +21,15 @@ export async function handleQueueBatch(batch: MessageBatch<WebhookMessage>, env:
     const now = new Date().toISOString();
 
     try {
-      // Calculate HMAC signature
-      const encoder = new TextEncoder();
-      const key = await crypto.subtle.importKey(
-        "raw",
-        encoder.encode(secret),
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["sign"]
-      );
-      const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-      const signatureHex = Array.from(new Uint8Array(signatureBuffer))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
+      // Calculate HMAC signature with anti-replay timestamp header
+      const { signatureHeader } = await computeOutboundWebhookSignature(payload, secret);
 
       // Dispatch HTTP POST to developer's endpoint
       const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-LicenKit-Signature": signatureHex,
+          "X-LicenKit-Signature": signatureHeader,
           "User-Agent": "LicenKit-Webhook-Dispatcher/1.0",
         },
         body: payload,

@@ -5,6 +5,7 @@ import { webhookEndpoints, webhookEvents } from "../db/schema";
 
 export interface OutboundEventPayload {
   id: string;
+  accountId: string;
   event: string;
   createdAt: string;
   data: Record<string, any>;
@@ -44,6 +45,7 @@ export async function broadcastOutboundEvent(
 
     const eventPayload: OutboundEventPayload = {
       id: eventId,
+      accountId,
       event: eventType,
       createdAt: now,
       data,

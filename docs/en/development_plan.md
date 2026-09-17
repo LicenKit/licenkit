@@ -43,7 +43,7 @@
 - [x] **M01.4** `setupGuard` concurrency locking (prevents re-initialization with 403);
 - [x] **M01.5** Dynamic base domain resolution: defaults to `app_url` with zero CORS when `api_base_url` is omitted;
 - [x] **M01.6** Dynamic instance parameter updates (`PUT /api/v1/admin/settings`);
-- [ ] **M01.7** Domain connectivity diagnostics tool in the admin console.
+- [x] **M01.7** Domain and environment security health diagnostics tool (`GET /api/v1/admin/settings/env-check`).
 
 ---
 

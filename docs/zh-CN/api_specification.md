@@ -329,6 +329,25 @@
 
 ---
 
+### 5. 获取产品活跃 Ed25519 验签公钥
+- **请求路径**：`GET /api/v1/client/products/:id/pubkey?accountId=<account_id>`
+- **功能描述**：客户端软件在初始化或离线验签启动前调用。免管理员鉴权，公开返回该产品当前处于活跃状态（`isActive = true`）的 Ed25519 验签公钥（Base64 编码的 32 字节原始公钥），客户端可将其缓存在本地 Keychain 或本地加密存储中，后续实现 100% 断网离线验签。
+- **Query 参数**：`accountId`（必填，所属租户 ID）
+- **成功响应 (Response 200)**：
+  ```json
+  {
+    "success": true,
+    "data": {
+      "productId": "prd_01j8x9n3a1b2c3d4e5f6g7h8j9",
+      "kid": "kid_01j8x9n4k1l2m3n4p5q6r7s8t9",
+      "algorithm": "Ed25519",
+      "publicKey": "BGamrP3LR8c3FJnlZr0re67VUUcJWXpe0Teg3Ly5Wxw="
+    }
+  }
+  ```
+
+---
+
 ## 六、 租户管理后台接口 (Tenant Admin API - `/api/v1/admin/*`)
 
 > **鉴权头**：`Authorization: Bearer <session_token>`（管理员通过 `/api/v1/auth/login` 获取的 JWT 凭证，所有操作自动绑定当前上下文的 `accountId`）  
@@ -374,8 +393,45 @@
       "payment_configs": {
         "paddle": {
           "enabled": true,
-          "webhook_secret": "<your_paddle_webhook_secret>"
-        }
+- **系统环境与密钥安全健康检查**：`GET /api/v1/admin/settings/env-check`
+  - **功能描述**：用于控制台设置面板环境自检或自动化监控脚本。检测 Cloudflare Workers 绑定的各项基础设施（D1 `DB`、KV `KEYS_KV`、Queues `EVENT_QUEUE`）以及 Secrets（`STORAGE_ENCRYPTION_KEY`、`JWT_SECRET`）的配置强度与状态，返回各资源的健康标识与修复建议。
+  - **成功响应 (Response 200)**：
+    ```json
+    {
+      "success": true,
+      "data": {
+        "environment": "development",
+        "version": "1.0.0",
+        "all_ready": true,
+        "items": [
+          {
+            "key": "STORAGE_ENCRYPTION_KEY",
+            "label": "Storage Master Key (KEK)",
+            "category": "secret",
+            "required": true,
+            "status": "ready",
+            "description": "AES-256-GCM master key protecting payment secrets & Ed25519 private keys in database.",
+            "fixHint": "Configure in apps/server/.dev.vars (local) or run 'npx wrangler secret put STORAGE_ENCRYPTION_KEY' (production)."
+          },
+          {
+            "key": "JWT_SECRET",
+            "label": "JWT Authentication Secret",
+            "category": "secret",
+            "required": true,
+            "status": "ready",
+            "description": "HMAC-SHA256 secret for signing and verifying administrator session tokens.",
+            "fixHint": "Configure in apps/server/.dev.vars (local) or run 'npx wrangler secret put JWT_SECRET' (production)."
+          },
+          {
+            "key": "DB",
+            "label": "Cloudflare D1 Database",
+            "category": "binding",
+            "required": true,
+            "status": "ready",
+            "description": "Relational SQLite database for all platform state.",
+            "fixHint": "Ensure [[d1_databases]] binding is active in wrangler.jsonc."
+          }
+        ]
       }
     }
     ```
@@ -659,6 +715,22 @@
   - **成功响应 (Response 201)**：返回端点 ID 与随机生成的出向共享秘钥 `secret`。
 - **查看出向端点列表**：`GET /api/v1/admin/webhooks`
 - **删除出向端点**：`DELETE /api/v1/admin/webhooks/:id`
+- **测试发送出向 Webhook 验证消息**：`POST /api/v1/admin/webhooks/:id/test`
+  - **功能描述**：在控制台添加端点后，点击“Test”向目标 URL 实时发送一条带有真实防重放签名的 `test.ping` 探针报文，并直接返回目标服务的 HTTP 状态码、响应体与耗时（毫秒），以便排查网络与签名逻辑。
+  - **成功响应 (Response 200)**：
+    ```json
+    {
+      "success": true,
+      "data": {
+        "endpointId": "whe_01j8x9n3...",
+        "url": "https://api.mysite.com/licenkit-webhook",
+        "eventId": "evt_test_01j8...",
+        "statusCode": 200,
+        "durationMs": 142,
+        "responseBody": "{\"ok\":true}"
+      }
+    }
+    ```
 - **查看双向 Webhook 流水审计日志**：`GET /api/v1/admin/webhooks/events?limit=50`
   - **功能描述**：查询入向支付网关与出向广播的实时派发流水，包含 Payload 报文与失败错误原因。
 
@@ -708,8 +780,9 @@ Host: api.mysite.com
 Content-Type: application/json
 X-LicenKit-Signature: t=1757923200,v1=9f8a2b3c4d5e6f7a8b9c...
 ```
-- `t`: Unix 毫秒时间戳；
-- `v1`: `HMAC-SHA256("${t}.${raw_body}", endpoint.secret)`。
+- `t`: 当前派发时刻的 Unix 秒级时间戳（例如 `1757923200`）；
+- `v1`: `HMAC-SHA256("${t}.${raw_body}", endpoint.secret)` 64 位小写十六进制签名；
+- **防重放保护**：接收方应校验时间偏差 `Math.abs(Date.now() / 1000 - t) <= 300`（默认 5 分钟宽限窗口），超出容差范围应拒绝处理以杜绝重放攻击。
 
 ### 2. 标准报文结构
 ```json

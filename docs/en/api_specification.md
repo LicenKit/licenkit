@@ -296,6 +296,25 @@
 
 ---
 
+### 5. Get Product Active Public Key
+- **Path**: `GET /api/v1/client/products/:id/pubkey?accountId=<account_id>`
+- **Description**: Public endpoint for client applications and SDKs to fetch and cache the active Ed25519 verification public key (raw 32-byte Base64) for offline mathematical verification.
+- **Query Parameter**: `accountId` (required)
+- **Response 200**:
+  ```json
+  {
+    "success": true,
+    "data": {
+      "productId": "prd_01j8x9n3a1b2c3d4e5f6g7h8j9",
+      "kid": "kid_01j8x9n4k1l2m3n4p5q6r7s8t9",
+      "algorithm": "Ed25519",
+      "publicKey": "BGamrP3LR8c3FJnlZr0re67VUUcJWXpe0Teg3Ly5Wxw="
+    }
+  }
+  ```
+
+---
+
 ## 6. Tenant Admin API (`/api/v1/admin/*`)
 
 > **Auth Header**: `Authorization: Bearer <session_token>`  
@@ -316,6 +335,29 @@
     }
   }
   ```
+- **Environment & Secrets Health Check**: `GET /api/v1/admin/settings/env-check`
+  - Returns infrastructure binding readiness (D1, KV, Queues) and runtime master secret configuration status (`STORAGE_ENCRYPTION_KEY`, `JWT_SECRET`).
+  - **Response 200**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "environment": "development",
+        "version": "1.0.0",
+        "all_ready": true,
+        "items": [
+          {
+            "key": "STORAGE_ENCRYPTION_KEY",
+            "label": "Storage Master Key (KEK)",
+            "category": "secret",
+            "required": true,
+            "status": "ready",
+            "description": "AES-256-GCM master key protecting payment secrets & Ed25519 private keys in database."
+          }
+        ]
+      }
+    }
+    ```
 
 ---
 
@@ -414,6 +456,8 @@
   ```
 - **List Webhook Endpoints**: `GET /api/v1/admin/webhooks`
 - **Delete Webhook Endpoint**: `DELETE /api/v1/admin/webhooks/:id`
+- **Test Webhook Dispatch**: `POST /api/v1/admin/webhooks/:id/test`
+  - Sends a live `test.ping` payload with standard anti-replay signature to the target URL and returns status code, response body, and roundtrip duration.
 - **Query Webhook Audit Log**: `GET /api/v1/admin/webhooks/events?limit=50`
 
 ---
@@ -445,8 +489,9 @@ Host: api.mysite.com
 Content-Type: application/json
 X-LicenKit-Signature: t=1757923200,v1=9f8a2b3c4d5e6f7a8b9c...
 ```
-- `t`: Unix millisecond timestamp;
-- `v1`: `HMAC-SHA256("${t}.${raw_body}", endpoint.secret)`.
+- `t`: Current dispatch Unix timestamp in seconds (e.g. `1757923200`);
+- `v1`: `HMAC-SHA256("${t}.${raw_body}", endpoint.secret)` 64-char lowercase hex signature;
+- **Anti-Replay Protection**: Recipients should verify timestamp drift `Math.abs(Date.now() / 1000 - t) <= 300` (5 minutes tolerance) to prevent replay attacks.
 
 ### 2. Payload Structure
 ```json

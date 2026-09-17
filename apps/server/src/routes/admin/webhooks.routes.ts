@@ -5,7 +5,7 @@ import { eq, and, desc } from "drizzle-orm";
 import type { AppContext } from "../../types";
 import { getTenantDB } from "../../infra/db";
 import { webhookEndpoints, webhookEvents, products } from "../../infra/db/schema";
-import { bufferToHex, computeHmacSha256 } from "../../infra/crypto";
+import { bufferToHex, computeHmacSha256, computeOutboundWebhookSignature } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, AppError } from "../../middleware/error";
 
@@ -184,7 +184,7 @@ adminWebhooksRouter.post("/:id/test", requireRole(["owner", "admin"]), async (c)
     },
   });
 
-  const signatureHex = await computeHmacSha256(testPayload, endpoint.secret);
+  const { signatureHeader } = await computeOutboundWebhookSignature(testPayload, endpoint.secret);
   const startTime = Date.now();
 
   try {
@@ -195,7 +195,7 @@ adminWebhooksRouter.post("/:id/test", requireRole(["owner", "admin"]), async (c)
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-LicenKit-Signature": signatureHex,
+        "X-LicenKit-Signature": signatureHeader,
         "User-Agent": "LicenKit-Webhook-Dispatcher/1.0",
       },
       body: testPayload,

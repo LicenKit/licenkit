@@ -223,38 +223,56 @@ async function handlePaddleFulfillment(
     const items = data.items || data.details?.line_items || [];
     const priceIds: string[] = items.map((i: any) => i.price?.id || i.price_id).filter(Boolean);
 
-    // Fetch tenant policies
-    const allPolicies = await db
-      .select()
-      .from(policies)
-      .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-      .all();
-
     let matchedPolicy: typeof policies.$inferSelect | null = null;
 
-    // 1. Match by custom_data.policy_id
+    // 1. Pushdown query: Match by custom_data.policy_id
     if (customData.policy_id) {
-      matchedPolicy = allPolicies.find((p: any) => p.id === customData.policy_id) || null;
+      matchedPolicy = await db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.accountId, accountId),
+            eq(policies.id, customData.policy_id),
+            eq(policies.isActive, true)
+          )
+        )
+        .get();
     }
 
-    // 2. Match by paddle_price_id in metadata
+    // 2. Pushdown query: Match by paddle_price_id in metadata using SQLite json_extract
     if (!matchedPolicy && priceIds.length > 0) {
-      for (const p of allPolicies) {
-        let meta: Record<string, any> = {};
-        try {
-          meta = typeof p.metadata === "string" ? JSON.parse(p.metadata || "{}") : p.metadata || {};
-        } catch {}
-
-        if (meta.paddle_price_id && priceIds.includes(meta.paddle_price_id)) {
-          matchedPolicy = p;
-          break;
-        }
-      }
+      matchedPolicy = await db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.accountId, accountId),
+            eq(policies.isActive, true),
+            sql`json_extract(${policies.metadata}, '$.paddle_price_id') IN (${sql.join(
+              priceIds.map((id) => sql`${id}`),
+              sql`, `
+            )})`
+          )
+        )
+        .get();
     }
 
-    // 3. Fallback: single active policy
-    if (!matchedPolicy && allPolicies.length === 1) {
-      matchedPolicy = allPolicies[0];
+    // 3. Fallback: single active policy (guarded by pushdown count)
+    if (!matchedPolicy) {
+      const activeCountResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(policies)
+        .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+        .get();
+
+      if (activeCountResult?.count === 1) {
+        matchedPolicy = await db
+          .select()
+          .from(policies)
+          .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+          .get();
+      }
     }
 
     if (!matchedPolicy) {
@@ -409,39 +427,54 @@ async function handleStripeFulfillment(
     const subscriptionId = session.subscription || null;
     const customerId = session.customer || null;
 
-    const allPolicies = await db
-      .select()
-      .from(policies)
-      .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-      .all();
-
     let matchedPolicy: typeof policies.$inferSelect | null = null;
 
-    // 1. Match by metadata.policy_id or client_reference_id
-    if (metadata.policy_id) {
-      matchedPolicy = allPolicies.find((p: any) => p.id === metadata.policy_id) || null;
-    } else if (session.client_reference_id) {
-      matchedPolicy = allPolicies.find((p: any) => p.id === session.client_reference_id) || null;
+    // 1. Pushdown query: Match by metadata.policy_id or client_reference_id
+    const targetPolicyId = metadata.policy_id || session.client_reference_id;
+    if (targetPolicyId) {
+      matchedPolicy = await db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.accountId, accountId),
+            eq(policies.id, targetPolicyId),
+            eq(policies.isActive, true)
+          )
+        )
+        .get();
     }
 
-    // 2. Match by metadata.stripe_price_id
+    // 2. Pushdown query: Match by metadata.stripe_price_id using SQLite json_extract
     if (!matchedPolicy && metadata.stripe_price_id) {
-      for (const p of allPolicies) {
-        let meta: Record<string, any> = {};
-        try {
-          meta = typeof p.metadata === "string" ? JSON.parse(p.metadata || "{}") : p.metadata || {};
-        } catch {}
-
-        if (meta.stripe_price_id === metadata.stripe_price_id) {
-          matchedPolicy = p;
-          break;
-        }
-      }
+      matchedPolicy = await db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.accountId, accountId),
+            eq(policies.isActive, true),
+            sql`(json_extract(${policies.metadata}, '$.stripe_price_id') = ${metadata.stripe_price_id} OR json_extract(${policies.metadata}, '$.stripePriceId') = ${metadata.stripe_price_id})`
+          )
+        )
+        .get();
     }
 
-    // 3. Fallback: single active policy
-    if (!matchedPolicy && allPolicies.length === 1) {
-      matchedPolicy = allPolicies[0];
+    // 3. Fallback: single active policy (guarded by pushdown count)
+    if (!matchedPolicy) {
+      const activeCountResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(policies)
+        .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+        .get();
+
+      if (activeCountResult?.count === 1) {
+        matchedPolicy = await db
+          .select()
+          .from(policies)
+          .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
+          .get();
+      }
     }
 
     if (!matchedPolicy) {

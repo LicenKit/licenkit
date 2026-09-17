@@ -10,6 +10,8 @@ import {
   verifyPaddleSignature,
   verifyStripeSignature,
   verifyLemonSqueezySignature,
+  computeOutboundWebhookSignature,
+  verifyOutboundWebhookSignature,
   generateLicenseKey,
 } from "../apps/server/src/infra/crypto/index.ts";
 
@@ -101,8 +103,8 @@ async function runTests() {
   const customKey = generateLicenseKey("PRO");
   assert(customKey.startsWith("PRO-"), "Custom prefix supported for key generation");
 
-  // --- 5. Test Outbound Webhook Signature (X-LicenKit-Signature) ---
-  console.log("\n--- 5. Testing Outbound Event Queue Dispatch Signature ---");
+  // --- 5. Test Outbound Webhook Signature (X-LicenKit-Signature with Anti-Replay) ---
+  console.log("\n--- 5. Testing Outbound Event Queue Dispatch Signature (Anti-Replay) ---");
   const outboundSecret = "whsec_0123456789abcdef0123456789abcdef";
   const outboundPayload = JSON.stringify({
     id: "evt_outbound_112233",
@@ -115,14 +117,41 @@ async function runTests() {
     },
   });
 
-  const outboundSignature = await computeHmacSha256(outboundPayload, outboundSecret);
-  assert(outboundSignature.length === 64, "Outbound HMAC-SHA256 signature is 64-char hex string");
+  const { signatureHeader, timestamp, signatureHex } = await computeOutboundWebhookSignature(
+    outboundPayload,
+    outboundSecret
+  );
+  assert(signatureHex.length === 64, "Outbound HMAC-SHA256 signature is 64-char hex string");
+  assert(signatureHeader.startsWith(`t=${timestamp},v1=`), "Signature header matches t=...,v1=... standard");
 
-  const isOutboundVerified = await verifyHmacSha256(outboundPayload, outboundSecret, outboundSignature);
+  const isOutboundVerified = await verifyOutboundWebhookSignature(
+    outboundPayload,
+    signatureHeader,
+    outboundSecret
+  );
   assert(isOutboundVerified === true, "Outbound signature verification succeeds with recipient secret");
 
-  const isTamperedOutboundVerified = await verifyHmacSha256(outboundPayload + "tamper", outboundSecret, outboundSignature);
+  const isTamperedOutboundVerified = await verifyOutboundWebhookSignature(
+    outboundPayload + "tamper",
+    signatureHeader,
+    outboundSecret
+  );
   assert(isTamperedOutboundVerified === false, "Tampered outbound webhook payload fails verification");
+
+  // Anti-replay test for outbound signature (> 300s)
+  const expiredOutboundTs = timestamp - 350;
+  const expiredOutboundSig = await computeOutboundWebhookSignature(
+    outboundPayload,
+    outboundSecret,
+    expiredOutboundTs
+  );
+  const isExpiredOutboundRejected = await verifyOutboundWebhookSignature(
+    outboundPayload,
+    expiredOutboundSig.signatureHeader,
+    outboundSecret,
+    300
+  );
+  assert(isExpiredOutboundRejected === false, "Expired outbound signature (> 300s) correctly rejected for anti-replay");
 
   console.log("\n=======================================================");
   console.log("🎉 ALL PHASE 2 WEBHOOK & FULFILLMENT TESTS PASSED 100%");

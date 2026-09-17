@@ -415,6 +415,36 @@ export async function verifyLemonSqueezySignature(
 }
 
 /**
+ * Computes standard outbound webhook signature header.
+ * Uses Stripe-style anti-replay format: `t=${timestamp},v1=${signatureHex}`
+ * Signature is computed over `${timestamp}.${payload}` using endpoint secret.
+ */
+export async function computeOutboundWebhookSignature(
+  payload: string,
+  secretKey: string,
+  timestamp?: number
+): Promise<{ signatureHeader: string; timestamp: number; signatureHex: string }> {
+  const ts = timestamp ?? Math.floor(Date.now() / 1000);
+  const dataToSign = `${ts}.${payload}`;
+  const signatureHex = await computeHmacSha256(dataToSign, secretKey);
+  const signatureHeader = `t=${ts},v1=${signatureHex}`;
+  return { signatureHeader, timestamp: ts, signatureHex };
+}
+
+/**
+ * Verifies outbound webhook signature header (`t=${timestamp},v1=${signatureHex}`).
+ * Validates timestamp drift to prevent replay attacks.
+ */
+export async function verifyOutboundWebhookSignature(
+  payload: string,
+  signatureHeader: string | null | undefined,
+  secretKey: string,
+  toleranceSeconds: number = 300
+): Promise<boolean> {
+  return await verifyStripeSignature(payload, signatureHeader, secretKey, toleranceSeconds);
+}
+
+/**
  * Standard formatted license key generator: `LIC-XXXX-XXXX-XXXX-XXXX`
  * Uses Crockford base32 alphabet (no easily confused 0, O, 1, I)
  * and WebCrypto cryptographically secure random entropy.
