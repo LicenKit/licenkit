@@ -7,9 +7,43 @@ import { getTenantDB } from "../../infra/db";
 import { webhookEndpoints, webhookEvents, products } from "../../infra/db/schema";
 import { bufferToHex, computeHmacSha256 } from "../../infra/crypto";
 import { requireRole } from "../../middleware/auth";
-import { NotFoundError } from "../../middleware/error";
+import { NotFoundError, AppError } from "../../middleware/error";
 
 export const adminWebhooksRouter = new Hono<AppContext>();
+
+export function validateWebhookUrl(urlString: string, isProduction: boolean): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    throw new AppError("INVALID_URL", "Invalid webhook endpoint URL", 400);
+  }
+
+  if (isProduction && parsed.protocol !== "https:") {
+    throw new AppError("INSECURE_PROTOCOL", "In production, webhook URLs must use HTTPS", 400);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new AppError("INVALID_PROTOCOL", "Webhook URL protocol must be HTTP or HTTPS", 400);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  const isPrivateHost =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "::1" ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    /^10\./.test(hostname) ||
+    /^192\.168\./.test(hostname) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname) ||
+    hostname === "169.254.169.254";
+
+  if (isProduction && isPrivateHost) {
+    throw new AppError("SSRF_FORBIDDEN", "Webhook delivery to private, local, or loopback networks is blocked in production", 400);
+  }
+}
 
 // GET /api/v1/admin/webhooks
 adminWebhooksRouter.get("/", async (c) => {
@@ -64,6 +98,9 @@ const CreateEndpointSchema = z.object({
 adminWebhooksRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
   const body = await c.req.json();
   const input = CreateEndpointSchema.parse(body);
+
+  const isProduction = c.env.ENVIRONMENT === "production";
+  validateWebhookUrl(input.url, isProduction);
 
   const db = getTenantDB(c);
   const accountId = c.get("accountId")!;
@@ -131,6 +168,9 @@ adminWebhooksRouter.post("/:id/test", requireRole(["owner", "admin"]), async (c)
   if (!endpoint) {
     throw new NotFoundError("Webhook endpoint not found");
   }
+
+  const isProduction = c.env.ENVIRONMENT === "production";
+  validateWebhookUrl(endpoint.url, isProduction);
 
   const now = new Date().toISOString();
   const testPayload = JSON.stringify({

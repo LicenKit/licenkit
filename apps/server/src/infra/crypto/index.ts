@@ -416,13 +416,16 @@ export async function verifyLemonSqueezySignature(
 
 /**
  * Standard formatted license key generator: `LIC-XXXX-XXXX-XXXX-XXXX`
- * Uses Crockford base32 alphabet (no easily confused 0, O, 1, I).
+ * Uses Crockford base32 alphabet (no easily confused 0, O, 1, I)
+ * and WebCrypto cryptographically secure random entropy.
  */
 export function generateLicenseKey(prefix = "LIC"): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const part = (len: number) =>
-    Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  return `${prefix}-${part(4)}-${part(4)}-${part(4)}-${part(4)}`;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const part = (offset: number) =>
+    Array.from(bytes.slice(offset, offset + 4), (b) => chars[b % chars.length]).join("");
+  return `${prefix}-${part(0)}-${part(4)}-${part(8)}-${part(12)}`;
 }
 
 // --- 5. Ed25519 Key Generation, Import, Signing & Verification ---

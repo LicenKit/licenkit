@@ -42,14 +42,11 @@ export class ConflictError extends AppError {
   }
 }
 
-export class ConfigurationError extends AppError {
-  constructor(message = "System configuration error.") {
-    super("CONFIGURATION_ERROR", message, 500);
-  }
-}
+import { ConfigurationError } from "../infra/crypto";
+export { ConfigurationError };
 
 export const errorHandler: ErrorHandler = (err, c) => {
-  if (err instanceof AppError || (err && (err as any).code === "CONFIGURATION_ERROR")) {
+  if (err instanceof AppError || err instanceof ConfigurationError || (err && (err as any).code === "CONFIGURATION_ERROR")) {
     return c.json(
       {
         success: false,

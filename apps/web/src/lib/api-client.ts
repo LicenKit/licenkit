@@ -18,7 +18,6 @@ export interface EnvCheckItem {
   category: "secret" | "binding";
   required: boolean;
   status: "ready" | "missing" | "insecure";
-  length?: number;
   description: string;
   fixHint: string;
 }

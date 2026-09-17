@@ -131,59 +131,14 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
   const inboundEventId = existingRecord ? existingRecord.id : `evt_${ulid().toLowerCase()}`;
   const now = new Date().toISOString();
 
-  // 6. Automated Fulfillment & Business Processing
-  let fulfillmentResult: { licenseId?: string; action: string } = { action: "ignored" };
-
-  try {
-    if (provider === "paddle") {
-      fulfillmentResult = await handlePaddleFulfillment(c.env, db, accountId, eventType, payload);
-    } else if (provider === "stripe") {
-      fulfillmentResult = await handleStripeFulfillment(c.env, db, accountId, eventType, payload);
-    }
-  } catch (err: any) {
-    console.error(`Fulfillment error for ${provider} event ${eventType}:`, err);
-    // Record event as failed for auditing
-    if (existingRecord) {
-      await db
-        .update(webhookEvents)
-        .set({
-          status: "failed",
-          lastError: err.message || "Fulfillment error",
-          attempts: sql`${webhookEvents.attempts} + 1`,
-          payload: rawBody,
-          processedAt: now,
-        })
-        .where(eq(webhookEvents.id, existingRecord.id));
-    } else {
-      await db.insert(webhookEvents).values({
-        id: inboundEventId,
-        accountId,
-        provider,
-        direction: "inbound",
-        eventId: externalEventId,
-        eventType,
-        payload: rawBody,
-        status: "failed",
-        lastError: err.message || "Fulfillment error",
-        attempts: 1,
-        createdAt: now,
-        processedAt: now,
-      });
-    }
-
-    throw err;
-  }
-
-  // 7. Record inbound event as processed
+  // 6. Pre-reserve inbound event as pending before business fulfillment (Atomic idempotency shield)
   if (existingRecord) {
     await db
       .update(webhookEvents)
       .set({
-        status: "processed",
-        lastError: null,
+        status: "pending",
         attempts: sql`${webhookEvents.attempts} + 1`,
         payload: rawBody,
-        processedAt: now,
       })
       .where(eq(webhookEvents.id, existingRecord.id));
   } else {
@@ -195,12 +150,45 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
       eventId: externalEventId,
       eventType,
       payload: rawBody,
-      status: "processed",
+      status: "pending",
       attempts: 1,
       createdAt: now,
-      processedAt: now,
     });
   }
+
+  // 7. Automated Fulfillment & Business Processing
+  let fulfillmentResult: { licenseId?: string; action: string } = { action: "ignored" };
+
+  try {
+    if (provider === "paddle") {
+      fulfillmentResult = await handlePaddleFulfillment(c.env, db, accountId, eventType, payload);
+    } else if (provider === "stripe") {
+      fulfillmentResult = await handleStripeFulfillment(c.env, db, accountId, eventType, payload);
+    }
+  } catch (err: any) {
+    console.error(`Fulfillment error for ${provider} event ${eventType}:`, err);
+    // Record event as failed for auditing
+    await db
+      .update(webhookEvents)
+      .set({
+        status: "failed",
+        lastError: err.message || "Fulfillment error",
+        processedAt: new Date().toISOString(),
+      })
+      .where(eq(webhookEvents.id, inboundEventId));
+
+    throw err;
+  }
+
+  // 8. Record inbound event as processed
+  await db
+    .update(webhookEvents)
+    .set({
+      status: "processed",
+      lastError: null,
+      processedAt: new Date().toISOString(),
+    })
+    .where(eq(webhookEvents.id, inboundEventId));
 
   return c.json({
     success: true,
@@ -273,6 +261,24 @@ async function handlePaddleFulfillment(
       return { action: "no_matching_policy" };
     }
 
+    // Secondary Idempotency Shield: check if license already issued for this transaction
+    if (data.id) {
+      const existingLicense = await db
+        .select()
+        .from(licenses)
+        .where(
+          and(
+            eq(licenses.accountId, accountId),
+            sql`json_extract(${licenses.metadata}, '$.external_transaction_id') = ${data.id}`
+          )
+        )
+        .get();
+
+      if (existingLicense) {
+        return { licenseId: existingLicense.id, action: "license_already_issued" };
+      }
+    }
+
     // Issue License
     const licenseId = `lic_${ulid().toLowerCase()}`;
     const key = generateLicenseKey();
@@ -334,24 +340,17 @@ async function handlePaddleFulfillment(
     const subscriptionId = data.id;
     if (!subscriptionId) return { action: "no_subscription_id" };
 
-    // Find license linked to this subscription ID
-    const allLicenses = await db
+    // Pushdown SQL query: Find license linked to this subscription ID without in-memory full scanning
+    const targetLicense = await db
       .select()
       .from(licenses)
-      .where(eq(licenses.accountId, accountId))
-      .all();
-
-    const targetLicense = allLicenses.find((l: any) => {
-      try {
-        const meta = typeof l.metadata === "string" ? JSON.parse(l.metadata || "{}") : l.metadata || {};
-        return (
-          meta.external_subscription_id === subscriptionId ||
-          meta.externalSubscriptionId === subscriptionId
-        );
-      } catch {
-        return false;
-      }
-    });
+      .where(
+        and(
+          eq(licenses.accountId, accountId),
+          sql`(json_extract(${licenses.metadata}, '$.external_subscription_id') = ${subscriptionId} OR json_extract(${licenses.metadata}, '$.externalSubscriptionId') = ${subscriptionId})`
+        )
+      )
+      .get();
 
     if (!targetLicense) {
       return { action: "subscription_license_not_found" };
@@ -449,6 +448,24 @@ async function handleStripeFulfillment(
       return { action: "no_matching_policy" };
     }
 
+    // Secondary Idempotency Shield: check if license already issued for this checkout session
+    if (session.id) {
+      const existingLicense = await db
+        .select()
+        .from(licenses)
+        .where(
+          and(
+            eq(licenses.accountId, accountId),
+            sql`json_extract(${licenses.metadata}, '$.external_checkout_session_id') = ${session.id}`
+          )
+        )
+        .get();
+
+      if (existingLicense) {
+        return { licenseId: existingLicense.id, action: "license_already_issued" };
+      }
+    }
+
     // Issue License
     const licenseId = `lic_${ulid().toLowerCase()}`;
     const key = generateLicenseKey();
@@ -508,23 +525,17 @@ async function handleStripeFulfillment(
     const subscriptionId = session.id;
     if (!subscriptionId) return { action: "no_subscription_id" };
 
-    const allLicenses = await db
+    // Pushdown SQL query: Find license linked to this subscription ID without in-memory full scanning
+    const targetLicense = await db
       .select()
       .from(licenses)
-      .where(eq(licenses.accountId, accountId))
-      .all();
-
-    const targetLicense = allLicenses.find((l: any) => {
-      try {
-        const meta = typeof l.metadata === "string" ? JSON.parse(l.metadata || "{}") : l.metadata || {};
-        return (
-          meta.external_subscription_id === subscriptionId ||
-          meta.externalSubscriptionId === subscriptionId
-        );
-      } catch {
-        return false;
-      }
-    });
+      .where(
+        and(
+          eq(licenses.accountId, accountId),
+          sql`(json_extract(${licenses.metadata}, '$.external_subscription_id') = ${subscriptionId} OR json_extract(${licenses.metadata}, '$.externalSubscriptionId') = ${subscriptionId})`
+        )
+      )
+      .get();
 
     if (!targetLicense) {
       return { action: "subscription_license_not_found" };
