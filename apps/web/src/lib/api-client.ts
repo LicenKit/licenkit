@@ -3,6 +3,8 @@
  * Automatically handles JWT Authorization headers and dynamic API Base URL resolution.
  */
 
+export const TOKEN_KEY = "licenkit_token";
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "") + "/api/v1";
 
 export class ApiError extends Error {
@@ -30,7 +32,7 @@ export interface EnvCheckResponse {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem("licenkit_token");
+  const token = localStorage.getItem(TOKEN_KEY);
   const headers = new Headers(options.headers || {});
 
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
@@ -145,7 +147,7 @@ export const api = {
       if (params.source && params.source !== "all") sp.set("source", params.source);
       if (params.query) sp.set("query", params.query);
       const qs = sp.toString();
-      const token = localStorage.getItem("licenkit_session_token");
+      const token = localStorage.getItem(TOKEN_KEY);
       const res = await fetch(`/api/v1/admin/licenses/export${qs ? `?${qs}` : ""}`, {
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),

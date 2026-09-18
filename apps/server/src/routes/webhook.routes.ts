@@ -10,6 +10,7 @@ import {
   verifyPaddleSignature,
   verifyStripeSignature,
   verifyLemonSqueezySignature,
+  verifyOutboundWebhookSignature,
   generateLicenseKey,
 } from "../infra/crypto";
 import { broadcastOutboundEvent } from "../infra/events/broadcast";
@@ -54,7 +55,7 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
   }
 
   // Strict check: if no webhook secret is configured, reject inbound request to prevent spoofing
-  if (!webhookSecret && provider !== "custom") {
+  if (!webhookSecret) {
     throw new AppError("PAYMENT_CONFIG_MISSING", `Webhook secret for ${provider} is not configured`, 400);
   }
 
@@ -76,6 +77,12 @@ webhookRouter.post("/:provider/:account_id", async (c) => {
     const isValid = await verifyLemonSqueezySignature(rawBody, signatureHeader, webhookSecret);
     if (!isValid) {
       throw new AppError("INVALID_SIGNATURE", "Lemon Squeezy signature verification failed", 401);
+    }
+  } else if (provider === "custom") {
+    const signatureHeader = c.req.header("x-licenkit-signature") || c.req.header("x-signature");
+    const isValid = await verifyOutboundWebhookSignature(rawBody, signatureHeader, webhookSecret);
+    if (!isValid) {
+      throw new AppError("INVALID_SIGNATURE", "Custom webhook signature verification failed", 401);
     }
   }
 

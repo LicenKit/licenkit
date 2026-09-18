@@ -73,12 +73,13 @@ export const errorHandler: ErrorHandler = (err, c) => {
   }
 
   console.error("Unhandled Exception:", err);
+  const isProduction = (c.env as any)?.ENVIRONMENT === "production";
   return c.json(
     {
       success: false,
       error: {
         code: "INTERNAL_SERVER_ERROR",
-        message: err.message || "An internal error occurred",
+        message: isProduction ? "An internal error occurred" : (err.message || "An internal error occurred"),
       },
     },
     500

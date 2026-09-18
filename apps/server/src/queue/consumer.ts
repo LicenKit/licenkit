@@ -44,7 +44,7 @@ export async function handleQueueBatch(batch: MessageBatch<WebhookMessage>, env:
         .update(schema.webhookEvents)
         .set({
           status: "processed",
-          attempts: 1,
+          attempts: msg.attempts,
           processedAt: new Date().toISOString(),
         })
         .where(eq(schema.webhookEvents.id, eventId));
@@ -57,6 +57,7 @@ export async function handleQueueBatch(batch: MessageBatch<WebhookMessage>, env:
         .update(schema.webhookEvents)
         .set({
           status: "failed",
+          attempts: msg.attempts,
           lastError: err.message || "Failed delivery",
         })
         .where(eq(schema.webhookEvents.id, eventId));

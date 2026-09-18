@@ -100,14 +100,21 @@ export async function verifyPassword(password: string, storedHash: string): Prom
   );
 
   const calculatedHash = bufferToBase64(derivedBits);
-  return calculatedHash === expectedHash;
+
+  // Constant-time string comparison to prevent timing side-channel attacks
+  let diff = calculatedHash.length ^ expectedHash.length;
+  for (let i = 0; i < calculatedHash.length; i++) {
+    diff |= calculatedHash.charCodeAt(i) ^ (expectedHash.charCodeAt(i % expectedHash.length) || 0);
+  }
+  return diff === 0;
 }
 
 // --- 2. Envelope Encryption (AES-256-GCM) ---
 async function deriveAesKey(masterKeyHexOrStr: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
-  const rawKey = encoder.encode(masterKeyHexOrStr.padEnd(32, "0").slice(0, 32));
-  return await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt", "decrypt"]);
+  // Standard SHA-256 derivation expands master secret entropy evenly into a 256-bit key
+  const keyDigest = await crypto.subtle.digest("SHA-256", encoder.encode(masterKeyHexOrStr));
+  return await crypto.subtle.importKey("raw", keyDigest, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
 export async function encryptEnvelope(plaintext: string, masterSecret: string): Promise<string> {

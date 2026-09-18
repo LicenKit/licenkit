@@ -8,6 +8,7 @@ import { systemSettings, accounts, users } from "../infra/db/schema";
 import { hashPassword, signJWT, getJwtSecret, getStorageEncryptionKey } from "../infra/crypto";
 import { setupGuard } from "../middleware/auth";
 import { AppError } from "../middleware/error";
+import { rateLimit } from "../middleware/rate-limit";
 
 export const systemRouter = new Hono<AppContext>();
 
@@ -137,59 +138,75 @@ const SetupSchema = z.object({
 });
 
 // POST /api/v1/system/setup
-systemRouter.post("/setup", setupGuard, async (c) => {
-  const body = await c.req.json();
-  const input = SetupSchema.parse(body);
+systemRouter.post(
+  "/setup",
+  setupGuard,
+  rateLimit({ limit: 5, windowSeconds: 600, keyPrefix: "system_setup" }),
+  async (c) => {
+    const body = await c.req.json();
+    const input = SetupSchema.parse(body);
 
-  const db = getTenantDB(c);
+    const db = getTenantDB(c);
 
-  // Check again to avoid race conditions
-  const existing = await db
-    .select({ id: systemSettings.id })
-    .from(systemSettings)
-    .where(eq(systemSettings.id, "current"))
-    .get();
+    // Check again to avoid race conditions
+    const existing = await db
+      .select({ id: systemSettings.id })
+      .from(systemSettings)
+      .where(eq(systemSettings.id, "current"))
+      .get();
 
-  if (existing) {
-    throw new AppError("INSTANCE_ALREADY_INITIALIZED", "Instance has already been initialized", 403);
-  }
+    if (existing) {
+      throw new AppError("INSTANCE_ALREADY_INITIALIZED", "Instance has already been initialized", 403);
+    }
 
-  const now = new Date().toISOString();
-  const accountId = `acc_${ulid().toLowerCase()}`;
-  const userId = `usr_${ulid().toLowerCase()}`;
-  const passwordHash = await hashPassword(input.admin_password);
+    const now = new Date().toISOString();
+    const accountId = `acc_${ulid().toLowerCase()}`;
+    const userId = `usr_${ulid().toLowerCase()}`;
+    const passwordHash = await hashPassword(input.admin_password);
 
-  // Atomic batch write
-  await db.batch([
-    db.insert(systemSettings).values({
-      id: "current",
-      instanceName: input.instance_name,
-      appUrl: input.app_url.replace(/\/+$/, ""),
-      apiBaseUrl: input.api_base_url ? input.api_base_url.replace(/\/+$/, "") : null,
-      allowSignup: false,
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.insert(accounts).values({
-      id: accountId,
-      name: input.account_name,
-      slug: input.slug,
-      isActive: true,
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.insert(users).values({
-      id: userId,
-      accountId,
-      email: input.admin_email.toLowerCase().trim(),
-      name: input.admin_name,
-      passwordHash,
-      role: "owner",
-      isActive: true,
-      createdAt: now,
-      updatedAt: now,
-    }),
-  ]);
+    try {
+      // Atomic batch write
+      await db.batch([
+        db.insert(systemSettings).values({
+          id: "current",
+          instanceName: input.instance_name,
+          appUrl: input.app_url.replace(/\/+$/, ""),
+          apiBaseUrl: input.api_base_url ? input.api_base_url.replace(/\/+$/, "") : null,
+          allowSignup: false,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        db.insert(accounts).values({
+          id: accountId,
+          name: input.account_name,
+          slug: input.slug,
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        db.insert(users).values({
+          id: userId,
+          accountId,
+          email: input.admin_email.toLowerCase().trim(),
+          name: input.admin_name,
+          passwordHash,
+          role: "owner",
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      ]);
+    } catch (err: any) {
+      if (
+        err?.message?.includes("UNIQUE") ||
+        err?.message?.includes("PRIMARYKEY") ||
+        err?.message?.includes("constraint") ||
+        err?.message?.includes("already exists")
+      ) {
+        throw new AppError("INSTANCE_ALREADY_INITIALIZED", "Instance has already been initialized", 403);
+      }
+      throw err;
+    }
 
   // Early check: Ensure STORAGE_ENCRYPTION_KEY and JWT_SECRET are valid
   getStorageEncryptionKey(c.env);

@@ -25,14 +25,36 @@ app.onError(errorHandler);
 // Global CORS Configuration
 app.use(
   "*",
-  cors({
-    origin: (origin) => origin || "*",
-    allowHeaders: ["Content-Type", "Authorization", "X-LicenKit-Signature"],
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    exposeHeaders: ["Content-Length"],
-    maxAge: 86400,
-    credentials: true,
-  })
+  async (c, next) => {
+    const isDev = c.env.ENVIRONMENT !== "production";
+    const allowedOrigins = new Set(
+      [c.env.ENVIRONMENT === "test" ? "*" : null].filter(Boolean) as string[]
+    );
+
+    const corsMiddleware = cors({
+      origin: (requestOrigin) => {
+        if (!requestOrigin) return "";
+        // In unit tests, allow request origin
+        if (c.env.ENVIRONMENT === "test") return requestOrigin;
+        // In development, allow localhost origins
+        if (isDev && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(requestOrigin)) {
+          return requestOrigin;
+        }
+        // In production, match configured domains
+        if (allowedOrigins.has(requestOrigin)) {
+          return requestOrigin;
+        }
+        return "";
+      },
+      allowHeaders: ["Content-Type", "Authorization", "X-LicenKit-Signature", "Paddle-Signature", "Stripe-Signature", "X-Signature"],
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      exposeHeaders: ["Content-Length", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+      maxAge: 86400,
+      credentials: true,
+    });
+
+    return corsMiddleware(c, next);
+  }
 );
 
 // Mount API v1 Routes

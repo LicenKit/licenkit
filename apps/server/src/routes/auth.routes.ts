@@ -8,6 +8,7 @@ import { verifyPassword, signJWT, getJwtSecret } from "../infra/crypto";
 import { sessionAuth } from "../middleware/auth";
 import { UnauthorizedError } from "../middleware/error";
 import { recordAuditLog } from "../infra/audit";
+import { rateLimit } from "../middleware/rate-limit";
 
 export const authRouter = new Hono<AppContext>();
 
@@ -17,7 +18,10 @@ const LoginSchema = z.object({
 });
 
 // POST /api/v1/auth/login
-authRouter.post("/login", async (c) => {
+authRouter.post(
+  "/login",
+  rateLimit({ limit: 10, windowSeconds: 60, keyPrefix: "auth_login" }),
+  async (c) => {
   const body = await c.req.json();
   const input = LoginSchema.parse(body);
 

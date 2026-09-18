@@ -15,6 +15,7 @@ import {
 } from "../infra/crypto";
 import { broadcastOutboundEvent } from "../infra/events/broadcast";
 import { AppError, ConflictError, NotFoundError } from "../middleware/error";
+import { rateLimit } from "../middleware/rate-limit";
 
 export const clientRouter = new Hono<AppContext>();
 
@@ -136,7 +137,10 @@ const ActivateSchema = z.object({
 });
 
 // POST /api/v1/client/activate
-clientRouter.post("/activate", async (c) => {
+clientRouter.post(
+  "/activate",
+  rateLimit({ limit: 30, windowSeconds: 60, keyPrefix: "client_activate" }),
+  async (c) => {
   const body = await c.req.json();
   const input = ActivateSchema.parse(body);
 
@@ -209,7 +213,7 @@ clientRouter.post("/activate", async (c) => {
     machineId = existingMachine.id;
     isReused = true;
   } else {
-    // 3. Check seat limit
+    // 3. Check seat limit with concurrency protection
     const machineCountResult = await db
       .select({ count: sql<number>`count(*)` })
       .from(machines)
@@ -230,6 +234,23 @@ clientRouter.post("/activate", async (c) => {
     // 4. Create new machine binding
     machineId = `mac_${ulid().toLowerCase()}`;
     const clientIp = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "unknown";
+
+    // Double-check seat limit immediately prior to insert to prevent concurrent over-allocation
+    const doubleCheck = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(machines)
+      .where(eq(machines.licenseId, license.id))
+      .get();
+
+    if ((doubleCheck?.count || 0) >= policy.maxMachines) {
+      return c.json({
+        success: false,
+        error: {
+          code: "SEAT_LIMIT_EXCEEDED",
+          message: `Seat limit reached (${doubleCheck?.count || 0}/${policy.maxMachines}). Please deactivate an old machine first.`,
+        },
+      }, 200);
+    }
 
     await db.insert(machines).values({
       id: machineId,

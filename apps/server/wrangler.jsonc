@@ -20,21 +20,6 @@
       "id": "licenkit-kv-placeholder"
     }
   ],
-  "queues": {
-    "producers": [
-      {
-        "binding": "EVENT_QUEUE",
-        "queue": "licenkit-event-queue"
-      }
-    ],
-    "consumers": [
-      {
-        "queue": "licenkit-event-queue",
-        "max_batch_size": 10,
-        "max_batch_timeout": 5
-      }
-    ]
-  },
   "vars": {
     "ENVIRONMENT": "development",
     "APP_VERSION": "1.0.0"
