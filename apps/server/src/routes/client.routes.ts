@@ -231,37 +231,73 @@ clientRouter.post(
       }, 200);
     }
 
-    // 4. Create new machine binding
+    // 4. Create new machine binding with Atomic Conditional INSERT
     machineId = `mac_${ulid().toLowerCase()}`;
     const clientIp = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "unknown";
 
-    // Double-check seat limit immediately prior to insert to prevent concurrent over-allocation
-    const doubleCheck = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(machines)
-      .where(eq(machines.licenseId, license.id))
-      .get();
+    try {
+      const insertResult = await db.run(sql`
+        INSERT INTO machines (id, license_id, fingerprint, name, platform, ip, last_heartbeat_at, created_at)
+        SELECT
+          ${machineId},
+          ${license.id},
+          ${input.fingerprint},
+          ${input.name || null},
+          ${input.platform || null},
+          ${clientIp},
+          ${now},
+          ${now}
+        WHERE (
+          SELECT COUNT(*) FROM machines WHERE license_id = ${license.id}
+        ) < ${policy.maxMachines}
+      `);
 
-    if ((doubleCheck?.count || 0) >= policy.maxMachines) {
-      return c.json({
-        success: false,
-        error: {
-          code: "SEAT_LIMIT_EXCEEDED",
-          message: `Seat limit reached (${doubleCheck?.count || 0}/${policy.maxMachines}). Please deactivate an old machine first.`,
-        },
-      }, 200);
+      const changes = (insertResult as any)?.meta?.changes ?? (insertResult as any)?.changes ?? 0;
+      if (changes === 0) {
+        const doubleCheck = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(machines)
+          .where(eq(machines.licenseId, license.id))
+          .get();
+
+        const count = doubleCheck?.count ?? policy.maxMachines;
+        return c.json({
+          success: false,
+          error: {
+            code: "SEAT_LIMIT_EXCEEDED",
+            message: `Seat limit reached (${count}/${policy.maxMachines}). Please deactivate an old machine first.`,
+          },
+        }, 200);
+      }
+    } catch (err: any) {
+      // If concurrent request already inserted the exact same machine fingerprint, gracefully reuse it
+      const isUniqueConstraint =
+        err?.code === "SQLITE_CONSTRAINT_UNIQUE" ||
+        err?.cause?.code === "SQLITE_CONSTRAINT_UNIQUE" ||
+        err?.message?.includes("UNIQUE") ||
+        err?.cause?.message?.includes("UNIQUE") ||
+        String(err).includes("UNIQUE") ||
+        String(err?.cause).includes("UNIQUE") ||
+        err?.message?.includes("constraint") ||
+        err?.cause?.message?.includes("constraint");
+
+      if (isUniqueConstraint) {
+        const concurrentMachine = await db
+          .select()
+          .from(machines)
+          .where(and(eq(machines.licenseId, license.id), eq(machines.fingerprint, input.fingerprint)))
+          .get();
+
+        if (concurrentMachine) {
+          machineId = concurrentMachine.id;
+          isReused = true;
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
     }
-
-    await db.insert(machines).values({
-      id: machineId,
-      licenseId: license.id,
-      fingerprint: input.fingerprint,
-      name: input.name || null,
-      platform: input.platform || null,
-      ip: clientIp,
-      lastHeartbeatAt: now,
-      createdAt: now,
-    });
   }
 
   // 5. Generate Offline Ed25519 Token if scheme == 'ed25519'
