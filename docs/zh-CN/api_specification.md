@@ -607,14 +607,13 @@
 
 ### 6. 商业许可证全生命周期管控 (`/api/v1/admin/licenses`)
 - **手动签发商业许可证**：`POST /api/v1/admin/licenses`
-  - **功能描述**：管理员手动发码。自动校验关联 Product 与 Policy 的归属有效性；自动根据 Policy 的 `duration` 计算 `expiresAt`；若未传 `key` 则自动生成 16 位标准激活码（`LIC-XXXX-XXXX-XXXX-XXXX`）。
+  - **功能描述**：管理员手动发码。自动校验关联 Product 与 Policy 的归属有效性；自动根据 Policy 的 `duration` 计算 `expiresAt`；激活码由服务端 WebCrypto CSPRNG 强制自动生成 26 位标准 Crockford Base32 激活码（`LIC-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XX`，提供 130 bits 纯真随机熵），**严禁管理员自定义 key，从根源杜绝弱口令与字典攻击**。
   - **请求参数**：
     ```json
     {
       "productId": "prd_01j8x9n3a1b2c3d4e5f6g7h8j9",
       "policyId": "pol_01j8x9n5u1v2w3x4y5z6a7b8c9",
       "customerEmail": "buyer@screenstudio.com",
-      "key": "LIC-ABCD-1234-EFGH-5678", // 可选: 留空则系统自动生成
       "expiresAt": null, // 可选: 留空则继承策略 duration 推算，传 null 为买断永久
       "metadata": {
         "orderSource": "manual_vip_grant"
@@ -627,7 +626,7 @@
       "success": true,
       "data": {
         "id": "lic_01j8x9n6d1e2f3g4h5i6j7k8l9",
-        "key": "LIC-ABCD-1234-EFGH-5678",
+        "key": "LIC-7H9X2K-B3N8M4-P6R5T1-V9W2X8-3A",
         "customerEmail": "buyer@screenstudio.com",
         "expiresAt": "2027-09-17T10:00:00.000Z",
         "status": "active",
@@ -711,8 +710,8 @@
 - **调整许可证状态与期限**：`PATCH /api/v1/admin/licenses/:id`
   - **请求参数**：`{ "status": "suspended", "expiresAt": "2028-09-17T10:00:00Z" }`
 - **一键更换激活码 (Rotate Key)**：`POST /api/v1/admin/licenses/:id/rotate-key`
-  - **功能描述**：激活码泄露或客户申请换码时一键更换新 Key，**原子清退该许可证下全部旧设备席位**。
-  - **请求参数**：`{ "key": "LIC-OPTIONAL-NEW-KEY" }`（留空则自动生成）
+  - **功能描述**：激活码泄露或客户申请换码时一键更换新 Key，**由服务端 WebCrypto CSPRNG 自动签发全新 26 位高熵激活码（禁止自定义）**，并**原子清退该许可证下全部旧设备席位**。
+  - **请求参数**：无（无需传参，POST 空 Body 即可）
 - **挂起与恢复许可证**：
   - `POST /api/v1/admin/licenses/:id/suspend`（挂起，置 status = 'suspended'）
   - `POST /api/v1/admin/licenses/:id/reinstate`（恢复，置 status = 'active'）

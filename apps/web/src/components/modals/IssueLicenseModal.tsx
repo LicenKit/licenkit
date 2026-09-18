@@ -25,7 +25,6 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
   const [productId, setProductId] = useState(products[0]?.id || "");
   const [policyId, setPolicyId] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
-  const [customKey, setCustomKey] = useState("");
   const [batchCount, setBatchCount] = useState<number>(5);
 
   // Result state
@@ -111,7 +110,6 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
           productId,
           policyId,
           customerEmail: email,
-          key: customKey.trim() || undefined,
           metadata: { source: "manual_console_issuance" },
         });
 
@@ -149,7 +147,6 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
     setIssuedLicense(null);
     setIssuedBatch(null);
     setCustomerEmail("");
-    setCustomKey("");
     setBatchCount(5);
     setError(null);
     onClose();
@@ -445,21 +442,7 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
                 />
               </div>
 
-              {/* Custom Key (Single Mode only) */}
-              {mode === "single" && (
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Custom License Key <span className="text-slate-500 font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={customKey}
-                    onChange={(e) => setCustomKey(e.target.value)}
-                    placeholder="Leave blank to auto-generate (LIC-XXXX-XXXX-XXXX-XXXX)"
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2 text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-              )}
+
 
               {/* Action Buttons */}
               <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2.5">

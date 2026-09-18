@@ -80,9 +80,9 @@ Migration applied successfully!
 ```
 
 ### 2. (Optional) Initialize Local D1 with Raw SQL
-You can also execute `docs/schema.sql` directly:
+You can also execute `docs/schemas/schema.sql` directly:
 ```bash
-npx --prefix apps/server wrangler d1 execute licenkit-db --local --file=../../docs/schema.sql
+npx --prefix apps/server wrangler d1 execute licenkit-db --local --file=../../docs/schemas/schema.sql
 ```
 
 ### 3. Inspect Local Database

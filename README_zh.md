@@ -36,9 +36,10 @@ licenkit/
 │   ├── web/           # 现代管理控制台 SPA (React 19 + Tailwind CSS v4 + Vite)
 │   └── cli/           # 跨平台授权激活与离线验签命令行工具 (Node.js + WebCrypto Ed25519)
 ├── docs/
-│   ├── zh-CN/         # 简体中文全套设计与开发文档
-│   ├── en/            # 完整英文设计与开发文档
-│   └── schema.sql     # 数据库基础 DDL 脚本
+│   ├── en/            # 英文版通用技术文档
+│   ├── zh-CN/         # 中文版通用技术文档
+│   ├── schemas/       # 数据库 DDL 与结构资产
+│   └── proposals/     # 过程演进方案与 RFC（内含 archive/ 归档）
 └── scripts/           # 运维与辅助工具脚本
 ```
 

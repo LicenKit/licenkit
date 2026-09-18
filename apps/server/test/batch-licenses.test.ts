@@ -123,7 +123,9 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
     expect(json.success).toBe(true);
     expect(json.data.customerEmail).toBeNull();
     expect(json.data.source).toBe("manual");
-    expect(json.data.key).toMatch(/^LIC-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+    expect(json.data.key).toMatch(
+      /^LIC-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{2}$/
+    );
 
     // Verify in database
     const saved = await db

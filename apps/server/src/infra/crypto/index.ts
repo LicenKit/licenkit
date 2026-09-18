@@ -452,17 +452,17 @@ export async function verifyOutboundWebhookSignature(
 }
 
 /**
- * Standard formatted license key generator: `LIC-XXXX-XXXX-XXXX-XXXX`
- * Uses Crockford base32 alphabet (no easily confused 0, O, 1, I)
- * and WebCrypto cryptographically secure random entropy.
+ * Standard formatted license key generator: `LIC-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XX`
+ * Uses standard Crockford base32 alphabet (excludes ambiguous I, L, O, and U).
+ * Extracts 26 characters (26 * 5 = 130 bits of true WebCrypto CSPRNG entropy)
+ * with zero modulo bias via `b & 31`.
  */
 export function generateLicenseKey(prefix = "LIC"): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = new Uint8Array(16);
+  const chars = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Standard Crockford, excluding I L O U
+  const bytes = new Uint8Array(26);
   crypto.getRandomValues(bytes);
-  const part = (offset: number) =>
-    Array.from(bytes.slice(offset, offset + 4), (b) => chars[b % chars.length]).join("");
-  return `${prefix}-${part(0)}-${part(4)}-${part(8)}-${part(12)}`;
+  const body = Array.from(bytes, (b) => chars[b & 31]).join(""); // 26 * 5 = 130 bits
+  return `${prefix}-${body.slice(0, 6)}-${body.slice(6, 12)}-${body.slice(12, 18)}-${body.slice(18, 24)}-${body.slice(24)}`;
 }
 
 // --- 5. Ed25519 Key Generation, Import, Signing & Verification ---

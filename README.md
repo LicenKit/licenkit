@@ -36,9 +36,10 @@ licenkit/
 │   ├── web/           # Modern admin dashboard SPA (React 19 + Tailwind CSS v4 + Vite)
 │   └── cli/           # Cross-platform licensing & offline verification CLI (Node.js + WebCrypto Ed25519)
 ├── docs/
-│   ├── en/            # Comprehensive English documentation
-│   ├── zh-CN/         # Comprehensive Simplified Chinese documentation
-│   └── schema.sql     # Base database DDL schema
+│   ├── en/            # English documentation
+│   ├── zh-CN/         # Chinese documentation
+│   ├── schemas/       # Database DDL & structural schemas
+│   └── proposals/     # Architectural proposals & RFCs (archive inside)
 └── scripts/           # Maintenance and utility scripts
 ```
 

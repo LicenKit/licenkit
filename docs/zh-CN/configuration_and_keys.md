@@ -178,3 +178,5 @@ export interface PaymentConfigs {
   - [ ] 如使用 Lemon Squeezy：仅需配置其 Signing Secret
 - [ ] **出向通知（邮件/自动化）配置**
   - [ ] 在控制台添加接收端点 URL 与接收事件（如 `license.created`），由外部接收端点或 Resend 处理最终用户邮件发送。
+
+

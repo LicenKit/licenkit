@@ -288,7 +288,6 @@ const IssueLicenseSchema = z.object({
   productId: z.string(),
   policyId: z.string(),
   customerEmail: z.string().email().optional().nullable(),
-  key: z.string().optional(),
   expiresAt: z.string().nullable().optional(),
   metadata: z.record(z.any()).default({}),
 });
@@ -355,7 +354,7 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin", "member"]), async (
   }
 
   const licenseId = `lic_${ulid().toLowerCase()}`;
-  const key = input.key ? input.key.trim().toUpperCase() : generateLicenseKey();
+  const key = generateLicenseKey();
   const now = new Date();
 
   let expiresAt: string | null = null;
@@ -774,9 +773,6 @@ adminLicensesRouter.patch("/:id", requireRole(["owner", "admin", "member"]), asy
 // POST /api/v1/admin/licenses/:id/rotate-key
 adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin", "member"]), async (c) => {
   const id = c.req.param("id");
-  const body = await c.req.json().catch(() => ({}));
-  const customKey = body?.key ? String(body.key).trim().toUpperCase() : null;
-
   const db = getTenantDB(c);
   const accountId = c.get("accountId")!;
   const now = new Date().toISOString();
@@ -791,7 +787,7 @@ adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin", "memb
     throw new NotFoundError("License not found");
   }
 
-  const newKey = customKey || generateLicenseKey();
+  const newKey = generateLicenseKey();
 
   // Atomically update key and clear all machine seat bindings
   await db.batch([

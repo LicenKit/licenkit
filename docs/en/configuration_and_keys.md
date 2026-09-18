@@ -177,3 +177,5 @@ Before deploying or migrating an instance, verify:
   - [ ] Lemon Squeezy: Signing Secret configured
 - [ ] **Outbound Event Notifications**
   - [ ] External webhook endpoint registered to receive events (e.g. `license.created`) for email notifications.
+
+

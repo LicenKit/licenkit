@@ -80,9 +80,9 @@ Migration applied successfully!
 ```
 
 ### 2. （可选）使用原始 SQL 初始化本地 D1
-你也可以直接将 `docs/schema.sql` 应用到本地 D1：
+你也可以直接将 `docs/schemas/schema.sql` 应用到本地 D1：
 ```bash
-npx --prefix apps/server wrangler d1 execute licenkit-db --local --file=../../docs/schema.sql
+npx --prefix apps/server wrangler d1 execute licenkit-db --local --file=../../docs/schemas/schema.sql
 ```
 
 ### 3. 查看本地数据库内容

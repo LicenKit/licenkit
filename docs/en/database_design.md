@@ -214,7 +214,7 @@ erDiagram
         string account_id "References accounts(id)"
         string product_id "References products(id)"
         string policy_id "References policies(id)"
-        string key UK "Public license key (NOCASE)"
+        string key_hash UK "Pure SHA-256 digest (SHA256(normalize(key)))"
         string customer_email "Buyer email (NOCASE)"
         string status "active | suspended | expired | revoked"
         json metadata "Payment context"
@@ -226,6 +226,7 @@ erDiagram
         string id PK "Machine record ID, mac_01J8..."
         string license_id "References licenses(id)"
         string fingerprint "Hardware unique hash"
+        string token_hash "Machine credential SHA-256 hash"
         string name "Machine hostname"
         string platform "OS platform"
         string ip "Initial activation IP"
@@ -269,7 +270,7 @@ erDiagram
 
 ## 5. Key Indexes & Constraint Rationale
 
-Complete DDL definitions can be found in [`docs/schema.sql`](../schema.sql).
+Complete DDL definitions can be found in [`docs/schemas/schema.sql`](../schemas/schema.sql).
 
 1. **Custom Domain Unique Index**:
    - `CREATE UNIQUE INDEX idx_accounts_custom_domain ON accounts(custom_domain);`
@@ -285,6 +286,10 @@ Complete DDL definitions can be found in [`docs/schema.sql`](../schema.sql).
 5. **Machine Seat Partial Unique Index**:
    - `CREATE UNIQUE INDEX idx_machines_license_fingerprint ON machines(license_id, fingerprint);`
    - Re-activating the same license on the same machine is strictly idempotent and does not consume additional seat counts.
+6. **Blind Index & Machine Credential Indexes**:
+   - `CREATE UNIQUE INDEX idx_licenses_account_key_hash ON licenses(account_id, key_hash);`
+   - `CREATE INDEX idx_machines_token_hash ON machines(token_hash);`
+   - `key_hash` enables O(1) tenant-isolated license lookup during initial activation; `token_hash` provides millisecond verification of machine credentials during heartbeats.
 
 ---
 

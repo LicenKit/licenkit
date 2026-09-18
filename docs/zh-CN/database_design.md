@@ -214,7 +214,7 @@ erDiagram
         string account_id "所属租户 accounts(id)"
         string product_id "所属产品 products(id)"
         string policy_id "关联策略 policies(id)"
-        string key UK "对外商业激活码 (NOCASE)"
+        string key_hash UK "纯 SHA-256 单向散列摘要 (SHA256(normalize(key)))"
         string customer_email "归属买家邮箱 (NOCASE)"
         string status "active | suspended | expired | revoked"
         json metadata "外部支付上下文"
@@ -226,6 +226,7 @@ erDiagram
         string id PK "设备记录全局ID, 如 mac_01J8..."
         string license_id "关联许可证 licenses(id)"
         string fingerprint "硬件唯一指纹哈希"
+        string token_hash "机器专用凭据 SHA-256 哈希"
         string name "设备名称"
         string platform "操作系统平台"
         string ip "首次激活 IP"
@@ -251,12 +252,12 @@ erDiagram
     }
 
     webhook_events {
-        string id PK "流水全局ID, 如 evt_01J8..."
+        string id PK "事件流水全局ID, 如 evt_01J8..."
         string account_id "所属租户 accounts(id)"
-        string provider "来源渠道: stripe | paddle | lemonsqueezy | custom | internal"
-        string direction "inbound (网关支付) | outbound (开发者广播)"
-        string endpoint_id "关联出向端点 (仅 outbound: 一端点一行)"
-        string event_id "网关事件原始ID (仅 inbound 防重，outbound 为 NULL)"
+        string provider "stripe | paddle | lemonsqueezy | custom | internal"
+        string direction "inbound | outbound"
+        string endpoint_id "出向投递关联 endpoints(id)"
+        string event_id "入向第三方事件ID"
         string event_type "事件类型名"
         text payload "原始 JSON 报文"
         string status "pending | processed | failed"
@@ -269,7 +270,7 @@ erDiagram
 
 ## 五、 关键索引与约束设计说明
 
-完整 DDL 详见 [`docs/schema.sql`](../schema.sql)。
+完整 DDL 详见 [`docs/schemas/schema.sql`](../schemas/schema.sql)。
 
 1. **自定义域名唯一性约束**：
    - `CREATE UNIQUE INDEX idx_accounts_custom_domain ON accounts(custom_domain);`
@@ -286,6 +287,10 @@ erDiagram
 5. **席位部分唯一约束**：
    - `CREATE UNIQUE INDEX idx_machines_license_fingerprint ON machines(license_id, fingerprint);`
    - **作用**：同一台机器针对同一张许可证重复调用激活接口时幂等返回，不重复扣减席位。
+6. **盲索引与机器凭据索引**：
+   - `CREATE UNIQUE INDEX idx_licenses_account_key_hash ON licenses(account_id, key_hash);`
+   - `CREATE INDEX idx_machines_token_hash ON machines(token_hash);`
+   - **作用**：`key_hash` 用于激活时 O(1) 租户隔离快速定位许可证；`token_hash` 用于日常心跳时毫秒级安全核验机器凭据。
 
 ---
 

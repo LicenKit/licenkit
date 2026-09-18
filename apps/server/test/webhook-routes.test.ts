@@ -166,7 +166,9 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
       expect(issuedLicense.customerEmail).toBe("paddle_buyer@example.com");
       expect(issuedLicense.policyId).toBe("pol_paddle_monthly");
       expect(issuedLicense.status).toBe("active");
-      expect(issuedLicense.key).toMatch(/^LIC-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+      expect(issuedLicense.key).toMatch(
+        /^LIC-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{2}$/
+      );
 
       // Verify Outbound Broadcast was pushed to queue
       expect(testEnv.sentQueueMessages.length).toBeGreaterThan(0);

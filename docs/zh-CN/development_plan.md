@@ -187,7 +187,7 @@ gantt
 ### 里程碑 0：工程骨架与流水线打通 (Phase 0 - 100% Done)
 - **目标**：建立规范、数据库模型、Monorepo 脚手架及本地与生产构建链路。
 - **产出**：
-  - `docs/schema.sql`、`docs/api_specification.md`、`docs/backend_architecture.md`；
+  - `docs/schemas/schema.sql`、`docs/api_specification.md`、`docs/backend_architecture.md`；
   - `apps/server` (Hono + Drizzle + Workers + D1) + `apps/web` (React 19 + Tailwind v4 + Vite)；
   - 静态检查 `pnpm run typecheck` 0 错误，打包 `pnpm run build` 一键直出。
 

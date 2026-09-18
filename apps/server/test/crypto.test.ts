@@ -8,6 +8,7 @@ import {
   validateAndImportEd25519KeyPair,
   signOfflineToken,
   verifyOfflineToken,
+  generateLicenseKey,
   base64ToBuffer,
   bufferToBase64,
   base64UrlToJson,
@@ -264,3 +265,39 @@ describe("WebCrypto Infrastructure - Offline Ed25519 Structured Token", () => {
     expect(isExpired).toBe(true);
   });
 });
+
+describe("WebCrypto Infrastructure - License Key Generation (Crockford Base32 130-bit Entropy)", () => {
+  it("should generate 26-char Crockford Base32 key with standard 6-6-6-6-2 grouping", () => {
+    const key = generateLicenseKey();
+    // Format: LIC-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XX (prefix + 26 chars)
+    expect(key).toMatch(/^LIC-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{2}$/);
+    
+    // Total raw entropy characters (excluding hyphens and prefix)
+    const rawChars = key.replace(/^LIC-/, "").replace(/-/g, "");
+    expect(rawChars.length).toBe(26);
+  });
+
+  it("should support custom prefix", () => {
+    const key = generateLicenseKey("PRO");
+    expect(key.startsWith("PRO-")).toBe(true);
+    expect(key).toMatch(/^PRO-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{2}$/);
+  });
+
+  it("should strictly exclude ambiguous characters I, L, O, and U", () => {
+    const forbidden = /[ILOUilou]/;
+    for (let i = 0; i < 50; i++) {
+      const key = generateLicenseKey();
+      const body = key.slice(4); // exclude 'LIC-' prefix
+      expect(forbidden.test(body)).toBe(false);
+    }
+  });
+
+  it("should generate uniformly unique keys across multiple invocations", () => {
+    const keys = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      keys.add(generateLicenseKey());
+    }
+    expect(keys.size).toBe(100);
+  });
+});
+
