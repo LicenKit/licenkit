@@ -11,6 +11,12 @@ export async function deactivateCommand(): Promise<void> {
     return;
   }
 
+  if (!stored.machineId || !stored.machineToken) {
+    console.log(pc.yellow("Local license is missing machine credentials. Clearing local state."));
+    clearStoredLicense();
+    return;
+  }
+
   console.log(pc.cyan(`Deactivating license on server: ${stored.serverUrl}`));
   const fingerprint = await getMachineFingerprint();
 
@@ -18,7 +24,8 @@ export async function deactivateCommand(): Promise<void> {
     const res = await apiDeactivate({
       serverUrl: stored.serverUrl,
       accountId: stored.accountId,
-      licenseKey: stored.licenseKey,
+      machineId: stored.machineId,
+      machineToken: stored.machineToken,
       fingerprint,
     });
 

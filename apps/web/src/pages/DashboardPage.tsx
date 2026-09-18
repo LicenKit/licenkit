@@ -859,7 +859,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                     <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-500" />
                     <input
                       type="text"
-                      placeholder="Search by license key or customer email..."
+                      placeholder="Search by License ID, Key or customer email..."
                       value={licenseSearchQuery}
                       onChange={(e) => setLicenseSearchQuery(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
@@ -925,7 +925,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                   <table className="w-full text-left text-xs text-slate-300">
                     <thead className="bg-slate-950/60 border-b border-slate-800 uppercase tracking-wider text-[11px] text-slate-400">
                       <tr>
-                        <th className="py-3 px-4">License Key</th>
+                        <th className="py-3 px-4">License ID</th>
                         <th className="py-3 px-4">Customer</th>
                         <th className="py-3 px-4">Product & Policy</th>
                         <th className="py-3 px-4">Seats Occupied</th>
@@ -939,15 +939,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                         <tr key={lic.id} className="hover:bg-slate-800/30 transition-colors">
                           <td className="py-3.5 px-4 font-mono font-medium text-indigo-300">
                             <div className="flex items-center gap-1.5">
-                              <span>{lic.key}</span>
+                              <span title={lic.id}>{lic.id.slice(0, 12)}...</span>
                               <button
-                                onClick={() => handleCopyText(lic.key, lic.id)}
-                                title="Copy License Key"
+                                onClick={() => handleCopyText(lic.id, lic.id)}
+                                title="Copy License ID"
                                 className="text-slate-500 hover:text-slate-300"
                               >
                                 {copiedKey === lic.id ? (
                                   <Check className="w-3 h-3 text-emerald-400" />
-                               ) : (
+                                ) : (
                                   <Copy className="w-3 h-3" />
                                 )}
                               </button>

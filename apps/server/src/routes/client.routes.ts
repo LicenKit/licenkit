@@ -9,6 +9,10 @@ import {
   decryptEnvelope,
   signOfflineToken,
   getStorageEncryptionKey,
+  normalizeLicenseKey,
+  hashLicenseKey,
+  generateMachineToken,
+  hashMachineToken,
   type OfflineTokenHeader,
   type OfflineLicenseClaims,
   type OfflineTrialClaims,
@@ -147,11 +151,14 @@ clientRouter.post(
   const db = getTenantDB(c, input.account_id);
   const encKey = getStorageEncryptionKey(c.env);
 
-  // 1. Fetch license and linked policy
+  // 1. Fetch license and linked policy via pure SHA-256 hash
+  const normalizedKey = normalizeLicenseKey(input.license_key);
+  const targetHash = await hashLicenseKey(normalizedKey);
+
   const license = await db
     .select()
     .from(licenses)
-    .where(and(eq(licenses.accountId, input.account_id), eq(licenses.key, input.license_key)))
+    .where(and(eq(licenses.accountId, input.account_id), eq(licenses.keyHash, targetHash)))
     .get();
 
   if (!license) {
@@ -188,7 +195,11 @@ clientRouter.post(
     }, 200);
   }
 
-  // 2. Check if this machine is already activated
+  // 2. Generate new 256-bit Machine Token
+  const machineToken = generateMachineToken();
+  const tokenHash = await hashMachineToken(machineToken);
+
+  // Check if this machine is already activated
   const existingMachine = await db
     .select()
     .from(machines)
@@ -200,11 +211,13 @@ clientRouter.post(
   let isReused = false;
 
   if (existingMachine) {
-    // Update heartbeat and metadata
+    // Refresh machine token, heartbeat and metadata
     await db
       .update(machines)
       .set({
         lastHeartbeatAt: now,
+        updatedAt: now,
+        tokenHash,
         name: input.name || existingMachine.name,
         platform: input.platform || existingMachine.platform,
       })
@@ -237,14 +250,16 @@ clientRouter.post(
 
     try {
       const insertResult = await db.run(sql`
-        INSERT INTO machines (id, license_id, fingerprint, name, platform, ip, last_heartbeat_at, created_at)
+        INSERT INTO machines (id, license_id, fingerprint, token_hash, name, platform, ip, last_heartbeat_at, created_at, updated_at)
         SELECT
           ${machineId},
           ${license.id},
           ${input.fingerprint},
+          ${tokenHash},
           ${input.name || null},
           ${input.platform || null},
           ${clientIp},
+          ${now},
           ${now},
           ${now}
         WHERE (
@@ -290,6 +305,10 @@ clientRouter.post(
 
         if (concurrentMachine) {
           machineId = concurrentMachine.id;
+          await db
+            .update(machines)
+            .set({ tokenHash, lastHeartbeatAt: now, updatedAt: now })
+            .where(eq(machines.id, machineId));
           isReused = true;
         } else {
           throw err;
@@ -326,7 +345,7 @@ clientRouter.post(
     const claims: OfflineLicenseClaims = {
       typ: "license",
       lic_id: license.id,
-      sub: license.key,
+      sub: license.id,
       acc: input.account_id,
       prd: license.productId,
       pol: policy.id,
@@ -346,7 +365,6 @@ clientRouter.post(
     "client.activated",
     {
       licenseId: license.id,
-      key: license.key,
       machineId,
       fingerprint: input.fingerprint,
       platform: input.platform || null,
@@ -363,6 +381,7 @@ clientRouter.post(
       activated: true,
       reused: isReused,
       machine_id: machineId,
+      machine_token: machineToken,
       scheme: policy.scheme,
       token,
       token_expires_at: tokenExpiresTimestamp,
@@ -381,7 +400,8 @@ clientRouter.post(
 
 const ValidateSchema = z.object({
   account_id: z.string(),
-  license_key: z.string(),
+  machine_id: z.string(),
+  machine_token: z.string(),
   fingerprint: z.string().min(8),
 });
 
@@ -393,10 +413,34 @@ clientRouter.post("/validate", async (c) => {
   const db = getTenantDB(c, input.account_id);
   const encKey = getStorageEncryptionKey(c.env);
 
+  // 1. Direct O(1) primary key lookup on machines
+  const machine = await db
+    .select()
+    .from(machines)
+    .where(eq(machines.id, input.machine_id))
+    .get();
+
+  if (!machine) {
+    return c.json({
+      success: true,
+      data: { valid: false, reason: "MACHINE_NOT_FOUND" },
+    });
+  }
+
+  // 2. Validate token hash and machine hardware fingerprint
+  const incomingTokenHash = await hashMachineToken(input.machine_token);
+  if (incomingTokenHash !== machine.tokenHash || input.fingerprint !== machine.fingerprint) {
+    return c.json({
+      success: true,
+      data: { valid: false, reason: "UNAUTHORIZED_CREDENTIALS" },
+    });
+  }
+
+  // 3. Verify license status and tenant ownership
   const license = await db
     .select()
     .from(licenses)
-    .where(and(eq(licenses.accountId, input.account_id), eq(licenses.key, input.license_key)))
+    .where(and(eq(licenses.id, machine.licenseId), eq(licenses.accountId, input.account_id)))
     .get();
 
   if (!license || license.status !== "active") {
@@ -410,19 +454,6 @@ clientRouter.post("/validate", async (c) => {
     return c.json({
       success: true,
       data: { valid: false, reason: "LICENSE_EXPIRED" },
-    });
-  }
-
-  const machine = await db
-    .select()
-    .from(machines)
-    .where(and(eq(machines.licenseId, license.id), eq(machines.fingerprint, input.fingerprint)))
-    .get();
-
-  if (!machine) {
-    return c.json({
-      success: true,
-      data: { valid: false, reason: "MACHINE_NOT_ACTIVATED" },
     });
   }
 
@@ -441,7 +472,7 @@ clientRouter.post("/validate", async (c) => {
 
   // Update heartbeat
   const now = new Date().toISOString();
-  await db.update(machines).set({ lastHeartbeatAt: now }).where(eq(machines.id, machine.id));
+  await db.update(machines).set({ lastHeartbeatAt: now, updatedAt: now }).where(eq(machines.id, machine.id));
 
   // If Ed25519 scheme, refresh offline signed token with extended grace period
   let token: string | null = null;
@@ -466,7 +497,7 @@ clientRouter.post("/validate", async (c) => {
       const claims: OfflineLicenseClaims = {
         typ: "license",
         lic_id: license.id,
-        sub: license.key,
+        sub: license.id,
         acc: input.account_id,
         prd: license.productId,
         pol: policy.id,
@@ -501,7 +532,8 @@ clientRouter.post("/validate", async (c) => {
 
 const DeactivateSchema = z.object({
   account_id: z.string(),
-  license_key: z.string(),
+  machine_id: z.string(),
+  machine_token: z.string(),
   fingerprint: z.string().min(8),
 });
 
@@ -512,22 +544,45 @@ clientRouter.post("/deactivate", async (c) => {
 
   const db = getTenantDB(c, input.account_id);
 
+  // 1. Fetch machine record
+  const machine = await db
+    .select()
+    .from(machines)
+    .where(eq(machines.id, input.machine_id))
+    .get();
+
+  if (!machine) {
+    return c.json({
+      success: false,
+      error: { code: "MACHINE_NOT_FOUND", message: "Machine seat not found" },
+    }, 404);
+  }
+
+  // 2. Validate token hash and fingerprint (prevent unauthorized kicking)
+  const incomingTokenHash = await hashMachineToken(input.machine_token);
+  if (incomingTokenHash !== machine.tokenHash || input.fingerprint !== machine.fingerprint) {
+    return c.json({
+      success: false,
+      error: { code: "UNAUTHORIZED", message: "Invalid machine credentials or fingerprint" },
+    }, 401);
+  }
+
+  // 3. Verify tenant ownership
   const license = await db
     .select()
     .from(licenses)
-    .where(and(eq(licenses.accountId, input.account_id), eq(licenses.key, input.license_key)))
+    .where(and(eq(licenses.id, machine.licenseId), eq(licenses.accountId, input.account_id)))
     .get();
 
   if (!license) {
     return c.json({
       success: false,
-      error: { code: "LICENSE_NOT_FOUND", message: "License key not found" },
-    }, 200);
+      error: { code: "UNAUTHORIZED", message: "License does not belong to specified account" },
+    }, 401);
   }
 
-  await db
-    .delete(machines)
-    .where(and(eq(machines.licenseId, license.id), eq(machines.fingerprint, input.fingerprint)));
+  // 4. Delete machine seat
+  await db.delete(machines).where(eq(machines.id, machine.id));
 
   await broadcastOutboundEvent(
     c.env,
@@ -536,8 +591,8 @@ clientRouter.post("/deactivate", async (c) => {
     "client.deactivated",
     {
       licenseId: license.id,
-      key: license.key,
-      fingerprint: input.fingerprint,
+      machineId: machine.id,
+      fingerprint: machine.fingerprint,
     },
     license.productId
   );

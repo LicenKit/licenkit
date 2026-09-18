@@ -51,7 +51,24 @@ export async function broadcastOutboundEvent(
       data,
     };
 
+    function maskSensitiveKey(obj: any): any {
+      if (!obj || typeof obj !== "object") return obj;
+      if (Array.isArray(obj)) return obj.map(maskSensitiveKey);
+      const copy: Record<string, any> = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (k === "key" && typeof v === "string") {
+          copy[k] = v.length > 8 ? `${v.slice(0, 4)}...${v.slice(-4)}` : "[REDACTED]";
+        } else if (typeof v === "object" && v !== null) {
+          copy[k] = maskSensitiveKey(v);
+        } else {
+          copy[k] = v;
+        }
+      }
+      return copy;
+    }
+
     const payloadJson = JSON.stringify(eventPayload);
+    const storagePayloadJson = JSON.stringify(maskSensitiveKey(eventPayload));
 
     for (const ep of endpoints) {
       // Product filtering: if endpoint is restricted to a specific product and it doesn't match, skip
@@ -73,7 +90,7 @@ export async function broadcastOutboundEvent(
 
       const outboundRecordId = `evt_${ulid().toLowerCase()}`;
 
-      // 1. Record outbound delivery state
+      // 1. Record outbound delivery state with masked payload (zero plaintext key in database)
       await db.insert(webhookEvents).values({
         id: outboundRecordId,
         accountId,
@@ -81,13 +98,13 @@ export async function broadcastOutboundEvent(
         direction: "outbound",
         endpointId: ep.id,
         eventType,
-        payload: payloadJson,
+        payload: storagePayloadJson,
         status: "pending",
         attempts: 0,
         createdAt: now,
       });
 
-      // 2. Push message to Cloudflare EVENT_QUEUE
+      // 2. Push message to Cloudflare EVENT_QUEUE for external endpoint delivery
       await env.EVENT_QUEUE.send({
         eventId: outboundRecordId,
         endpointId: ep.id,

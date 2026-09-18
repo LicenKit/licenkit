@@ -465,6 +465,33 @@ export function generateLicenseKey(prefix = "LIC"): string {
   return `${prefix}-${body.slice(0, 6)}-${body.slice(6, 12)}-${body.slice(12, 18)}-${body.slice(18, 24)}-${body.slice(24)}`;
 }
 
+export async function sha256Hex(data: string | Uint8Array): Promise<string> {
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return bufferToHex(digest);
+}
+
+export function normalizeLicenseKey(rawKey: string): string {
+  return rawKey
+    .trim()
+    .toUpperCase()
+    .replace(/[-\s]/g, "");
+}
+
+export async function hashLicenseKey(cleanKey: string): Promise<string> {
+  return sha256Hex(normalizeLicenseKey(cleanKey));
+}
+
+export function generateMachineToken(): string {
+  const bytes = new Uint8Array(32); // 256 bits entropy
+  crypto.getRandomValues(bytes);
+  return `mct_${bufferToHex(bytes)}`;
+}
+
+export async function hashMachineToken(machineToken: string): Promise<string> {
+  return sha256Hex(machineToken);
+}
+
 // --- 5. Ed25519 Key Generation, Import, Signing & Verification ---
 export function stripPem(pemOrBase64: string): string {
   return pemOrBase64

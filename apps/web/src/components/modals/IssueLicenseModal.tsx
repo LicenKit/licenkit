@@ -29,9 +29,11 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
 
   // Result state
   const [issuedLicense, setIssuedLicense] = useState<{
+    id: string;
     key: string;
     customerEmail?: string | null;
     expiresAt: string | null;
+    createdAt?: string;
   } | null>(null);
 
   const [issuedBatch, setIssuedBatch] = useState<{
@@ -67,6 +69,34 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
   }, [productId, policies]);
 
   if (!isOpen) return null;
+
+  const downloadSingleTxt = (lic: { id: string; key: string; customerEmail?: string | null; expiresAt?: string | null; createdAt?: string }) => {
+    const prodName = products.find((p) => p.id === productId)?.name || "Unknown Product";
+    const polName = policies.find((p) => p.id === policyId)?.name || "Unknown Policy";
+    const issuedDate = lic.createdAt ? new Date(lic.createdAt).toISOString() : new Date().toISOString();
+    const expiresText = lic.expiresAt ? new Date(lic.expiresAt).toISOString() : "Perpetual";
+
+    const content = `LicenKit License Key
+====================
+Key:        ${lic.key}
+Product:    ${prodName}
+Policy:     ${polName}
+Customer:   ${lic.customerEmail || "Unassigned"}
+Issued At:  ${issuedDate}
+Expires:    ${expiresText}
+
+IMPORTANT: Store this key securely. LicenKit does NOT store the plaintext key and it cannot be retrieved again.
+`;
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `licenkit-key-${lic.id}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const downloadBatchCsv = (items: any[], batchId: string) => {
     const headers = ["License Key", "Product", "Policy", "Customer Email", "Status", "Expires At", "Created At"];
@@ -114,6 +144,7 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
         });
 
         setIssuedLicense(res);
+        downloadSingleTxt(res);
         onSuccess();
       } else {
         const res = await api.licenses.batchIssue({
@@ -234,10 +265,29 @@ export const IssueLicenseModal: React.FC<IssueLicenseModalProps> = ({
                 )}
               </div>
 
+              {/* Warning Alert */}
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                <div className="leading-relaxed">
+                  <span className="font-semibold text-amber-200">重要安全提示：</span>
+                  数据库不留存激活码明文，凭据文件（.txt）已自动触发下载，请妥善保管或立即复制。关闭此弹窗后将无法再次查看该激活码明文。
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                  License Key
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                    License Key
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => downloadSingleTxt(issuedLicense)}
+                    className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 font-medium"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download .txt Again</span>
+                  </button>
+                </div>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"

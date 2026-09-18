@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { app } from "../src/index";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
-import { encryptEnvelope, generateEd25519KeyPair } from "../src/infra/crypto";
+import { encryptEnvelope, generateEd25519KeyPair, hashLicenseKey, normalizeLicenseKey } from "../src/infra/crypto";
 import * as schema from "../src/infra/db/schema";
 import { drizzle } from "drizzle-orm/d1";
 import { eq } from "drizzle-orm";
@@ -90,12 +90,13 @@ describe("Client Activation Concurrency & Atomic Seat Over-allocation Prevention
     });
 
     // 6. Seed License
+    const keyHash = await hashLicenseKey(normalizeLicenseKey(licenseKey));
     await db.insert(schema.licenses).values({
       id: licenseId,
       accountId,
       productId,
       policyId,
-      key: licenseKey,
+      keyHash,
       customerEmail: "user@example.com",
       status: "active",
       createdAt: now,
@@ -121,12 +122,15 @@ describe("Client Activation Concurrency & Atomic Seat Over-allocation Prevention
     expect(body.success).toBe(true);
     expect(body.data.activated).toBe(true);
     expect(body.data.machine_id).toBeDefined();
+    expect(body.data.machine_token).toBeDefined();
+    expect(body.data.machine_token).toMatch(/^mct_[0-9a-f]{64}$/);
     expect(body.data.token).toBeDefined();
     expect(body.data.policy.features).toEqual(["pro", "export"]);
 
     const rows = await db.select().from(schema.machines).where(eq(schema.machines.licenseId, licenseId)).all();
     expect(rows.length).toBe(1);
     expect(rows[0].fingerprint).toBe("fp_machine_alpha_01");
+    expect(rows[0].tokenHash).toBeDefined();
   });
 
   it("should enforce seat limit sequentially when maxMachines is reached", async () => {
@@ -235,5 +239,198 @@ describe("Client Activation Concurrency & Atomic Seat Over-allocation Prevention
     const rows = await db.select().from(schema.machines).where(eq(schema.machines.licenseId, licenseId)).all();
     expect(rows.length).toBe(1);
     expect(rows[0].fingerprint).toBe(identicalFingerprint);
+  });
+
+  it("should validate heartbeat with machine credentials and reject unauthorized attempts", async () => {
+    // 1. Activate machine
+    const actRes = await app.request("/api/v1/client/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        license_key: licenseKey,
+        fingerprint: "fp_validate_test_01",
+        name: "Heartbeat Device",
+      }),
+    }, testEnv.env);
+
+    const actBody = (await actRes.json()) as any;
+    expect(actBody.success).toBe(true);
+    const { machine_id, machine_token } = actBody.data;
+
+    // 2. Validate with correct credentials
+    const valRes = await app.request("/api/v1/client/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        machine_id,
+        machine_token,
+        fingerprint: "fp_validate_test_01",
+      }),
+    }, testEnv.env);
+
+    expect(valRes.status).toBe(200);
+    const valBody = (await valRes.json()) as any;
+    expect(valBody.success).toBe(true);
+    expect(valBody.data.valid).toBe(true);
+
+    // 3. Reject validation with incorrect machine_token
+    const wrongTokenRes = await app.request("/api/v1/client/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        machine_id,
+        machine_token: "mct_0000000000000000000000000000000000000000000000000000000000000000",
+        fingerprint: "fp_validate_test_01",
+      }),
+    }, testEnv.env);
+    expect(wrongTokenRes.status).toBe(200);
+    const wrongTokenBody = (await wrongTokenRes.json()) as any;
+    expect(wrongTokenBody.data.valid).toBe(false);
+    expect(wrongTokenBody.data.reason).toBe("UNAUTHORIZED_CREDENTIALS");
+
+    // 4. Reject validation with mismatched fingerprint
+    const wrongFpRes = await app.request("/api/v1/client/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        machine_id,
+        machine_token,
+        fingerprint: "fp_tampered_hardware",
+      }),
+    }, testEnv.env);
+    expect(wrongFpRes.status).toBe(200);
+    const wrongFpBody = (await wrongFpRes.json()) as any;
+    expect(wrongFpBody.data.valid).toBe(false);
+    expect(wrongFpBody.data.reason).toBe("UNAUTHORIZED_CREDENTIALS");
+
+    // 5. Reject validation with mismatched account_id
+    const wrongAccRes = await app.request("/api/v1/client/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: "acc_malicious_attacker",
+        machine_id,
+        machine_token,
+        fingerprint: "fp_validate_test_01",
+      }),
+    }, testEnv.env);
+    expect(wrongAccRes.status).toBe(200);
+    const wrongAccBody = (await wrongAccRes.json()) as any;
+    expect(wrongAccBody.data.valid).toBe(false);
+    expect(wrongAccBody.data.reason).toBe("LICENSE_INVALID_OR_REVOKED");
+  });
+
+  it("should deactivate seat with strict credential checks and free the occupied seat", async () => {
+    // 1. Fill all 2 seats
+    const actRes1 = await app.request("/api/v1/client/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        license_key: licenseKey,
+        fingerprint: "fp_deact_seat_1",
+      }),
+    }, testEnv.env);
+    const actBody1 = (await actRes1.json()) as any;
+    const machine1 = actBody1.data;
+
+    const actRes2 = await app.request("/api/v1/client/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        license_key: licenseKey,
+        fingerprint: "fp_deact_seat_2",
+      }),
+    }, testEnv.env);
+    expect(((await actRes2.json()) as any).success).toBe(true);
+
+    // 3rd activation fails because seats are full
+    const actRes3Fail = await app.request("/api/v1/client/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        license_key: licenseKey,
+        fingerprint: "fp_deact_seat_3",
+      }),
+    }, testEnv.env);
+    expect(((await actRes3Fail.json()) as any).success).toBe(false);
+
+    // 2. Reject deactivation when account_id is mismatched (cross-account kick attack prevention)
+    const deactWrongAcc = await app.request("/api/v1/client/deactivate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: "acc_other_org",
+        machine_id: machine1.machine_id,
+        machine_token: machine1.machine_token,
+        fingerprint: "fp_deact_seat_1",
+      }),
+    }, testEnv.env);
+    expect(deactWrongAcc.status).toBe(401);
+
+    // 3. Reject deactivation when fingerprint is mismatched (token-leak kick attack prevention)
+    const deactWrongFp = await app.request("/api/v1/client/deactivate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        machine_id: machine1.machine_id,
+        machine_token: machine1.machine_token,
+        fingerprint: "fp_attacker_hardware",
+      }),
+    }, testEnv.env);
+    expect(deactWrongFp.status).toBe(401);
+
+    // 4. Reject deactivation with invalid machine_token
+    const deactWrongToken = await app.request("/api/v1/client/deactivate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        machine_id: machine1.machine_id,
+        machine_token: "invalid_machine_token_hash_mismatch",
+        fingerprint: "fp_deact_seat_1",
+      }),
+    }, testEnv.env);
+    expect(deactWrongToken.status).toBe(401);
+
+    // 5. Successful deactivation with all correct credentials
+    const deactSuccess = await app.request("/api/v1/client/deactivate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        machine_id: machine1.machine_id,
+        machine_token: machine1.machine_token,
+        fingerprint: "fp_deact_seat_1",
+      }),
+    }, testEnv.env);
+    expect(deactSuccess.status).toBe(200);
+    const deactSuccessBody = (await deactSuccess.json()) as any;
+    expect(deactSuccessBody.success).toBe(true);
+    expect(deactSuccessBody.data.deactivated).toBe(true);
+
+    // Verify machine is deleted from database
+    const macInDb = await db.select().from(schema.machines).where(eq(schema.machines.id, machine1.machine_id)).get();
+    expect(macInDb).toBeUndefined();
+
+    // 6. Now 3rd device can successfully activate since a seat was freed!
+    const actRes3Success = await app.request("/api/v1/client/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: accountId,
+        license_key: licenseKey,
+        fingerprint: "fp_deact_seat_3",
+      }),
+    }, testEnv.env);
+    expect(actRes3Success.status).toBe(200);
+    expect(((await actRes3Success.json()) as any).success).toBe(true);
   });
 });

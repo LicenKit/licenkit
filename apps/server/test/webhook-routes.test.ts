@@ -165,10 +165,8 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
       expect(issuedLicense).toBeDefined();
       expect(issuedLicense.customerEmail).toBe("paddle_buyer@example.com");
       expect(issuedLicense.policyId).toBe("pol_paddle_monthly");
-      expect(issuedLicense.status).toBe("active");
-      expect(issuedLicense.key).toMatch(
-        /^LIC-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{2}$/
-      );
+      expect(issuedLicense.keyHash).toMatch(/^[0-9a-f]{64}$/);
+      expect((issuedLicense as any).key).toBeUndefined();
 
       // Verify Outbound Broadcast was pushed to queue
       expect(testEnv.sentQueueMessages.length).toBeGreaterThan(0);
@@ -239,7 +237,7 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
         accountId,
         productId,
         policyId: "pol_paddle_monthly",
-        key: "LIC-TEST-CANCEL-0001",
+        keyHash: "hash_pad_cancel",
         customerEmail: "subscriber@example.com",
         status: "active",
         metadata: JSON.stringify({ external_subscription_id: "sub_pad_cancel_me" }),
@@ -340,7 +338,7 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
         accountId,
         productId,
         policyId: "pol_stripe_annual",
-        key: "LIC-STRIPE-SUB-0001",
+        keyHash: "hash_stripe_sub",
         customerEmail: "sub_deleted@example.com",
         status: "active",
         metadata: JSON.stringify({ external_subscription_id: "sub_stripe_del_99" }),
@@ -499,7 +497,7 @@ describe("Payment Webhook Routes - Inbound Fulfillment & Idempotency", () => {
         accountId,
         productId,
         policyId: "pol_lemon_tier",
-        key: "LIC-LEMON-SUB-0001",
+        keyHash: "hash_lemon_sub",
         customerEmail: "lemon_sub_cancel@example.com",
         status: "active",
         metadata: JSON.stringify({ external_subscription_id: "lemon_sub_9988" }),

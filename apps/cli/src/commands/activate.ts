@@ -70,10 +70,10 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       serverUrl,
       accountId,
       productId,
-      licenseKey: licenseKey.trim(),
+      machineId: result.machine_id,
+      machineToken: result.machine_token,
       token: result.token || "",
       publicKey,
-      machineId: result.machine_id,
       activatedAt: nowIso,
       lastValidatedAt: nowIso,
       tokenExpiresAt: result.token_expires_at || undefined,
@@ -91,8 +91,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     saveStoredLicense(storedData);
 
     console.log();
-    console.log(pc.bold(pc.green("✔ License activated successfully!")));
-    console.log(`  ${pc.gray("Key:")}             ${pc.bold(licenseKey)}`);
+    console.log(pc.bold(pc.green("✔ License activated successfully! (Machine credential saved, License Key discarded from disk)")));
     console.log(`  ${pc.gray("Machine Seat ID:")} ${result.machine_id} ${result.reused ? pc.yellow("(Seat Reused)") : pc.green("(New Seat)")}`);
     console.log(`  ${pc.gray("Fingerprint:")}     ${fingerprint}`);
     console.log(`  ${pc.gray("Policy:")}          ${result.policy?.name}`);

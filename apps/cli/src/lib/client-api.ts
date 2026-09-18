@@ -62,6 +62,7 @@ export interface ActivateResponse {
   activated: boolean;
   reused: boolean;
   machine_id: string;
+  machine_token: string;
   scheme: string;
   token: string | null;
   token_expires_at: number | string | null;
@@ -92,7 +93,8 @@ export async function apiActivate(params: ActivateParams): Promise<ActivateRespo
 export interface ValidateParams {
   serverUrl: string;
   accountId: string;
-  licenseKey: string;
+  machineId: string;
+  machineToken: string;
   fingerprint: string;
 }
 
@@ -114,7 +116,8 @@ export async function apiValidate(params: ValidateParams): Promise<ValidateRespo
     method: "POST",
     body: JSON.stringify({
       account_id: params.accountId,
-      license_key: params.licenseKey,
+      machine_id: params.machineId,
+      machine_token: params.machineToken,
       fingerprint: params.fingerprint,
     }),
   });
@@ -123,7 +126,8 @@ export async function apiValidate(params: ValidateParams): Promise<ValidateRespo
 export interface DeactivateParams {
   serverUrl: string;
   accountId: string;
-  licenseKey: string;
+  machineId: string;
+  machineToken: string;
   fingerprint: string;
 }
 
@@ -137,7 +141,8 @@ export async function apiDeactivate(params: DeactivateParams): Promise<Deactivat
     method: "POST",
     body: JSON.stringify({
       account_id: params.accountId,
-      license_key: params.licenseKey,
+      machine_id: params.machineId,
+      machine_token: params.machineToken,
       fingerprint: params.fingerprint,
     }),
   });

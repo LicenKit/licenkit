@@ -9,6 +9,11 @@ import {
   signOfflineToken,
   verifyOfflineToken,
   generateLicenseKey,
+  sha256Hex,
+  normalizeLicenseKey,
+  hashLicenseKey,
+  generateMachineToken,
+  hashMachineToken,
   base64ToBuffer,
   bufferToBase64,
   base64UrlToJson,
@@ -300,4 +305,38 @@ describe("WebCrypto Infrastructure - License Key Generation (Crockford Base32 13
     expect(keys.size).toBe(100);
   });
 });
+
+describe("WebCrypto Infrastructure - License Key Hashing & Machine Token Utilities", () => {
+  it("normalizeLicenseKey should uppercase, strip spaces and hyphens", () => {
+    expect(normalizeLicenseKey("lic-abcd-1234-efgh-5678-jk")).toBe("LICABCD1234EFGH5678JK");
+    expect(normalizeLicenseKey("  lic-abcd-1234  ")).toBe("LICABCD1234");
+    expect(normalizeLicenseKey("lic_abcd 1234")).toBe("LIC_ABCD1234");
+  });
+
+  it("hashLicenseKey should produce consistent 64-char hex SHA-256 hash regardless of formatting", async () => {
+    const raw = "LIC-234567-ABCDEF-GHJKMN-PQRSTV-WX";
+    const formattedWithSpaces = " lic-234567-abcdef-ghjkmn-pqrstv-wx ";
+    const hash1 = await hashLicenseKey(raw);
+    const hash2 = await hashLicenseKey(formattedWithSpaces);
+
+    expect(hash1).toMatch(/^[0-9a-f]{64}$/);
+    expect(hash1).toBe(hash2);
+  });
+
+  it("generateMachineToken and hashMachineToken should generate CSPRNG 256-bit token and matching hash", async () => {
+    const token = generateMachineToken();
+    expect(token).toMatch(/^mct_[0-9a-f]{64}$/);
+
+    const tokenHash = await hashMachineToken(token);
+    expect(tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(tokenHash).not.toBe(token);
+
+    const tokenHash2 = await hashMachineToken(token);
+    expect(tokenHash2).toBe(tokenHash);
+
+    const token2 = generateMachineToken();
+    expect(token2).not.toBe(token);
+  });
+});
+
 

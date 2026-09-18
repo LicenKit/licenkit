@@ -79,6 +79,9 @@ describe("Admin Audit Logs Service & API (M02.7)", () => {
     const rawData = {
       username: "admin",
       password: "SuperSecretPassword123!",
+      key: "LIC-SECRET-KEY",
+      license_key: "LIC-ANOTHER-KEY",
+      machine_token: "mt_token_12345",
       nested: {
         privateKey: "-----BEGIN PRIVATE KEY-----...",
         key_material: "raw_bytes_here",
@@ -90,6 +93,9 @@ describe("Admin Audit Logs Service & API (M02.7)", () => {
     const sanitized = redactSensitiveData(rawData);
     expect(sanitized.username).toBe("admin");
     expect(sanitized.password).toBe("[REDACTED]");
+    expect(sanitized.key).toBe("[REDACTED]");
+    expect(sanitized.license_key).toBe("[REDACTED]");
+    expect(sanitized.machine_token).toBe("[REDACTED]");
     expect(sanitized.nested.privateKey).toBe("[REDACTED]");
     expect(sanitized.nested.key_material).toBe("[REDACTED]");
     expect(sanitized.nested.safeValue).toBe("ok_to_read");
@@ -233,6 +239,8 @@ describe("Admin Audit Logs Service & API (M02.7)", () => {
 
     expect(licLogs.length).toBe(1);
     expect(licLogs[0].action).toBe("license.create");
+    const licDetails = JSON.parse(licLogs[0].details);
+    expect(licDetails.key).toBeUndefined();
 
     // 4. Revoke License
     const revokeRes = await app.request(

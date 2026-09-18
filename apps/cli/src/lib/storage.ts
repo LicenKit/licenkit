@@ -6,10 +6,10 @@ export interface StoredLicenseData {
   serverUrl: string;
   accountId: string;
   productId?: string;
-  licenseKey: string;
+  machineId: string;
+  machineToken: string;
   token: string;
   publicKey?: string;
-  machineId?: string;
   activatedAt?: string;
   lastValidatedAt?: string;
   tokenExpiresAt?: string | number;

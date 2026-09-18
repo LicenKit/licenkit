@@ -5,7 +5,7 @@ import { eq, and, desc, sql, like, or } from "drizzle-orm";
 import type { AppContext } from "../../types";
 import { getTenantDB } from "../../infra/db";
 import { licenses, policies, machines, products } from "../../infra/db/schema";
-import { generateLicenseKey } from "../../infra/crypto";
+import { generateLicenseKey, normalizeLicenseKey, hashLicenseKey } from "../../infra/crypto";
 import { broadcastOutboundEvent } from "../../infra/events/broadcast";
 import { requireRole } from "../../middleware/auth";
 import { NotFoundError, AppError, ConflictError } from "../../middleware/error";
@@ -25,7 +25,8 @@ function formatLicense(l: any) {
     maxMachines: l.maxMachines || 1,
     machinesCount: l.machinesCount || 0,
     scheme: l.scheme,
-    key: l.key,
+    keyHash: l.keyHash,
+    key: l.key || null,
     customerEmail: l.customerEmail,
     source: l.source || "manual",
     status: l.status,
@@ -62,8 +63,11 @@ adminLicensesRouter.get("/", async (c) => {
   if (source && source !== "all") conditions.push(eq(licenses.source, source));
   if (customerEmail) conditions.push(eq(licenses.customerEmail, customerEmail.toLowerCase().trim()));
   if (search) {
-    const term = `%${search.trim()}%`;
-    conditions.push(or(like(licenses.key, term), like(licenses.customerEmail, term))!);
+    const trimmed = search.trim();
+    const term = `%${trimmed}%`;
+    const normalized = normalizeLicenseKey(trimmed);
+    const hashed = await hashLicenseKey(normalized);
+    conditions.push(or(like(licenses.id, term), like(licenses.customerEmail, term), eq(licenses.keyHash, hashed))!);
   }
   if (seatStatus === "unused") {
     conditions.push(sql`NOT EXISTS (SELECT 1 FROM machines WHERE machines.license_id = ${licenses.id})`);
@@ -92,7 +96,7 @@ adminLicensesRouter.get("/", async (c) => {
       policyName: policies.name,
       maxMachines: policies.maxMachines,
       scheme: policies.scheme,
-      key: licenses.key,
+      keyHash: licenses.keyHash,
       customerEmail: licenses.customerEmail,
       source: licenses.source,
       status: licenses.status,
@@ -161,8 +165,11 @@ adminLicensesRouter.get("/export", async (c) => {
   if (source && source !== "all") conditions.push(eq(licenses.source, source));
   if (customerEmail) conditions.push(eq(licenses.customerEmail, customerEmail.toLowerCase().trim()));
   if (search) {
-    const term = `%${search.trim()}%`;
-    conditions.push(or(like(licenses.key, term), like(licenses.customerEmail, term))!);
+    const trimmed = search.trim();
+    const term = `%${trimmed}%`;
+    const normalized = normalizeLicenseKey(trimmed);
+    const hashed = await hashLicenseKey(normalized);
+    conditions.push(or(like(licenses.id, term), like(licenses.customerEmail, term), eq(licenses.keyHash, hashed))!);
   }
   if (seatStatus === "unused") {
     conditions.push(sql`NOT EXISTS (SELECT 1 FROM machines WHERE machines.license_id = ${licenses.id})`);
@@ -175,7 +182,7 @@ adminLicensesRouter.get("/export", async (c) => {
   const list = await db
     .select({
       id: licenses.id,
-      key: licenses.key,
+      keyHash: licenses.keyHash,
       customerEmail: licenses.customerEmail,
       source: licenses.source,
       status: licenses.status,
@@ -195,7 +202,8 @@ adminLicensesRouter.get("/export", async (c) => {
     .all();
 
   const headers = [
-    "License Key",
+    "License ID",
+    "Key Hash",
     "Product",
     "Policy",
     "Customer Email",
@@ -209,7 +217,8 @@ adminLicensesRouter.get("/export", async (c) => {
   ];
 
   const rows = list.map((item) => [
-    escapeCsvCell(item.key),
+    escapeCsvCell(item.id),
+    escapeCsvCell(item.keyHash),
     escapeCsvCell(item.productName || ""),
     escapeCsvCell(item.policyName || ""),
     escapeCsvCell(item.customerEmail || ""),
@@ -355,6 +364,7 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin", "member"]), async (
 
   const licenseId = `lic_${ulid().toLowerCase()}`;
   const key = generateLicenseKey();
+  const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
   const now = new Date();
 
   let expiresAt: string | null = null;
@@ -372,7 +382,7 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin", "member"]), async (
       accountId,
       productId: input.productId,
       policyId: input.policyId,
-      key,
+      keyHash,
       customerEmail: email,
       source: "manual",
       status: "active",
@@ -386,7 +396,7 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin", "member"]), async (
     if (err?.message?.includes("UNIQUE") || err?.message?.includes("constraint")) {
       throw new ConflictError(
         "KEY_EXISTS",
-        `License key "${key}" already exists. Please choose another key or leave blank to auto-generate.`
+        "A generated license key collision occurred. Please try again."
       );
     }
     throw err;
@@ -415,7 +425,6 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin", "member"]), async (
     resourceType: "license",
     resourceId: licenseId,
     details: {
-      key,
       customerEmail: email,
       productId: input.productId,
       policyId: input.policyId,
@@ -524,15 +533,17 @@ adminLicensesRouter.post("/batch", requireRole(["owner", "admin", "member"]), as
   const email = input.customerEmail ? input.customerEmail.toLowerCase().trim() : null;
 
   const newLicenses: any[] = [];
+  const clientResponseItems: any[] = [];
   for (let i = 0; i < actualCount; i++) {
     const licenseId = `lic_${ulid().toLowerCase()}`;
     const key = generateLicenseKey();
+    const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
     newLicenses.push({
       id: licenseId,
       accountId,
       productId: input.productId,
       policyId: input.policyId,
-      key,
+      keyHash,
       customerEmail: email,
       source: "manual",
       status: "active",
@@ -545,11 +556,33 @@ adminLicensesRouter.post("/batch", requireRole(["owner", "admin", "member"]), as
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     });
+    clientResponseItems.push({
+      id: licenseId,
+      accountId,
+      productId: input.productId,
+      productName: product.name,
+      policyId: input.policyId,
+      policyName: policy.name,
+      maxMachines: policy.maxMachines,
+      scheme: policy.scheme,
+      keyHash,
+      key, // returned once for immediate download
+      customerEmail: email,
+      source: "manual",
+      status: "active",
+      revokeReason: null,
+      metadata: { ...(input.metadata || {}), batchId },
+      expiresAt,
+      suspendedAt: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      machinesCount: 0,
+    });
   }
 
   await db.insert(licenses).values(newLicenses);
 
-  for (const lic of newLicenses) {
+  for (const lic of clientResponseItems) {
     await broadcastOutboundEvent(
       c.env,
       db,
@@ -587,16 +620,7 @@ adminLicensesRouter.post("/batch", requireRole(["owner", "admin", "member"]), as
     {
       success: true,
       data: {
-        items: newLicenses.map((l) =>
-          formatLicense({
-            ...l,
-            productName: product.name,
-            policyName: policy.name,
-            maxMachines: policy.maxMachines,
-            scheme: policy.scheme,
-            machinesCount: 0,
-          })
-        ),
+        items: clientResponseItems.map(formatLicense),
         batchId,
         requestedCount: input.count,
         actualCount,
@@ -627,7 +651,7 @@ adminLicensesRouter.get("/:id", async (c) => {
       policyName: policies.name,
       maxMachines: policies.maxMachines,
       scheme: policies.scheme,
-      key: licenses.key,
+      keyHash: licenses.keyHash,
       customerEmail: licenses.customerEmail,
       source: licenses.source,
       status: licenses.status,
@@ -744,7 +768,6 @@ adminLicensesRouter.patch("/:id", requireRole(["owner", "admin", "member"]), asy
     eventType,
     {
       id: license.id,
-      key: license.key,
       productId: license.productId,
       status: input.status || license.status,
       expiresAt: input.expiresAt !== undefined ? input.expiresAt : license.expiresAt,
@@ -758,7 +781,6 @@ adminLicensesRouter.patch("/:id", requireRole(["owner", "admin", "member"]), asy
     resourceType: "license",
     resourceId: id,
     details: {
-      key: license.key,
       status: input.status || license.status,
       expiresAt: input.expiresAt,
     },
@@ -788,12 +810,13 @@ adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin", "memb
   }
 
   const newKey = generateLicenseKey();
+  const keyHash = await hashLicenseKey(normalizeLicenseKey(newKey));
 
-  // Atomically update key and clear all machine seat bindings
+  // Atomically update keyHash and clear all machine seat bindings
   await db.batch([
     db
       .update(licenses)
-      .set({ key: newKey, updatedAt: now })
+      .set({ keyHash, updatedAt: now })
       .where(and(eq(licenses.id, id), eq(licenses.accountId, accountId))),
     db.delete(machines).where(eq(machines.licenseId, id)),
   ]);
@@ -804,8 +827,7 @@ adminLicensesRouter.post("/:id/rotate-key", requireRole(["owner", "admin", "memb
     resourceType: "license",
     resourceId: id,
     details: {
-      oldKey: license.key,
-      newKey,
+      rotatedAt: now,
     },
   });
 
@@ -860,7 +882,6 @@ adminLicensesRouter.post("/:id/revoke", requireRole(["owner", "admin", "member"]
     "license.revoked",
     {
       id: license.id,
-      key: license.key,
       productId: license.productId,
       status: "revoked",
       revokeReason: reason,
@@ -874,7 +895,6 @@ adminLicensesRouter.post("/:id/revoke", requireRole(["owner", "admin", "member"]
     resourceType: "license",
     resourceId: id,
     details: {
-      key: license.key,
       productId: license.productId,
       revokeReason: reason,
     },
@@ -915,7 +935,6 @@ adminLicensesRouter.post("/:id/suspend", requireRole(["owner", "admin", "member"
     "license.suspended",
     {
       id: license.id,
-      key: license.key,
       productId: license.productId,
       status: "suspended",
     },
@@ -928,7 +947,7 @@ adminLicensesRouter.post("/:id/suspend", requireRole(["owner", "admin", "member"
     resourceType: "license",
     resourceId: id,
     details: {
-      key: license.key,
+      suspendedAt: now,
     },
   });
 
@@ -967,7 +986,6 @@ adminLicensesRouter.post("/:id/reinstate", requireRole(["owner", "admin", "membe
     "license.updated",
     {
       id: license.id,
-      key: license.key,
       productId: license.productId,
       status: "active",
     },
@@ -980,7 +998,7 @@ adminLicensesRouter.post("/:id/reinstate", requireRole(["owner", "admin", "membe
     resourceType: "license",
     resourceId: id,
     details: {
-      key: license.key,
+      reinstatedAt: now,
     },
   });
 
@@ -1026,7 +1044,6 @@ adminLicensesRouter.delete("/:id/machines/:machineId", requireRole(["owner", "ad
       "client.deactivated",
       {
         licenseId: license.id,
-        key: license.key,
         machineId: machine.id,
         fingerprint: machine.fingerprint,
       },

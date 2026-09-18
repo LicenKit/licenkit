@@ -197,7 +197,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
         accountId,
         productId,
         policyId,
-        key: `LIC-SEED-0000-0000-${String(i).padStart(4, "0")}`,
+        keyHash: `hash_seed_${i}`,
         customerEmail: null,
         source: "manual",
         status: "active",
@@ -268,8 +268,10 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       id: "mac_test_01",
       licenseId: "lic_seed_0",
       fingerprint: "hw_fingerprint_0001",
+      tokenHash: "mock_token_hash",
       lastHeartbeatAt: now,
       createdAt: now,
+      updatedAt: now,
     });
 
     // Now requesting 1 license should succeed again!
@@ -338,7 +340,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       accountId,
       productId,
       policyId,
-      key: "LIC-OLDD-UNUS-0000-0001",
+      keyHash: "hash_old_unused",
       customerEmail: null,
       source: "manual",
       status: "active",
@@ -355,7 +357,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       accountId,
       productId,
       policyId,
-      key: "LIC-THRS-UNUS-0000-0004",
+      keyHash: "hash_thrs_unused",
       customerEmail: null,
       source: "manual",
       status: "active",
@@ -369,7 +371,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       accountId,
       productId,
       policyId,
-      key: "LIC-OLDD-USED-0000-0002",
+      keyHash: "hash_old_used",
       customerEmail: null,
       source: "manual",
       status: "active",
@@ -380,8 +382,10 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       id: "mac_seat_for_old",
       licenseId: "lic_old_used",
       fingerprint: "hw_fingerprint_old_used",
+      tokenHash: "mock_token_hash",
       lastHeartbeatAt: thirtyFiveDaysAgo,
       createdAt: thirtyFiveDaysAgo,
+      updatedAt: thirtyFiveDaysAgo,
     });
 
     // 3. Recent unused license (10d ago) -> should NOT be revoked
@@ -390,7 +394,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       accountId,
       productId,
       policyId,
-      key: "LIC-RECN-UNUS-0000-0003",
+      keyHash: "hash_recn_unused",
       customerEmail: null,
       source: "manual",
       status: "active",
@@ -428,7 +432,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
         accountId,
         productId,
         policyId,
-        key: "LIC-CSVE-UNUS-0000-0001",
+        keyHash: "hash_csve_unused",
         customerEmail: "unused@example.com",
         source: "manual",
         status: "active",
@@ -440,7 +444,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
         accountId,
         productId,
         policyId,
-        key: "LIC-CSVE-USED-0000-0002",
+        keyHash: "hash_csve_used",
         customerEmail: "used@example.com",
         source: "manual",
         status: "active",
@@ -453,8 +457,10 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       id: "mac_for_csv_used",
       licenseId: "lic_csv_used",
       fingerprint: "hw_fingerprint_csv",
+      tokenHash: "mock_token_hash",
       lastHeartbeatAt: now,
       createdAt: now,
+      updatedAt: now,
     });
 
     // 1. Export all
@@ -468,8 +474,10 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
     expect(resAll.status).toBe(200);
     expect(resAll.headers.get("content-type")).toContain("text/csv");
     const csvAll = await resAll.text();
-    expect(csvAll).toContain("LIC-CSVE-UNUS-0000-0001");
-    expect(csvAll).toContain("LIC-CSVE-USED-0000-0002");
+    expect(csvAll).toContain("lic_csv_unused");
+    expect(csvAll).toContain("lic_csv_used");
+    expect(csvAll).toContain("hash_csve_unused");
+    expect(csvAll).toContain("hash_csve_used");
 
     // 2. Export only unused
     const resUnused = await app.request("/api/v1/admin/licenses/export?seatStatus=unused", {
@@ -481,8 +489,8 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
 
     expect(resUnused.status).toBe(200);
     const csvUnused = await resUnused.text();
-    expect(csvUnused).toContain("LIC-CSVE-UNUS-0000-0001");
-    expect(csvUnused).not.toContain("LIC-CSVE-USED-0000-0002");
+    expect(csvUnused).toContain("lic_csv_unused");
+    expect(csvUnused).not.toContain("lic_csv_used");
   });
 
   it("should properly escape CSV cells and protect against CSV Formula Injection", () => {
@@ -512,7 +520,7 @@ describe("M05.8 Batch License Issuance, Quota Truncation & 30-Day Auto-Revoke Te
       accountId,
       productId,
       policyId,
-      key: "LIC-FORM-INJC-0000-0005",
+      keyHash: "hash_form_injc",
       customerEmail: "=cmd|' /C calc'!A0@example.com",
       source: "manual",
       status: "active",

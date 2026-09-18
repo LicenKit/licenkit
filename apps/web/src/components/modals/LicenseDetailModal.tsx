@@ -13,6 +13,8 @@ import {
   AlertTriangle,
   Loader2,
   Trash2,
+  Download,
+  Sparkles,
 } from "lucide-react";
 
 interface LicenseDetailModalProps {
@@ -34,7 +36,9 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<any>(null);
-  const [copiedKey, setCopiedKey] = useState(false);
+  const [copiedHash, setCopiedHash] = useState(false);
+  const [rotatedNewKey, setRotatedNewKey] = useState<string | null>(null);
+  const [copiedRotatedKey, setCopiedRotatedKey] = useState(false);
 
   // Extend expiration state
   const [isEditingExpiry, setIsEditingExpiry] = useState(false);
@@ -47,6 +51,7 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
       setData(null);
       setError(null);
       setIsEditingExpiry(false);
+      setRotatedNewKey(null);
     }
   }, [isOpen, licenseId]);
 
@@ -72,11 +77,35 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
 
   if (!isOpen || !licenseId) return null;
 
-  const handleCopyKey = () => {
-    if (!data?.key) return;
-    navigator.clipboard.writeText(data.key);
-    setCopiedKey(true);
-    setTimeout(() => setCopiedKey(false), 2000);
+  const handleCopyHash = () => {
+    if (!data?.keyHash) return;
+    navigator.clipboard.writeText(data.keyHash);
+    setCopiedHash(true);
+    setTimeout(() => setCopiedHash(false), 2000);
+  };
+
+  const downloadRotatedTxt = (key: string) => {
+    if (!data) return;
+    const content = `LicenKit License Key (Rotated)
+==============================
+Key:        ${key}
+Product:    ${data.productName || "Unknown Product"}
+Policy:     ${data.policyName || "Unknown Policy"}
+Customer:   ${data.customerEmail || "Unassigned"}
+Rotated At: ${new Date().toISOString()}
+Expires:    ${data.expiresAt ? new Date(data.expiresAt).toISOString() : "Perpetual"}
+
+IMPORTANT: Store this key securely. LicenKit does NOT store the plaintext key and it cannot be retrieved again.
+`;
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `licenkit-key-rotated-${licenseId}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleUnbindMachine = async (machineId: string, machineName: string) => {
@@ -103,8 +132,11 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
 
     setActionLoading(true);
     try {
-      await api.licenses.rotateKey(licenseId);
+      const res = await api.licenses.rotateKey(licenseId);
       await loadDetails();
+      if (res?.key) {
+        setRotatedNewKey(res.key);
+      }
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Failed to rotate key");
@@ -207,10 +239,59 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
             </div>
           ) : (
             <>
+              {/* One-time banner for rotated key */}
+              {rotatedNewKey && (
+                <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-amber-200 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>激活码轮转成功（仅此一次展示，请立即保存）</span>
+                    </div>
+                    <button
+                      onClick={() => setRotatedNewKey(null)}
+                      className="text-slate-400 hover:text-white text-xs p-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={rotatedNewKey}
+                      className="flex-1 bg-slate-950 border border-amber-500/40 rounded-lg px-3 py-2 text-sm text-amber-300 font-mono font-medium select-all focus:outline-none"
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(rotatedNewKey);
+                        setCopiedRotatedKey(true);
+                        setTimeout(() => setCopiedRotatedKey(false), 2000);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-xs text-white rounded-lg font-medium transition-colors shadow shrink-0"
+                    >
+                      {copiedRotatedKey ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedRotatedKey ? "Copied" : "Copy Key"}</span>
+                    </button>
+                    <button
+                      onClick={() => downloadRotatedTxt(rotatedNewKey)}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-xs text-white rounded-lg font-medium transition-colors border border-slate-700 shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Download .txt</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Top Summary Card */}
               <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">License Key</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">License Key Hash</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                      SHA-256 Digest (Plaintext not stored)
+                    </span>
+                  </div>
                   <span
                     className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
                       data.status === "active"
@@ -228,15 +309,16 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
                   <input
                     type="text"
                     readOnly
-                    value={data.key}
-                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-indigo-300 font-mono font-medium select-all focus:outline-none"
+                    value={data.keyHash || ""}
+                    title={data.keyHash || ""}
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-indigo-300 font-mono font-medium select-all focus:outline-none truncate"
                   />
                   <button
-                    onClick={handleCopyKey}
+                    onClick={handleCopyHash}
                     className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs text-white rounded-lg font-medium transition-colors shadow shrink-0"
                   >
-                    {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedKey ? "Copied" : "Copy"}</span>
+                    {copiedHash ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedHash ? "Copied Hash" : "Copy Hash"}</span>
                   </button>
                   {!readOnly && (
                     <button

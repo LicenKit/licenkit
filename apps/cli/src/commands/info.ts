@@ -17,10 +17,10 @@ export async function infoCommand(): Promise<void> {
 
   if (stored) {
     console.log(pc.bold(pc.cyan("=== Local Activated License ===")));
-    console.log(`  ${pc.gray("License Key:")}      ${pc.bold(stored.licenseKey)}`);
+    console.log(`  ${pc.gray("Machine Seat ID:")}  ${pc.bold(stored.machineId || "N/A")}`);
+    console.log(`  ${pc.gray("Machine Token:")}    ${stored.machineToken ? stored.machineToken.slice(0, 10) + "..." : "N/A"}`);
     console.log(`  ${pc.gray("Account ID:")}       ${stored.accountId}`);
     console.log(`  ${pc.gray("Server URL:")}       ${stored.serverUrl}`);
-    console.log(`  ${pc.gray("Machine ID:")}       ${stored.machineId || "N/A"}`);
     console.log(`  ${pc.gray("Policy Name:")}      ${stored.policy?.name || "N/A"}`);
     console.log(`  ${pc.gray("Max Machines:")}     ${stored.policy?.maxMachines ?? "N/A"}`);
     console.log(`  ${pc.gray("Features:")}         ${stored.policy?.features?.length ? stored.policy.features.join(", ") : "(None)"}`);

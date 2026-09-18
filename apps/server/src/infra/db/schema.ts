@@ -94,13 +94,13 @@ export const policies = sqliteTable("policies", {
   index("idx_policies_product_id").on(table.productId),
 ]);
 
-// 7. 许可证表 (Licenses)
+// 7. 许可证表 (Licenses) - 纯 SHA-256 单向散列架构
 export const licenses = sqliteTable("licenses", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull(),
   productId: text("product_id").notNull(),
   policyId: text("policy_id").notNull(),
-  key: text("key").notNull().unique(),
+  keyHash: text("key_hash").notNull(),
   customerEmail: text("customer_email"),
   source: text("source").notNull().default("manual"), // 'manual' | 'api' | 'paddle' | 'stripe' | 'lemonsqueezy'
   status: text("status").notNull().default("active"), // 'active' | 'suspended' | 'expired' | 'revoked'
@@ -111,6 +111,7 @@ export const licenses = sqliteTable("licenses", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 }, (table) => [
+  uniqueIndex("idx_licenses_account_key_hash").on(table.accountId, table.keyHash),
   index("idx_licenses_account_id").on(table.accountId),
   index("idx_licenses_product_policy").on(table.productId, table.policyId),
   index("idx_licenses_customer_email").on(table.customerEmail),
@@ -119,20 +120,23 @@ export const licenses = sqliteTable("licenses", {
   index("idx_licenses_created_at").on(table.createdAt),
 ]);
 
-// 8. 机器硬件席位绑定表 (Machines)
+// 8. 机器硬件席位绑定表 (Machines) - Machine Token 双层凭据
 export const machines = sqliteTable("machines", {
   id: text("id").primaryKey(),
   licenseId: text("license_id").notNull(),
   fingerprint: text("fingerprint").notNull(),
+  tokenHash: text("token_hash").notNull(),
   name: text("name"),
   platform: text("platform"),
   ip: text("ip"),
   lastHeartbeatAt: text("last_heartbeat_at").notNull(),
   createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
 }, (table) => [
   index("idx_machines_license_id").on(table.licenseId),
   index("idx_machines_fingerprint").on(table.fingerprint),
   uniqueIndex("idx_machines_license_fingerprint").on(table.licenseId, table.fingerprint),
+  index("idx_machines_token_hash").on(table.tokenHash),
 ]);
 
 // 9. 试用记录表 (Product Trials)

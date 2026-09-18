@@ -50,10 +50,10 @@ describe("LicenKit CLI - Local License Storage", () => {
       serverUrl: "http://localhost:8787",
       accountId: "acc_demo_01",
       productId: "prd_super_app",
-      licenseKey: "LIC-ABCD-1234-EFGH-5678",
+      machineId: "mac_001",
+      machineToken: "mt_machine_token_secret_123",
       token: "header.payload.signature",
       publicKey: "pubkey_base64_test",
-      machineId: "mac_001",
       tokenExpiresAt: new Date(Date.now() + 86400 * 1000).toISOString(),
       policy: {
         name: "Pro Tier",
@@ -67,7 +67,9 @@ describe("LicenKit CLI - Local License Storage", () => {
 
     const loaded = loadStoredLicense();
     expect(loaded).toBeDefined();
-    expect(loaded?.licenseKey).toBe(sampleData.licenseKey);
+    expect(loaded?.machineId).toBe("mac_001");
+    expect(loaded?.machineToken).toBe("mt_machine_token_secret_123");
+    expect((loaded as any)?.licenseKey).toBeUndefined();
     expect(loaded?.policy?.name).toBe("Pro Tier");
     expect(loaded?.policy?.features).toEqual(["export", "sync"]);
 

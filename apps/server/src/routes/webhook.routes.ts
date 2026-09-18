@@ -12,6 +12,8 @@ import {
   verifyLemonSqueezySignature,
   verifyOutboundWebhookSignature,
   generateLicenseKey,
+  normalizeLicenseKey,
+  hashLicenseKey,
 } from "../infra/crypto";
 import { broadcastOutboundEvent } from "../infra/events/broadcast";
 import { AppError, NotFoundError } from "../middleware/error";
@@ -312,6 +314,7 @@ async function handlePaddleFulfillment(
     // Issue License
     const licenseId = `lic_${ulid().toLowerCase()}`;
     const key = generateLicenseKey();
+    const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
     const now = new Date();
 
     let expiresAt: string | null = null;
@@ -334,7 +337,7 @@ async function handlePaddleFulfillment(
       accountId,
       productId: matchedPolicy.productId,
       policyId: matchedPolicy.id,
-      key,
+      keyHash,
       customerEmail: customerEmail.toLowerCase().trim(),
       status: "active",
       metadata: JSON.stringify(metadataObj),
@@ -514,6 +517,7 @@ async function handleStripeFulfillment(
     // Issue License
     const licenseId = `lic_${ulid().toLowerCase()}`;
     const key = generateLicenseKey();
+    const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
     const now = new Date();
 
     let expiresAt: string | null = null;
@@ -534,7 +538,7 @@ async function handleStripeFulfillment(
       accountId,
       productId: matchedPolicy.productId,
       policyId: matchedPolicy.id,
-      key,
+      keyHash,
       customerEmail: customerEmail.toLowerCase().trim(),
       status: "active",
       metadata: JSON.stringify(metadataObj),
@@ -721,6 +725,7 @@ async function handleLemonSqueezyFulfillment(
     // Issue License
     const licenseId = `lic_${ulid().toLowerCase()}`;
     const key = generateLicenseKey();
+    const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
     const now = new Date();
 
     let expiresAt: string | null = null;
@@ -747,7 +752,7 @@ async function handleLemonSqueezyFulfillment(
       accountId,
       productId: matchedPolicy.productId,
       policyId: matchedPolicy.id,
-      key,
+      keyHash,
       customerEmail: customerEmail.toLowerCase().trim(),
       status: "active",
       metadata: JSON.stringify(metadataObj),

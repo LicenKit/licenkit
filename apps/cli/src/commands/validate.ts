@@ -18,7 +18,8 @@ export async function validateCommand(): Promise<void> {
     const result = await apiValidate({
       serverUrl: stored.serverUrl,
       accountId: stored.accountId,
-      licenseKey: stored.licenseKey,
+      machineId: stored.machineId,
+      machineToken: stored.machineToken,
       fingerprint,
     });
 
@@ -49,7 +50,7 @@ export async function validateCommand(): Promise<void> {
 
     console.log();
     console.log(pc.bold(pc.green("✔ License validated successfully (Heartbeat recorded)")));
-    console.log(`  ${pc.gray("Key:")}            ${pc.bold(stored.licenseKey)}`);
+    console.log(`  ${pc.gray("Machine ID:")}     ${pc.bold(stored.machineId)}`);
     console.log(`  ${pc.gray("Status:")}         ${pc.green("ACTIVE")}`);
     console.log(`  ${pc.gray("Token Expires:")}  ${formatTimestamp(result.token_expires_at || stored.tokenExpiresAt, "N/A")}`);
     console.log(`  ${pc.gray("Last Heartbeat:")} ${formatTimestamp(result.last_heartbeat_at || stored.lastValidatedAt, "N/A")}`);
