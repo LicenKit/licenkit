@@ -14,6 +14,7 @@ import {
   hashLicenseKey,
   generateMachineToken,
   hashMachineToken,
+  timingSafeEqual,
   base64ToBuffer,
   bufferToBase64,
   base64UrlToJson,
@@ -336,6 +337,15 @@ describe("WebCrypto Infrastructure - License Key Hashing & Machine Token Utiliti
 
     const token2 = generateMachineToken();
     expect(token2).not.toBe(token);
+  });
+
+  it("timingSafeEqual should accurately compare strings in constant time", () => {
+    expect(timingSafeEqual("abc12345", "abc12345")).toBe(true);
+    expect(timingSafeEqual("abc12345", "abc12346")).toBe(false);
+    expect(timingSafeEqual("abc12345", "abc1234")).toBe(false);
+    expect(timingSafeEqual("abc12345", "abc123456")).toBe(false);
+    expect(timingSafeEqual("", "")).toBe(true);
+    expect(timingSafeEqual("a", "")).toBe(false);
   });
 });
 

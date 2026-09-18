@@ -859,7 +859,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, account, onL
                     <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-500" />
                     <input
                       type="text"
-                      placeholder="Search by License ID, Key or customer email..."
+                      placeholder="Search by License ID, full Key, or customer email..."
                       value={licenseSearchQuery}
                       onChange={(e) => setLicenseSearchQuery(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"

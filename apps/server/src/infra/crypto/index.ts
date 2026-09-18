@@ -70,6 +70,17 @@ export async function hashPassword(password: string): Promise<string> {
   return `pbkdf2_sha256$${PBKDF2_ITERATIONS}$${saltB64}$${hashB64}`;
 }
 
+/**
+ * Constant-time string comparison to prevent timing side-channel attacks
+ */
+export function timingSafeEqual(a: string, b: string): boolean {
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ (b.charCodeAt(i % b.length) || 0);
+  }
+  return diff === 0;
+}
+
 export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   const parts = storedHash.split("$");
   if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") {
@@ -100,13 +111,7 @@ export async function verifyPassword(password: string, storedHash: string): Prom
   );
 
   const calculatedHash = bufferToBase64(derivedBits);
-
-  // Constant-time string comparison to prevent timing side-channel attacks
-  let diff = calculatedHash.length ^ expectedHash.length;
-  for (let i = 0; i < calculatedHash.length; i++) {
-    diff |= calculatedHash.charCodeAt(i) ^ (expectedHash.charCodeAt(i % expectedHash.length) || 0);
-  }
-  return diff === 0;
+  return timingSafeEqual(calculatedHash, expectedHash);
 }
 
 // --- 2. Envelope Encryption (AES-256-GCM) ---

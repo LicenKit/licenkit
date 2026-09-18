@@ -84,16 +84,17 @@ export const LicenseDetailModal: React.FC<LicenseDetailModalProps> = ({
     setTimeout(() => setCopiedHash(false), 2000);
   };
 
-  const downloadRotatedTxt = (key: string) => {
-    if (!data) return;
+  const downloadRotatedTxt = (key: string, licData?: any) => {
+    const target = licData || data;
+    if (!target) return;
     const content = `LicenKit License Key (Rotated)
 ==============================
 Key:        ${key}
-Product:    ${data.productName || "Unknown Product"}
-Policy:     ${data.policyName || "Unknown Policy"}
-Customer:   ${data.customerEmail || "Unassigned"}
+Product:    ${target.productName || "Unknown Product"}
+Policy:     ${target.policyName || "Unknown Policy"}
+Customer:   ${target.customerEmail || "Unassigned"}
 Rotated At: ${new Date().toISOString()}
-Expires:    ${data.expiresAt ? new Date(data.expiresAt).toISOString() : "Perpetual"}
+Expires:    ${target.expiresAt ? new Date(target.expiresAt).toISOString() : "Perpetual"}
 
 IMPORTANT: Store this key securely. LicenKit does NOT store the plaintext key and it cannot be retrieved again.
 `;
@@ -133,9 +134,12 @@ IMPORTANT: Store this key securely. LicenKit does NOT store the plaintext key an
     setActionLoading(true);
     try {
       const res = await api.licenses.rotateKey(licenseId);
-      await loadDetails();
-      if (res?.key) {
-        setRotatedNewKey(res.key);
+      const details = await api.licenses.get(licenseId);
+      setData(details);
+      const newKey = res?.newKey || res?.key;
+      if (newKey) {
+        setRotatedNewKey(newKey);
+        downloadRotatedTxt(newKey, details);
       }
       onSuccess();
     } catch (err: any) {

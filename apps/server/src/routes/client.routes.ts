@@ -13,6 +13,7 @@ import {
   hashLicenseKey,
   generateMachineToken,
   hashMachineToken,
+  timingSafeEqual,
   type OfflineTokenHeader,
   type OfflineLicenseClaims,
   type OfflineTrialClaims,
@@ -429,7 +430,7 @@ clientRouter.post("/validate", async (c) => {
 
   // 2. Validate token hash and machine hardware fingerprint
   const incomingTokenHash = await hashMachineToken(input.machine_token);
-  if (incomingTokenHash !== machine.tokenHash || input.fingerprint !== machine.fingerprint) {
+  if (!timingSafeEqual(incomingTokenHash, machine.tokenHash) || input.fingerprint !== machine.fingerprint) {
     return c.json({
       success: true,
       data: { valid: false, reason: "UNAUTHORIZED_CREDENTIALS" },
@@ -560,7 +561,7 @@ clientRouter.post("/deactivate", async (c) => {
 
   // 2. Validate token hash and fingerprint (prevent unauthorized kicking)
   const incomingTokenHash = await hashMachineToken(input.machine_token);
-  if (incomingTokenHash !== machine.tokenHash || input.fingerprint !== machine.fingerprint) {
+  if (!timingSafeEqual(incomingTokenHash, machine.tokenHash) || input.fingerprint !== machine.fingerprint) {
     return c.json({
       success: false,
       error: { code: "UNAUTHORIZED", message: "Invalid machine credentials or fingerprint" },
