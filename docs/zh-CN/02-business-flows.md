@@ -4,10 +4,13 @@
 
 LicenKit 不创建支付订单。它接收支付平台已经签名的 Webhook，并把其中的购买事实转换为授权状态。
 
+V1 首个真实端到端支付闭环使用 Paddle Sandbox。Paddle Adapter 只负责验签和把渠道事件转换为下述内部语义，不能绕过统一 Fulfillment Service 直接修改 License。
+
 ```mermaid
 sequenceDiagram
     participant Pay as 支付平台
     participant In as 入站事件模块
+    participant Resolve as Customer 解析器
     participant Fulfill as 支付履约模块
     participant DB as D1
     participant Outbox as 出站投递
@@ -18,6 +21,15 @@ sequenceDiagram
     In->>DB: 幂等写入 Inbound Event
     In-->>Pay: 2xx 已持久化
     Fulfill->>DB: 领取待处理事件
+    Fulfill->>Resolve: 按 provider + external_customer_id 解析 Customer
+    alt 本地映射缺失
+        Resolve->>DB: 保持 pending，等待 Customer 事件
+        opt 已配置 API Key 与 customer.read
+            Resolve->>Pay: Get Customer API 加速恢复
+            Pay-->>Resolve: Customer 实体
+            Resolve->>DB: 创建或链接 Billing Customer
+        end
+    end
     Fulfill->>Fulfill: 查找 Offer Mapping 并解释事件
     Fulfill->>DB: 原子更新 License / Subscription / Delivery
     Outbox->>Receiver: 已签名通知 Webhook
@@ -25,7 +37,40 @@ sequenceDiagram
     Outbox->>DB: 标记 accepted
 ```
 
-入站接口在事件被可靠写入后即可返回。请求上下文可以立即尝试处理该事件以降低延迟；无论即时处理是否成功，数据库中的待处理记录都是恢复来源，Scheduled Worker 会扫描到期任务并继续履约。
+入站接口只有在事件被可靠写入后才返回 2xx；签名无效返回 4xx，持久化失败返回 5xx 让 Paddle 重试。请求上下文可以立即尝试处理已持久化事件以降低延迟；无论即时处理是否成功，数据库中的待处理记录都是恢复来源，Scheduled Worker 会扫描到期任务并继续履约。
+
+### 1.1 从自定义产品页到 Checkout
+
+参考产品页和用户自定义产品页使用同一个公开 Checkout 配置 API 与 Web Checkout SDK：
+
+1. 页面以 `accountSlug + productSlug` 请求公开配置；服务端实时检查 Product、Product 选择的收款环境、Offer、Billing Provider、最小事件合同、Notification Gateway、调度器和签名能力；
+2. 不可收款时返回 `available=false` 和可公开原因码，SDK 不初始化 Paddle Checkout；管理端同时展示更完整的联通状态与修复动作；
+3. 可收款时只返回 Product 所选环境下的公开 Product/Offer 展示字段、Provider 环境、Paddle Client-side Token 和 active Offer 的 Price ID；不同环境的 Offer 即使存在也不会进入响应；
+4. 页面选择一个 Offer，SDK 固定调用一个 Price、`quantity=1`，不能接收调用方传入的任意 Price ID 或数量；
+5. Paddle.js 收集客户和支付信息。Checkout 成功回调只更新页面提示或跳转成功页，不创建授权；
+6. Paddle 发送已签名 Webhook，LicenKit 持久化后再由统一履约流程发码。
+
+用户可以完全修改页面结构、样式和文案，也可以不使用参考模板；只要使用同一公开契约和 SDK，就不会把支付 Secret 放进前端。恶意调用方即使绕过 SDK 直接构造多商品或多数量 Checkout，服务端仍以已验签 Transaction 的行项目再次校验，失败时进入 `needs_attention` 而不是发码。
+
+### 1.2 Paddle Customer 解析与回调时序
+
+对新 Paddle Customer，业务生成顺序通常是：客户在 Checkout 填写资料后产生 `customer.created`，支付完成阶段产生 `subscription.created`（订阅购买）和 `transaction.completed`。已有 Paddle Customer 再次购买时不会重新产生 `customer.created`；而且 Webhook 是独立、至少一次投递，网络重试会改变到达顺序。因此 LicenKit 既不能把 Customer 事件当作每笔购买的前置条件，也不能假设它一定先到。
+
+V1 的 Paddle Notification Destination 最小事件合同是 `customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created` 和 `adjustment.updated`。缺少任一事件时 Offer 不允许激活。由于 API Key 不是基础闭环的必需配置，合同验证以当前 Provider 配置更新时间之后逐个收到并成功验签的对应事件为准，通常由管理员通过 Paddle 官方模拟器触发；轮换 Webhook Secret 会使旧证据失效，切换环境则必须创建另一条 Provider 并重新验证。若配置了可读取 Notification Settings 的 API 能力，可以额外对比远端订阅集合，但不能以此替代端点实际收到了签名事件的证据。`transaction.payment_failed`、`subscription.past_due` 和 `subscription.canceled` 推荐作为诊断补充，但核心状态处理仍必须能由 `subscription.updated` 收敛，不能要求两个重复事件同时到达才推进。所有事件先验签、提取关联 ID、幂等写入 Inbound Event，再返回 2xx。后续处理分为：
+
+1. `customer.created|updated`：把 provider Customer 的 ID、邮箱、名称、状态和版本时间 upsert 到 Billing Customer；版本时间取 `updated_at ?? created_at`，首次出现时按规范化邮箱在当前 Account 查找或创建 LicenKit Customer，并保存稳定映射；
+2. 购买事件：先以 `account_id + billing_provider_id + external_customer_id` 查 Billing Customer；已经 `linked` 才可继续签发；
+3. 本地映射缺失：Inbound Event 写入 `BILLING_CUSTOMER_PENDING` 并保持 `pending`，等待 `customer.created|updated` 到达后由同一调度器重试；
+4. 当前 Provider 配置了具备 `customer.read` 权限的 Paddle API Key 时，可以根据已验签事件中的 Customer ID 调用 `GET /customers/{customer_id}` 加速恢复，响应仍进入同一个 upsert/link 服务；API 暂时失败只保存 Paddle request ID、HTTP 状态和原始错误码后退避；
+5. 等待超过显式上限、购买事件没有外部 Customer ID，或 Provider Customer 已确认不存在、归档、邮箱无效、链接冲突时，事件进入 `needs_attention`，等待管理员修复后 replay。
+
+Customer Webhook 是正常路径；API 读穿和定期对账是配置 API Key 后的可选加速/恢复能力，不是另一套 Customer 创建流程，也不是开启收款的必要条件。`custom_data.email`、产品页参数或 Transaction 上任意客户端自定义邮箱一律不参与身份解析；已验签只能证明 Paddle 发送了 payload，不能把客户端自定义值提升为可信 Customer 实体。
+
+若 Customer 事件超过 Paddle 重试窗口仍未到达，管理员有两条受控恢复路径：在 Paddle Notification 日志中重放对应 `customer.created|updated`，或配置只读 API Key 后对该外部 Customer 执行 reconcile。两条路径都进入相同同步服务，再 replay 原购买事件；管理员不能在购买事件上手填邮箱直接放行。
+
+Paddle Customer 邮箱只作为初次联系和发码地址来源，不宣称已经验证邮箱所有权。Customer Portal 的 Magic Link 消费才证明收件人当前控制该邮箱。
+
+映射建立后以外部 Customer ID 为稳定键。后续 `customer.updated` 若邮箱与 LicenKit Customer 不一致，只更新 Billing Customer 镜像并标记 `email_mismatch`，不自动改绑或修改 Customer 邮箱。该外部 Customer 的新 License 签发进入 `needs_attention`；已有 Billing Subscription 仍续期原 License，不受联系邮箱变化影响。
 
 ## 2. Offer Mapping
 
@@ -41,10 +86,23 @@ billing_provider_id + external_price_id
 禁止以下回退：
 
 - 找不到价格映射时选择“唯一启用的授权方案”；
-- 缺少客户邮箱时构造占位邮箱；
+- 缺少 Billing Customer 映射或 provider Customer 邮箱时构造占位邮箱；
+- 从 `custom_data.email`、Checkout 页面参数或 Transaction 自定义字段创建 Customer；
 - 无法识别事件时仍标记为成功履约。
 
-发生这些情况时，Inbound Event 进入 `failed` 或 `needs_attention`，保留原始错误并允许配置修复后重放。
+找不到本地 Billing Customer 属于可恢复依赖，Inbound Event 保持 `pending` 并等待 Customer 事件；配置 API Key 时可以并行使用 API 读穿加速。等待超时、API 已确认 Customer 无效、邮箱冲突或其他不可自动决定的问题才进入 `needs_attention`。价格映射缺失同样进入可修复状态，保留原始错误并允许配置修复后重放。
+
+每次普通购买履约还必须检查已验签 Transaction 的行项目：恰好一个行项目、Price 对应当前 active Offer、Offer Provider 环境与 Product 的 `billing_environment` 一致、数量恰好为 1，并且 Offer 的 `purchase_type` 与授权方案一致。零行、多行、多个 Price、数量不为 1、Price 未映射、环境不一致或 Offer 非 active 都进入 `needs_attention`；处理器不得选第一项、合并数量或按金额猜测目标授权。
+
+### 2.1 管理员 Sandbox 闭环验证
+
+Offer 默认是 draft，但真实端到端测试又必须发生在激活前。为避免因此建立第二套履约逻辑，owner/admin 对 draft Sandbox Offer 发起验证时，服务端创建一条短期、一次性的 Checkout Verification，只保存验证令牌哈希，并把明文令牌随 `Cache-Control: no-store` 的验证配置返回一次。管理控制台使用同一个 Web Checkout SDK 打开一个 Price、数量 1 的 Checkout；SDK 只在该受控入口把令牌放入 Paddle `custom_data.licenkit_checkout_verification`，普通公开 SDK 不允许调用方自定义该字段。
+
+已验签 Transaction 到达后，服务端必须以等值索引查询令牌哈希，同时确认验证尝试仍为 `pending`、未过期、Offer/Provider/Price 完全一致且 Provider 为 Sandbox，再以条件更新消费令牌。随后仍调用统一 Customer 解析、Fulfillment 和 Delivery 模块，但创建的 License 固定为 `is_checkout_verification=1`、`status=suspended`、`status_reason=checkout_verification`。它会产生真实注册码和通知 Delivery，以验证发码接管链路，但激活、恢复和方案迁移都必须拒绝该 License。
+
+若验证的是订阅 Offer，可以创建正常的 Billing Subscription 以覆盖真实状态同步，但该 Subscription 绑定的验证 License 必须始终保持 suspended。Paddle 会把初始 Transaction 的 `custom_data` 复制到 Subscription 及后续续费 Transaction；因此令牌只在“尚无已绑定 Billing Subscription 的首次验证交易”中解释。后续事件先按外部 Subscription ID 命中既有验证 Subscription，只更新可审计的支付镜像，忽略已经消费的验证令牌作为授权依据，不能把验证 License 改为 active、再次发码或错误进入新的验证流程。
+
+验证尝试只有在对应 Delivery 被 Notification Gateway 接收后才标记 `completed`。重复、过期、错误 Offer、非 Sandbox 或已经消费的令牌进入带原始 Transaction/Event 引用的 `needs_attention`，不得回退到普通付款处理。`custom_data` 中普通邮箱或产品字段仍不受信；这里唯一受信的是服务器生成、短期、一次性且只授权“生成不可用测试 License”的随机令牌。
 
 ## 3. 买断与固定期限
 
@@ -53,8 +111,8 @@ billing_provider_id + external_price_id
 在同一个数据库事务中：
 
 1. 锁定并再次检查 Inbound Event 未履约；
-2. 根据 Offer Mapping 读取授权方案；
-3. 使用规范化购买邮箱查找或创建 Customer；
+2. 根据 Offer Mapping 读取授权方案，并确认普通付款的 Provider 环境等于 Product 收款环境；
+3. 使用购买事件的 `external_customer_id` 解析已链接 Billing Customer，取得稳定的 LicenKit `customer_id`；
 4. 生成 License ID 和高熵注册码，并通过 `customer_id` 归属 Customer；
 5. 保存注册码哈希和授权条款快照；
 6. 对固定期限授权计算 `expires_at`，永久授权保持为空；
@@ -72,17 +130,50 @@ billing_provider_id + external_price_id
 
 ## 4. 订阅制
 
-### 4.1 首次订阅付款
+订阅表示“有明确周期、可以续期”，不等于“必须由支付平台创建”。V1 用 `renewal_mode` 区分两种周期权威：
+
+- `manual`：管理员或受信 API 给出本期明确的未来 `expires_at`，之后通过独立续期操作延长；
+- `billing`：周期只来自已验签支付事件，并绑定 Billing Subscription。
+
+永久授权不需要伪装成“永不到期的订阅”。管理员给朋友签发永久使用权时选择 `license_model=perpetual`、`renewal_mode=none`、`expires_at=NULL`；只有选择可反复续期的 `subscription` 时才要求未来到期时间。
+
+### 4.1 手动签发与续期
+
+管理员和受信 API 可以签发三类非支付授权：
+
+- 永久：`perpetual + none`，`expires_at` 为空；
+- 固定期限：`fixed_term + none`，按授权方案的固定时长计算一次到期时间；
+- 手动续期订阅：`subscription + manual`，请求必须提供未来 `expiresAt`。
+
+手动续期订阅不创建 Billing Subscription，`payment_grace_seconds` 固化为 0。续期必须调用独立操作，提交新的绝对 `expiresAt` 和原因；新值必须晚于当前到期时间，等于当前值的重放则返回当前结果，早于当前值拒绝。操作只延长同一个 License，不轮换注册码、不创建新 License，并记录操作者、请求 ID 和前后值。使用绝对时间而不是“增加 N 天”，使相同请求重放不会重复累加。普通 License PATCH 不得修改到期时间或续期权威。
+
+### 4.2 首次订阅付款
 
 首次付款成功时创建：
 
-- 一个 License；
+- 一个 `subscription + billing` License；
 - 一个绑定该 License 的 Billing Subscription；
 - 一条发码 Delivery。
 
 License 到期时间优先使用支付平台提供的当前周期结束时间，而不是本地执行“现在加一个月”。
 
-### 4.2 续费成功
+### 4.3 Paddle 免费订阅试用
+
+V1 支持要求预先绑定支付方式的 Paddle 免费订阅试用。它使用配置了免费试用期的 Paddle recurring price，客户通过 Paddle Checkout 提交支付方式；LicenKit 不在 Product 或 License Plan 中重复配置这段试用时长。
+
+Paddle 的 `subscription.created` 包含创建该订阅的 Transaction ID 和完整 Subscription；`transaction.completed` 包含 Transaction ID 和 Subscription ID。接收层验签后把这两个可选关联 ID 提取到 Inbound Event 的独立可查询字段。收到任一事件时，只有已经具备 price、Customer、Subscription、Transaction 和试用周期这些完整事实，履约事务才创建：
+
+- 一个 `subscription + billing` License；
+- 一个状态为 `trialing` 的 Billing Subscription；
+- 一条首次发码 Delivery。
+
+Billing Subscription 保存 Paddle 给出的 `trial_started_at`、`trial_ends_at` 和 `next_billed_at`，License 的 `expires_at` 使用受信试用周期结束时间。试用期内使用普通 License Key、Activation 和校验流程，不创建 Trial Claim 或 Trial Token。
+
+若相关事件先后顺序导致事实暂不完整，当前 Inbound Event 保持 `pending`、记录 `BILLING_DEPENDENCY_PENDING` 并安排重试；关联事件到达后再履约，不能把正常乱序当成永久失败。唯一交易键与外部订阅键保证两个事件无论谁先处理都只创建一组对象。
+
+试用结束扣款成功时，更新同一个 Billing Subscription 和 License 为付费周期，不重新发码。扣款失败时进入 `past_due`，并使用同一 License 已固化的支付宽限期；取消、退款和拒付继续遵循正常支付订阅规则。未取得已验签周期事实时不得根据 Checkout 页面参数自行创建试用 License。
+
+### 4.4 续费成功
 
 续费必须通过外部订阅 ID 查找到原 Billing Subscription 和 License：
 
@@ -92,24 +183,26 @@ License 到期时间优先使用支付平台提供的当前周期结束时间，
 4. 产生 `subscription.renewed` 业务事件；
 5. 不生成新注册码，不发送首次发码邮件。
 
-### 4.3 扣款失败
+### 4.5 扣款失败
 
 收到扣款失败或 `past_due` 事件时：
 
 - Billing Subscription 立即记录为 `past_due`；
-- License 在已付周期和固化的 `payment_grace_seconds` 内保持可用；
+- License 在当前受信周期和固化的 `payment_grace_seconds` 内保持可用；
 - 宽限期结束仍未恢复付款时，License 转为 `suspended`；
 - 后续付款成功可恢复同一个 License。
 
-具体默认宽限期仍待确认，但宽限期数值属于已售授权条款，不能由后续授权方案编辑追溯改变。
+账户中的订阅宽限期默认值为 `432000` 秒（5 天）。创建订阅授权方案时，调用方未填写该字段则读取 Account 当前默认值并保存为方案实际值；签发时再固化到 License Terms。之后修改 Account 默认值或授权方案，都不能追溯改变已售 License。
 
-### 4.4 取消自动续费
+宽限截止时间按 `License.expires_at + License.payment_grace_seconds` 派生，其中 `expires_at` 是支付平台给出的当前付费周期结束时间；若首次扣款在免费订阅试用结束时失败，则是试用周期结束时间。V1 不再保存一份可漂移的 `grace_until`；Scheduled Worker 通过 `past_due` Subscription 的周期索引找到到期项，并在同一账户内条件更新 License。`payment_grace_seconds=0` 表示当前周期结束后不额外宽限。
+
+### 4.6 取消自动续费
 
 “安排在周期结束时取消”只设置 `cancel_at_period_end`，License 在当前已付周期内继续有效。
 
 当取消真正生效后，License 根据外部 `current_period_end` 到期。不得仅凭事件名称在收到取消事件时立即吊销，否则会剥夺用户已经付款的剩余时间。
 
-### 4.5 升级与降级
+### 4.7 升级与降级
 
 升级或降级是显式操作：
 
@@ -120,25 +213,39 @@ License 到期时间优先使用支付平台提供的当前周期结束时间，
 
 普通授权方案编辑不会触发存量订阅升级。
 
-### 4.6 退款与拒付
+### 4.8 退款与拒付
 
-退款和拒付必须保留原始支付状态与事件。V1 默认动作仍待业务确认，但只能在以下显式语义中选择：
+Paddle 把退款、credit 和拒付表示为 Adjustment。LicenKit 必须订阅 `adjustment.created` 与 `adjustment.updated`，并把 `external_adjustment_id`、交易/订阅/Customer ID、`action`、`type`、`status`、币种、总额、原因、最后外部时间和事件 ID 写入 Billing Adjustment。不能只保留会在到期后清理的原始 payload。
 
-- `suspend`：停止使用但允许人工恢复；
-- `revoke`：终止 License，并吊销全部激活。
+状态映射固定为：
 
-禁止把退款、拒付、取消和扣款失败统一映射成同一个状态。
+| Paddle 事实 | 自动 License 动作 | 人工处理 |
+| --- | --- | --- |
+| `refund + full + approved` | 暂停 License；保留注册码与 Activation | 必须，由管理员决定保持暂停、恢复、吊销或安全重置 |
+| `action=chargeback` | 暂停 License；保留注册码与 Activation | 必须；Paddle 在持卡人成功争议该笔扣款后自动创建此 Adjustment，不等同于 warning |
+| `refund + pending_approval` | 不改变 License | 必须，等待 Paddle 审批后的 `adjustment.updated` |
+| `refund + partial + approved` | 不改变 License | 必须，LicenKit 不能从部分金额猜测应减少哪些授权 |
+| `chargeback_warning` | 不改变 License | 必须，这只是可能发生拒付的预警 |
+| `refund + rejected` | 不改变 License | 不需要自动动作，保留记录 |
+| `chargeback_reverse`、`chargeback_warning_reverse` 或 `status=reversed` | 不自动恢复 | 必须，管理员根据当前风险决定是否恢复 |
+| `credit`、`credit_reverse` | 不改变 License | 默认不需要授权动作，保留财务记录 |
+
+表中“必须人工处理”的行都把 Billing Adjustment 设为 `review_status=open`，并让对应 Inbound Event 进入 `needs_attention`；被拒绝退款和默认无需授权动作的 credit 类事件可以标记为 `processed`。自动暂停、Billing Adjustment 和 Inbound Event 结果必须在同一领域事务中提交。暂停不是吊销：现有注册码和 Activation 历史保留，但在线校验拒绝使用；已签发且尚未过期的离线 Signed License Token 只能在自身 TTL 到期后感知暂停，因此高风险产品应使用较短 TTL。
+
+无法明确关联交易与 License、事件语义未知或关键字段缺失时，Billing Adjustment 与 Inbound Event 都进入人工处理，不能猜测目标。管理员处置必须使用显式动作：`no_action`、`keep_suspended`、`reinstate`、`revoke` 或 `security_reset`，提交原因并记录前后状态、操作者和来源事件。退款、拒付、取消和扣款失败不能归一化成同一个状态。
 
 ## 5. License 签发与通知不是同一状态
 
-License 创建成功后，即使通知 Webhook 尚未配置或投递失败，授权事实也已经存在。管理控制台必须分别展示：
+正常产品页收款前必须已经存在 active 且 Endpoint Test 被接收的 Notification Gateway，因此 Offer 激活和公开 Checkout API 都要把通知联通作为门禁。管理控制台在 Billing Provider 与 Offer 页面展示：Webhook 事件合同、最近验签事件、Notification Gateway 最近测试、调度器健康、Sandbox 端到端验收、签名密钥和最终 `checkout_available` 状态。
+
+该门禁只能阻止 LicenKit 官方 SDK/模板发起新 Checkout，不能撤销支付平台已经发生的外部付款。如果管理员在 Paddle 后台手工创建交易、旧页面继续收款或关键配置在 Checkout 打开后失效，只要已验签交易仍满足一个 active Offer、数量 1、环境一致和 Customer 可解析这些履约合同，LicenKit 就必须履约，不能因通知配置缺失拒绝已付款用户。不满足授权合同的付款必须完整保存并进入 `needs_attention`，由管理员决定，不能自动猜测发码，也不能静默丢弃。License 创建成功后，即使通知 Webhook 尚未配置或投递失败，授权事实也已经存在。管理控制台必须分别展示：
 
 - License 履约状态；
 - 注册码通知状态；
 - 最近一次投递错误；
 - 可执行的恢复动作。
 
-如果没有启用的 `notification_gateway`，创建 License 的事务应成功，但同时创建状态为 `blocked_configuration` 的 Delivery。系统不得静默丢弃，也不得假装邮件已发送。
+如果异常路径中没有启用的 `notification_gateway`，创建 License 的事务应成功，但同时创建状态为 `blocked_configuration` 的 Delivery，并产生高优先级管理员告警。系统不得静默丢弃，也不得假装邮件已发送。管理员配置并通过 Endpoint Test 后，可对仍保留敏感负载、尚未产生 HTTP Attempt 的该 Delivery 执行显式“绑定当前 Gateway 并发送”；动作固化当前 URL 与 Secret、把状态改为 `pending` 并写审计。负载已过期时只能执行注册码找回，不能恢复旧明文。
 
 ## 6. 通知 Webhook 发码
 
@@ -229,6 +336,10 @@ Customer Portal 登录使用独立事件 `customer.portal_access_requested`。�
 
 自动重试使用同一个 Delivery、目标与签名配置快照，以及同一个加密敏感负载。License 表仍然只保存注册码哈希。
 
+默认行为是首次请求失败后再自动重试 3 次，即自动预算最多产生 4 个 HTTP Attempt。退避与抖动使用显式配置；无论剩余次数多少，敏感负载、Magic Link Challenge 或其他凭证一旦到期就停止重试并进入 `payload_expired`。
+
+管理端只能对 `failed` 且仍保留负载的 Delivery 执行人工 retry。每次操作只追加一个 `manual_retry` Attempt，不重置已经消耗的自动预算，也不启动新一轮 3 次自动重试；失败后仍保持 `failed`。首次、自动和人工 Attempt 必须分别记录来源，人工操作还要写审计。
+
 ### 7.2 普通找回
 
 1. 通过已验证的邮箱找回流程或管理员操作确定目标 License；
@@ -253,10 +364,10 @@ V1 采用以下规则：
 1. 注册码明文只写入经过 `STORAGE_ENCRYPTION_KEY` 加密的 Delivery 敏感负载；
 2. License 表只保存哈希；
 3. Retry 期间解密同一负载；
-4. Delivery 成功并超过配置的保留期后清除敏感负载；
+4. Notification Gateway 返回 2xx、可靠接管任务并将 Delivery 标记为 `accepted` 后立即清除敏感负载；
 5. 敏感负载已清除后，任何再次发送都必须执行注册码找回轮换。
 
-具体保留时长待确认，开发环境和正式环境使用同一机制，只允许配置值不同。
+未成功 Delivery 的敏感负载最长保留 24 小时。`payload_expires_at` 在创建 Delivery 时固化为实际截止时间；Magic Link 使用自身 15 分钟 Challenge 到期时间作为更早上限，Challenge 消费、吊销或到期时也立即清除对应负载。开发环境和正式环境使用同一清理机制，只允许显式配置值不同。
 
 ## 9. Customer Portal
 
@@ -318,9 +429,9 @@ Customer Portal 只查询当前 Session 对应 Customer 的数据，可以展示
 
 成功页面一次性展示新注册码并同时创建通知 Delivery；响应使用 `Cache-Control: no-store`，前端不得写入本地存储、日志或分析事件，离开页面后不再保留。Notification Gateway 失败不回滚已经完成的注册码轮换，页面必须独立展示通知状态。
 
-### 9.5 管理订阅
+### 9.5 管理支付订阅
 
-Customer Portal 不直接修改 `cancel_at_period_end`、Subscription 状态或 License 到期时间。客户点击“管理订阅”时：
+Customer Portal 不直接修改 `cancel_at_period_end`、Billing Subscription 状态或 License 到期时间。只有 `renewal_mode=billing` 的 License 显示“管理支付订阅”；客户点击时：
 
 1. 服务端校验 Customer 对 License 和 Billing Subscription 的归属；
 2. Billing Adapter 使用对应外部 Customer/Subscription 标识创建短期支付平台客户门户会话；
@@ -328,7 +439,9 @@ Customer Portal 不直接修改 `cancel_at_period_end`、Subscription 状态或 
 4. 客户在支付平台修改支付方式、自动续费或取消；
 5. LicenKit 等待已签名 Webhook 更新 Subscription 和 License。
 
-支付平台不支持客户门户、缺少 API Secret 或外部 Customer 标识时，应返回保留 provider 信息的明确配置错误，不能生成一个本地“取消成功”结果。
+支付平台不支持客户门户、缺少服务端 API 凭证或外部 Customer 标识时，应返回保留 provider 信息的明确配置错误，不能生成一个本地“取消成功”结果。
+
+`renewal_mode=manual` 没有支付门户。Portal 只显示由发行方管理的到期时间和联系提示；客户不能通过 Customer API 自行延长。`perpetual` 和 `fixed_term` 也不显示支付订阅入口。
 
 ## 10. 客户端激活
 
@@ -356,7 +469,21 @@ SDK 只提交 App 的 `release_version + release_platform`，设备平台另行�
 
 `signed` 模式把 Release ID、版本、平台、受信 `released_at` 和 `updates_until` 一并写入 Signed License Token，SDK 使用这些签名字段执行本地检查。Release 文件 Hash 只用于发布审计和下载完整性，不作为客户端远程证明。
 
-## 11. 授权方案修改
+## 11. 无需支付方式的 Product/设备试用
+
+本节只描述不绑定支付方式的 Trial Claim；Paddle 免费订阅试用见 4.3，二者不共享凭证或状态。Product 未启用试用时，领取请求返回 `TRIAL_NOT_ENABLED`。启用后，客户端必须提交账户、产品、设备指纹以及当前 Release 版本与平台：
+
+1. 服务端在当前 Account 与 Product 下查找受信 Product Release；未知 Release 拒绝领取；
+2. 在事务中以 `account_id + product_id + fingerprint_hash` 检查并创建唯一 Trial Claim；
+3. `expires_at = claimed_at + Product.trial_duration_seconds`，同时固化 Product 当前的试用功能；
+4. 生成高熵 Trial Token，只返回一次，服务端只保存哈希；
+5. 客户端后续使用 Trial ID、Trial Token、同一设备指纹和当前 Release 执行在线校验。
+
+重复或并发领取由唯一约束拒绝，返回 `TRIAL_ALREADY_CLAIMED`，不能延长原试用、创建第二条 Claim 或重新显示旧 Token。Trial Token 丢失时不能仅凭设备指纹补发；用户可以购买并使用正常 License。试用到期或吊销后返回独立状态，不转换成 License 过期，也不创建 Customer、License、Activation、Subscription 或 Delivery。
+
+V1 试用不签发 Signed License Token，因此不能离线证明有效。设备指纹不是防篡改硬件身份；服务端还必须按 Account、Product、来源 IP 和设备指纹限流，并保留原始拒绝原因。
+
+## 12. 授权方案修改
 
 - 修改授权方案：revision 加一，只影响新 License；
 - 归档授权方案：禁止新签发，已有 License 不受影响；

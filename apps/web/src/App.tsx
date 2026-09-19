@@ -1,84 +1,67 @@
-import { useState, useEffect } from "react";
-import { api } from "./lib/api-client";
+import { useEffect, useState } from "react";
+import { Loader2, RefreshCw, ServerCrash } from "lucide-react";
+import { api, isApiError, type AdminSession } from "./lib/api-client";
+import { Button, ErrorPanel } from "./components/ui";
 import { SetupPage } from "./pages/SetupPage";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { Loader2 } from "lucide-react";
+import { CustomerPortalPage } from "./pages/CustomerPortalPage";
+
+function customerRoute(): { accountSlug: string } | null {
+  const parts = window.location.pathname.split("/").filter(Boolean);
+  if (parts[0] !== "customer" || !parts[1]) return null;
+  return { accountSlug: decodeURIComponent(parts[1]) };
+}
 
 export function App() {
-  const [loading, setLoading] = useState(true);
+  const portal = customerRoute();
+  const [loading, setLoading] = useState(!portal);
   const [initialized, setInitialized] = useState<boolean | null>(null);
-  const [user, setUser] = useState<any>(null);
-  const [account, setAccount] = useState<any>(null);
+  const [session, setSession] = useState<AdminSession | null>(null);
+  const [bootstrapError, setBootstrapError] = useState<unknown>(null);
 
-  useEffect(() => {
-    checkSystemStatus();
-  }, []);
-
-  const checkSystemStatus = async () => {
+  async function bootstrap() {
+    setLoading(true);
+    setBootstrapError(null);
     try {
-      setLoading(true);
-      const status = await api.system.getStatus();
+      const status = await api.setup.status();
       setInitialized(status.initialized);
-
       if (status.initialized) {
-        const token = localStorage.getItem("licenkit_token");
-        if (token) {
-          try {
-            const me = await api.auth.me();
-            setUser(me.user);
-            setAccount(me.account);
-          } catch {
-            localStorage.removeItem("licenkit_token");
-          }
+        try {
+          setSession(await api.admin.auth.session());
+        } catch (caught) {
+          if (isApiError(caught) && (caught.status === 401 || caught.status === 403)) setSession(null);
+          else throw caught;
         }
+      } else {
+        setSession(null);
       }
-    } catch (err) {
-      console.error("Failed to connect to LicenKit server:", err);
-      setInitialized(false);
+    } catch (caught) {
+      setBootstrapError(caught);
+      setInitialized(null);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleSetupOrLoginSuccess = (_token: string, newUser: any, newAccount: any) => {
-    setUser(newUser);
-    setAccount(newAccount);
-    setInitialized(true);
-  };
+  useEffect(() => { if (!portal) void bootstrap() }, []);
 
-  const handleLogout = async () => {
-    try {
-      await api.auth.logout();
-    } catch {
-      // ignore
-    }
-    localStorage.removeItem("licenkit_token");
-    setUser(null);
-    setAccount(null);
-  };
+  if (portal) return <CustomerPortalPage accountSlug={portal.accountSlug} />;
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-slate-400 gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
-        <span className="text-sm font-medium">Connecting to LicenKit...</span>
-      </div>
-    );
+    return <main className="centered-page"><div className="loading-brand"><span className="brand-mark"><Loader2 className="size-6 animate-spin" /></span><strong>正在连接 LicenKit</strong><span>读取一次性 Setup 闩锁与管理员 Session</span></div></main>;
   }
 
-  // Not yet initialized -> Show First-time Setup Wizard
-  if (!initialized) {
-    return <SetupPage onSetupSuccess={handleSetupOrLoginSuccess} />;
+  if (bootstrapError || initialized === null) {
+    return <main className="centered-page"><section className="connection-error card"><ServerCrash className="size-8" /><h1>无法确认实例状态</h1><p>网络或服务端错误不能被当作“尚未初始化”。修复连接后重试。</p><ErrorPanel error={bootstrapError} /><Button onClick={() => void bootstrap()}><RefreshCw className="size-4" />重新连接</Button></section></main>;
   }
 
-  // Initialized, but not logged in -> Show Login Page
-  if (!user || !account) {
-    return <LoginPage onLoginSuccess={handleSetupOrLoginSuccess} />;
-  }
+  if (!initialized) return <SetupPage onSetupSuccess={(result) => { setSession(result); setInitialized(true) }} />;
+  if (!session) return <LoginPage onLoginSuccess={setSession} />;
 
-  // Fully authenticated -> Dashboard
-  return <DashboardPage user={user} account={account} onLogout={handleLogout} />;
+  return <DashboardPage user={session.user} account={session.account} onLogout={() => {
+    void api.admin.auth.logout().then(() => setSession(null)).catch(setBootstrapError);
+  }} />;
 }
 
 export default App;

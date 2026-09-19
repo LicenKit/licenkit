@@ -17,9 +17,9 @@
     "dev:server": "pnpm --filter @licenkit/server run dev",
     "dev:web": "pnpm --filter @licenkit/web run dev",
     "dev:cli": "pnpm --filter @licenkit/cli run dev",
-    "build": "pnpm --filter @licenkit/cli run build && pnpm --filter @licenkit/web run build && pnpm --filter @licenkit/server run build",
+    "build": "pnpm --filter @licenkit/checkout run build && pnpm --filter @licenkit/cli run build && pnpm --filter @licenkit/web run build && pnpm --filter @licenkit/server run build",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm --filter @licenkit/server run test && pnpm --filter @licenkit/cli run test",
+    "test": "pnpm --filter @licenkit/server run test && pnpm --filter @licenkit/cli run test && pnpm --filter @licenkit/checkout run test && pnpm --filter @licenkit/web run test",
     "deploy": "pnpm run build && pnpm --filter @licenkit/server run deploy"
   },
   "packageManager": "pnpm@10.32.1"

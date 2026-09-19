@@ -57,7 +57,7 @@ export function redactSensitiveData(obj: any): any {
 export interface RecordAuditLogParams {
   c: Context<AppContext>;
   action: string;
-  resourceType: "user" | "product" | "policy" | "license" | "settings" | "webhook" | "auth" | string;
+  resourceType: string;
   resourceId?: string | null;
   details?: Record<string, any>;
   userId?: string;
@@ -101,12 +101,17 @@ export async function recordAuditLog(params: RecordAuditLogParams): Promise<stri
   await db.insert(auditLogs).values({
     id,
     accountId,
-    userId,
-    userEmail,
+    actorType: "user",
+    actorUserId: userId,
+    actorCustomerId: null,
     action,
     resourceType,
     resourceId: resourceId ?? null,
-    details: JSON.stringify(sanitizedDetails),
+    requestId: c.get("requestId") || null,
+    detailsRedactedJson: JSON.stringify({
+      ...sanitizedDetails,
+      actor_email: userEmail,
+    }),
     ip,
     userAgent,
     createdAt: now,

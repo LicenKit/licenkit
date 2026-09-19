@@ -4,13 +4,14 @@
 
 本文档定义接口边界和关键语义，不冻结所有字段。开发阶段可以补充分页和展示字段，但不得改变领域不变量。
 
-接口分为六组：
+接口分为七组：
 
 | 接口 | 调用方 | 鉴权 |
 | --- | --- | --- |
 | Initial Setup API | 独立部署首次安装 | `INITIAL_SETUP_TOKEN`，且数据库必须未初始化 |
 | Admin API | 管理控制台和自动化工具 | 管理员 Session |
 | Customer Portal API | 客户授权中心 | Magic Link 与 Customer Session |
+| Public Checkout API | 参考产品页和用户自定义产品页 | 无鉴权，只返回公开且经过就绪过滤的配置 |
 | Client API | 集成 LicenKit SDK 的 App | 注册码或机器令牌 |
 | Payment Inbound Webhook | 支付平台 | 渠道原始请求签名 |
 | Outbound Webhook | LicenKit 主动调用客户系统 | LicenKit HMAC 签名 |
@@ -78,12 +79,15 @@ Setup 页面至少包含实例/初始 Account 名称，以及管理员姓名、�
 
 ### 4.1 管理员会话与默认拒绝授权
 
-管理员登录必须提交 `accountSlug + email + password`。成功后设置 HttpOnly、Secure、SameSite=Lax 的 host-only Cookie；Cookie 携带账户选择器和随机 Session Token，服务端只保存 Token 哈希，并始终以 `account_id + token_hash` 查询。每个请求都重新检查 Account、User、Session 状态和当前角色，所有写请求验证同源。
+管理员登录必须提交 `accountSlug + email + password`。成功后设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie，以及独立的 Secure、SameSite=Lax、host-only CSRF Cookie；后者允许同源前端读取。服务端只保存两者 Hash，并始终以 `account_id + session_token_hash` 查询 Session。每个请求都重新检查 Account、User、Session 状态和当前角色。除登录外，所有 Cookie 鉴权的 POST/PUT/PATCH/DELETE 同时要求精确 Origin、`X-CSRF-Token` Header 与 CSRF Cookie 常量时间相等，并确认 CSRF Token Hash 属于当前 Session；SameSite 只是附加保护。登录和 Setup 没有既有 Session，仍必须执行精确 Origin 检查和独立限流。
 
 ```text
 POST /api/v1/admin/auth/login
 GET  /api/v1/admin/auth/session
 POST /api/v1/admin/auth/logout
+
+GET   /api/v1/admin/account
+PATCH /api/v1/admin/account
 
 GET   /api/v1/admin/users
 POST  /api/v1/admin/users
@@ -93,14 +97,16 @@ POST  /api/v1/admin/users/:userId/sessions/revoke
 
 User 管理接口只允许 owner，并强制使用当前 Session 的 Account。首个 Owner 只由 Setup 创建；V1 不实现 Cloud Account 创建、公开管理员注册或 Cloud Adapter。
 
+Account 更新接口在 V1 只允许 owner。`defaultSubscriptionPaymentGraceSeconds` 初始为 `432000`（5 天）且必须是非负整数；修改后只影响之后创建且未显式填写宽限期的订阅授权方案，不追溯修改已有方案或 License。
+
 每条 Admin 路由必须声明一个权限；未声明权限、角色不在允许集合、资源不属于当前 Account 时一律拒绝。V1 权限矩阵如下：
 
 | 能力 | owner | admin | member | viewer |
 | --- | --- | --- | --- | --- |
 | 读取本账户非 Secret 数据 | 允许 | 允许 | 允许 | 允许 |
 | Account、User、角色与 Session 管理 | 允许 | 拒绝 | 拒绝 | 拒绝 |
-| Product、Release、签名密钥 | 允许 | 允许 | 拒绝 | 拒绝 |
-| License Plan、Billing Provider、Offer | 允许 | 允许 | 拒绝 | 拒绝 |
+| Product、Release、Trial Claim、签名密钥 | 允许 | 允许 | 拒绝 | 拒绝 |
+| License Plan、Billing Provider、Billing Customer 对账、Offer | 允许 | 允许 | 拒绝 | 拒绝 |
 | Outbound Endpoint 与 Secret 轮换 | 允许 | 允许 | 拒绝 | 拒绝 |
 | Activation 释放等低风险支持操作 | 允许 | 允许 | 允许 | 拒绝 |
 | License 签发、找回、安全重置、暂停与吊销 | 允许 | 允许 | 拒绝 | 拒绝 |
@@ -119,9 +125,31 @@ POST   /api/v1/admin/products
 GET    /api/v1/admin/products/:productId
 PATCH  /api/v1/admin/products/:productId
 POST   /api/v1/admin/products/:productId/archive
+GET    /api/v1/admin/products/:productId/trials
+GET    /api/v1/admin/products/:productId/trials/:trialId
+POST   /api/v1/admin/products/:productId/trials/:trialId/revoke
 ```
 
 产品归档不影响已有 License。
+
+Product 可以配置一组 V1 无需支付方式的设备试用规则：
+
+```json
+{
+  "slug": "example-app",
+  "name": "Example App",
+  "billingEnvironment": "live",
+  "trial": {
+    "enabled": true,
+    "durationSeconds": 1209600,
+    "features": ["pro_export"]
+  }
+}
+```
+
+`slug` 在当前 Account 内唯一，只接受规范化的小写 URL-safe 值，用于公开 Checkout URL。`billingEnvironment` 可为 `sandbox|live|null`：`null` 表示不开放公开支付销售；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。启用试用时 `durationSeconds` 必须显式提供正整数；V1 不使用隐式全局试用天数。修改 Product 的试用时长或功能只影响之后领取的 Trial Claim。
+
+Trial Claim 查询和吊销只允许 owner/admin，并在持久层同时限定当前 `account_id + product_id + trial_id`。吊销请求必须提交非空 `reason`；操作幂等地写入 `revoked_at`、原因和管理员审计，不删除领取历史，也不允许通过“编辑到期时间”重置试用。Product 归档只阻止新领取，不隐式吊销已有 Claim。
 
 ### 4.3 Product Release
 
@@ -182,7 +210,8 @@ POST   /api/v1/admin/license-plans/:planId/migrations
 - `licenseModel` 描述有效期生命周期：永久、固定期限或随订阅周期更新；
 - `credentialMode` 不描述是否联网。`opaque` 只签发 Machine Token，`signed` 在相同在线流程上额外签发 Signed License Token；
 - `updateWindowSeconds` 只适用于 `perpetual`；`null` 表示所有未来版本，正整数表示签发后的版本更新窗口；
-- `credentialMode=opaque` 时 `signedTokenTtlSeconds` 必须为 0，`signed` 时必须大于 0。
+- `credentialMode=opaque` 时 `signedTokenTtlSeconds` 必须为 0，`signed` 时必须大于 0；
+- 非订阅方案的 `paymentGraceSeconds` 必须为 0；订阅方案省略该字段时，服务端读取当前 Account 默认值并把解析后的整数写入方案响应与数据库。
 
 更新成功后 revision 递增。响应需要明确：
 
@@ -206,6 +235,7 @@ POST   /api/v1/admin/licenses/:licenseId/revoke
 POST   /api/v1/admin/licenses/:licenseId/recover-key
 POST   /api/v1/admin/licenses/:licenseId/security-reset
 POST   /api/v1/admin/licenses/:licenseId/extend-updates
+POST   /api/v1/admin/licenses/:licenseId/renew-term
 GET    /api/v1/admin/licenses/:licenseId/activations
 POST   /api/v1/admin/licenses/:licenseId/activations/:activationId/revoke
 ```
@@ -216,6 +246,7 @@ POST   /api/v1/admin/licenses/:licenseId/activations/:activationId/revoke
 {
   "licensePlanId": "lpl_01...",
   "customerEmail": "buyer@example.com",
+  "expiresAt": null,
   "delivery": {
     "sendNotification": true
   }
@@ -223,6 +254,14 @@ POST   /api/v1/admin/licenses/:licenseId/activations/:activationId/revoke
 ```
 
 `customerEmail` 为必填字段。服务端使用统一规范化规则查找或创建 Customer，再把 License 写入该 `customer_id`；客户端不能直接提交任意 Customer ID 绕过账户归属检查。
+
+管理端和受信 API 可以签发三类 License：
+
+- `perpetual`：`expiresAt` 必须省略或为 `null`，响应为 `renewalMode=none`；这是给朋友签发永久 License 的正确模型；
+- `fixed_term`：`expiresAt` 必须省略，由服务端按方案的 `default_term_seconds` 计算，响应为 `renewalMode=none`；
+- `subscription`：必须提交晚于当前时间的绝对 `expiresAt`，响应为 `renewalMode=manual`。
+
+手动订阅不创建 Billing Subscription，且无论方案中的支付宽限期是多少，License 的 `paymentGraceSeconds` 都固化为 0。服务端不能接受请求直接传入 `renewalMode`、`paymentGraceSeconds` 或支付来源字段；这些字段由签发路径确定，避免调用方拼出相互矛盾的状态。
 
 成功响应可以返回一次注册码，但 API 必须同时返回通知状态：
 
@@ -232,6 +271,9 @@ POST   /api/v1/admin/licenses/:licenseId/activations/:activationId/revoke
     "id": "lic_01...",
     "licenseKey": "LK-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XX",
     "status": "active",
+    "licenseModel": "perpetual",
+    "renewalMode": "none",
+    "expiresAt": null,
     "updatesUntil": "2027-09-19T10:00:00Z"
   },
   "delivery": {
@@ -267,6 +309,21 @@ POST /api/v1/admin/licenses/:licenseId/extend-updates
 
 请求传入新的绝对 `updatesUntil`；`null` 表示升级为不限制未来版本。该操作只适用于 `perpetual` License，新值不能早于当前值，不改变 `expires_at`、注册码或 Activation，并且必须记录前值、后值和原因。
 
+#### 手动订阅续期
+
+```text
+POST /api/v1/admin/licenses/:licenseId/renew-term
+```
+
+```json
+{
+  "expiresAt": "2027-09-19T10:00:00Z",
+  "reason": "Complimentary annual renewal"
+}
+```
+
+该操作只接受 `license_model=subscription + renewal_mode=manual`。新的 `expiresAt` 必须晚于当前到期时间和当前时间；成功时只延长同一 License，保留注册码与 Activation，并记录前值、后值、原因、操作者和请求 ID。接口接收绝对时间，不接收“增加天数”；当重放值恰好等于当前 `expiresAt` 时返回当前结果而不再次延长，早于当前值才拒绝。`perpetual` 不需要续期，`fixed_term` 到期后的新授权策略不通过本接口伪装，`renewal_mode=billing` 只能由已验签支付事件推进。
+
 ### 4.6 Billing Provider
 
 ```text
@@ -278,7 +335,36 @@ POST   /api/v1/admin/billing/providers/:providerId/test
 
 测试接口只验证配置和签名样本能力，不创建 License。
 
-Webhook Secret 与可选的支付平台 API Secret 分开配置。API Secret 只用于 Adapter 创建支付平台托管客户门户会话。Secret 写入后只返回是否已配置和掩码，不返回密文或明文。
+Paddle Provider 配置三类互不替代的凭证：
+
+- `clientSideToken`：必填、与 `sandbox|live` 环境匹配，作为公开字段返回给 Paddle.js；它不是 Secret；
+- Webhook Secret：必填、加密保存，只用于验证原始 Paddle Webhook；
+- Paddle API Key：可选、加密保存，只在启用服务器端 API 能力时需要；Get Customer/对账至少要求 `customer.read`，托管客户门户要求 `customer_portal_session.write`。
+
+管理 API 返回 `clientSideToken` 的值或可用状态，但 Webhook Secret 与 API Key 写入后只返回是否已配置和掩码，不返回明文。基础购买、事件履约和发码不能要求 API Key；没有 API Key 时 Customer 映射通过 Webhook 收敛。
+
+`provider` 和 `environment` 是连接身份，创建后不可 PATCH；切换 Sandbox/Live 必须创建另一条 Provider。PATCH 只允许轮换同一连接的 Client-side Token、Webhook Secret、可选 API Key 或修改状态。这样已有外部 Customer、Transaction、Subscription 和事件 ID 不会被重新解释到另一环境。
+
+启用 Customer API 读穿后，LicenKit 服务端可以发起 Paddle Billing REST API 请求；它不是基础路径，也不是回调 Paddle Webhook：
+
+```http
+GET https://sandbox-api.paddle.com/customers/{customer_id}  # sandbox
+GET https://api.paddle.com/customers/{customer_id}          # live
+Authorization: Bearer <decrypted Paddle API Key>
+Accept: application/json
+Paddle-Version: 1
+```
+
+`customer_id` 必须来自已验签 Paddle 事件中的 `data.customer_id`，并符合 Paddle `ctm_*` 标识格式；base URL 只由 Billing Provider 的 `environment` 决定，不能由请求体或 Customer ID 决定。Sandbox Provider 只能使用 Sandbox API Key 和 Sandbox base URL，Live Provider 只能使用 Live API Key 和 Live base URL。调用只发生在服务端，不能使用 Paddle.js Client-side Token，也不能把 API Key 返回浏览器。未配置 API Key 时跳过读穿并保持事件 `pending`，等待 Customer Webhook；不能把“缺少可选 API Key”转成 `needs_attention`。
+
+成功响应使用 `data.id`、`data.email`、`data.name`、`data.status`、`data.created_at` 和 `data.updated_at` 进入统一 Billing Customer 同步服务，并保存 `meta.request_id` 用于诊断。处理规则固定为：
+
+- `200`：校验响应 Customer ID 与请求一致后同步并重试当前履约；
+- `401`、`403`：已启用的 API 读穿配置无效、过期或缺少权限，停止继续调用该能力、报告 Provider 配置错误，事件仍可等待 Customer Webhook；只有依赖等待超过显式上限时才进入 `needs_attention`；
+- `404` 或返回 `status=archived`：外部 Customer 不可用于新履约，进入 `needs_attention`；
+- `429`、`5xx`、网络超时：Inbound Event 保持 `pending`，保存 HTTP 状态、Paddle 错误码和 request ID 后退避重试。
+
+V1 创建 Billing Provider 时只接受 `provider=paddle`，并分别配置 `sandbox` 或 `live`。其他 provider 返回 `BILLING_PROVIDER_UNSUPPORTED`；后续增加 Adapter 时保持相同 API 与领域合同。
 
 ### 4.7 Offer Mapping
 
@@ -286,6 +372,8 @@ Webhook Secret 与可选的支付平台 API Secret 分开配置。API Secret 只
 GET    /api/v1/admin/billing/offers
 POST   /api/v1/admin/billing/offers
 PATCH  /api/v1/admin/billing/offers/:offerId
+POST   /api/v1/admin/billing/offers/:offerId/verification-config
+POST   /api/v1/admin/billing/offers/:offerId/activate
 POST   /api/v1/admin/billing/offers/:offerId/archive
 ```
 
@@ -301,17 +389,51 @@ POST   /api/v1/admin/billing/offers/:offerId/archive
 }
 ```
 
+创建响应的 `status` 固定为 `draft`。Offer 只有在 Billing Provider 环境等于 Product `billingEnvironment` 时才允许激活；不同环境的 draft Sandbox Offer 仍可用于管理员闭环验证，但不能进入公开 Checkout。
+
+PATCH 只允许修改尚无 Checkout Verification 的 draft Offer。只要存在任一验证尝试，Provider、Price、Product、Plan 和 `purchaseType` 即被锁定；需要改变映射时归档旧 Offer 并创建新 Offer，不能让旧验证证据跟随到新权益。
+
+`verification-config` 使用 POST，因为每次调用都会创建一条短期、一次性的 Checkout Verification。它只允许 owner/admin 针对 draft Sandbox Offer 调用，响应设置 `Cache-Control: no-store`，返回与公开 Checkout 相同的 Product/Offer/Provider 配置，并额外包含：
+
+```json
+{
+  "verificationMode": true,
+  "verificationToken": "vfy_一次性高熵随机值",
+  "expiresAt": "2026-09-19T10:15:00Z"
+}
+```
+
+服务端只保存 `verificationToken` 哈希；管理控制台不得写入日志、localStorage、分析事件或 URL。该 POST 还必须通过管理员 Session 权限、精确 Origin 和双提交 CSRF 校验。Web Checkout SDK 的受限验证入口把令牌附加为 `custom_data.licenkit_checkout_verification`，调用方不能另行传入任意 custom data。该接口不允许 Live Offer、不公开到无鉴权路由，也不绕过一个 Price、数量 1、Webhook、Customer 解析、Fulfillment 或 Notification Gateway。令牌的权限只是在完全匹配的 Sandbox 交易中生成一条永久不可激活的验证 License，不授予正式权益。
+
+`activate` 不接受调用方传入 `ready=true`；服务端实时执行 Checkout Readiness 检查并返回每项状态。至少包括 Product/Plan/Provider、Provider 环境等于 Product `billingEnvironment`、Client-side Token 环境与 PricePreview、当前 Provider 配置更新时间之后最小 Paddle 事件合同中每一种事件的成功验签证据（通常由官方模拟器触发）、Notification Gateway 的 active 状态和当前配置之后的 accepted Endpoint Test、Scheduled Worker、`signed` 模式密钥，以及同一 Account、Product、License Plan 与 `purchaseType` 的 `billing_checkout_verifications.status=completed` 真实 Sandbox 证据。Sandbox Offer 通过 `verification-config` 产生该证据；Live Offer 复用对应 Sandbox 证据并额外要求 Live Client-side Token 对当前 Live Price 的 PricePreview 成功。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和管理端可见的具体检查项，不改变 Offer 状态。
+
+若 Paddle recurring price 配置了免费试用，V1 只支持要求 Checkout 预先收集支付方式的免费试用。试用天数和下一扣款时间以已验签 Paddle Subscription 为准，不复制到 Offer 或 Product Trial 配置；Offer 仍只负责把外部 Price 映射到 `subscription` License Plan。
+
 ### 4.8 Subscription 与 Inbound Event
 
 ```text
+GET   /api/v1/admin/billing/customers
+GET   /api/v1/admin/billing/customers/:billingCustomerId
+POST  /api/v1/admin/billing/customers/:billingCustomerId/reconcile
 GET   /api/v1/admin/billing/subscriptions
 GET   /api/v1/admin/billing/subscriptions/:subscriptionId
 GET   /api/v1/admin/billing/events
 GET   /api/v1/admin/billing/events/:eventId
 POST  /api/v1/admin/billing/events/:eventId/replay
+GET   /api/v1/admin/billing/adjustments
+GET   /api/v1/admin/billing/adjustments/:adjustmentId
+POST  /api/v1/admin/billing/adjustments/:adjustmentId/resolve
 ```
 
+Billing Customer 详情展示 provider Customer ID、镜像邮箱、关联 Customer、`linkStatus` 和最后同步来源，但不返回服务端 API 凭证。只有 Provider 已配置相应 API Key 时才开放 `reconcile`；它使用服务器端凭证重新读取同一个外部 Customer ID，不接受调用方传入邮箱，也不自动修改或改绑 LicenKit Customer。未配置时返回 `BILLING_PROVIDER_API_CAPABILITY_DISABLED`，不影响 Webhook 驱动的购买履约。邮箱一致时可把映射恢复为 `linked`；仍不一致时保持 `email_mismatch`。
+
+购买事件因 `BILLING_CUSTOMER_PENDING` 超时进入 `needs_attention` 时，管理响应给出外部 Customer ID、Provider 环境和来源事件引用，并建议管理员先在 Paddle Notification 日志重放 Customer 事件；若已配置 API Key，也可以 reconcile。修复后调用原 Event replay。接口不得提供“输入邮箱并继续履约”的旁路。
+
+列表和详情必须以当前 Session 的 `account_id` 查询；详情、对账和支付履约都使用 `account_id + billing_provider_id + external_customer_id` 定位映射。API 不提供仅按外部 Customer ID 的全局查询，也不把 Paddle、未来其他平台或 sandbox/live 中相同字符串的 ID 视为同一身份。
+
 Replay 重新执行同一持久化事件，不能跳过事件唯一约束，也不能复制为新事件规避幂等。
+
+Adjustment 详情必须返回 provider、外部 Adjustment/Transaction/Subscription/Customer ID、原始 `action + type + status`、金额/币种、关联 License、自动影响、人工状态和来源事件。`resolve` 只允许 owner/admin，要求 `action` 为 `no_action|keep_suspended|reinstate|revoke|security_reset` 之一并提交非空原因。服务端根据当前 Adjustment 与 License 状态验证动作是否合法，在一个原子批次中更新 License/Activation、Adjustment 和审计；请求不能直接提交目标 License 状态。
 
 ### 4.9 Outbound Endpoint
 
@@ -337,9 +459,11 @@ POST   /api/v1/admin/outbound/endpoints/:endpointId/disable
     "customer.portal_access_requested"
   ],
   "timeoutMs": 10000,
-  "maxAttempts": 8
+  "maxAutomaticAttempts": 4
 }
 ```
+
+`maxAutomaticAttempts` 包含首次请求，因此默认 4 表示失败后自动重试 3 次。Endpoint 创建时可以显式调整 1 到 20，但凭证或负载到期仍会提前终止后续 Attempt。Delivery 创建时固化该值，Endpoint 后续修改不改变已有 Delivery。
 
 创建或轮换时，签名 Secret 只返回一次。已有 Delivery 继续使用创建时固化的目标 URL 和加密 Secret，轮换只影响新 Delivery。
 
@@ -351,11 +475,16 @@ POST   /api/v1/admin/outbound/endpoints/:endpointId/disable
 GET   /api/v1/admin/outbound/deliveries
 GET   /api/v1/admin/outbound/deliveries/:deliveryId
 POST  /api/v1/admin/outbound/deliveries/:deliveryId/retry
+POST  /api/v1/admin/outbound/deliveries/:deliveryId/resume-after-configuration
 ```
 
-`retry` 只适用于仍保留加密负载的失败 Delivery。它不会轮换注册码，也不会新建逻辑消息。
+`retry` 只适用于仍保留加密负载的 `failed` Delivery。每次调用只追加一个来源为 `manual_retry` 的 HTTP Attempt，不重置 `automaticAttemptCount`，也不启动新一轮自动重试；它不会轮换注册码或新建逻辑消息，并写入管理员审计。
+
+`resume-after-configuration` 只适用于 `blocked_configuration`、负载未过期、尚未产生 HTTP Attempt 的 Delivery，并且当前 Notification Gateway 已 active 且最近 Endpoint Test 为 accepted。服务端在一个原子批次中绑定并固化当前 Endpoint URL 与 Secret、改为 `pending`、安排发送并写审计。它不能用于把失败的旧 Endpoint 偷换成新 Endpoint；已有 Attempt 的 Delivery 仍遵守其创建时快照和普通 retry 合同。
 
 如果负载已经清理，接口返回 `DELIVERY_PAYLOAD_EXPIRED`，调用方需要执行 `recover-key`。
+
+敏感负载默认最多保留 24 小时，并在 Delivery 创建时固化 `payloadExpiresAt`；Magic Link 使用 Challenge 的更早到期时间。Notification Gateway 返回 2xx 后立即清除负载，不能对 accepted Delivery 执行 retry。
 
 ### 4.11 Customer
 
@@ -415,7 +544,7 @@ POST /api/v1/customer/auth/magic-link/consume
 
 服务端对 Token 计算哈希，通过条件写入保证 Challenge 未消费、未吊销且未过期，并在同一原子批次中写入 `consumed_at` 和与该 Challenge 唯一绑定的 Customer Session。并发消费最多一个请求成功。
 
-服务端先以 `accountSlug` 找到 Account，再用 `account_id + token_hash` 查询 Challenge。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Cookie；Cookie 携带账户选择器和随机会话 Token，不在 JSON 中返回 Token。后续会话也按 `account_id + session_token_hash` 查询。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
+服务端先以 `accountSlug` 找到 Account，再用 `account_id + token_hash` 查询 Challenge。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie，以及独立可读的 Secure、SameSite=Lax、host-only CSRF Cookie；服务端只保存两者 Hash。后续会话按 `account_id + session_token_hash` 查询，状态写入同时要求精确 Origin、`X-CSRF-Token` Header、CSRF Cookie 和当前 Session Hash 四者一致。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
 
 ```text
 POST /api/v1/customer/auth/logout
@@ -436,6 +565,8 @@ GET /api/v1/customer/licenses/:licenseId/subscription
 所有查询必须在持久层同时限定当前 `account_id + customer_id`。对不属于当前 Customer 的资源统一返回资源不存在，不能通过 ID 枚举其他 Customer 的 License 或 Activation。
 
 Customer 响应不返回注册码哈希、机器令牌哈希、支付 Secret、支付事件原文或内部敏感 Delivery 负载。
+
+`GET .../subscription` 对 `renewal_mode=manual` 返回发行方管理的到期时间且 `billingSubscription=null`；对 `renewal_mode=billing` 返回对应 Billing Subscription；`perpetual` 和 `fixed_term` 返回无订阅关系。客户端不得仅根据 `license_model=subscription` 假设一定存在支付门户。
 
 ### 5.4 释放设备
 
@@ -481,11 +612,76 @@ POST /api/v1/customer/licenses/:licenseId/subscription/portal-session
 
 该接口只返回支付平台托管 URL，不修改本地 Subscription 或 License。支付平台操作完成后，本地状态仍由后续已验签 Webhook 更新。
 
-缺少 API Secret、外部 Customer ID 或 provider 不支持客户门户时返回明确配置错误，例如 `BILLING_CUSTOMER_PORTAL_NOT_CONFIGURED` 或 `BILLING_CUSTOMER_PORTAL_UNSUPPORTED`，并在内部保留 provider 原始错误。
+该接口只适用于 `renewal_mode=billing`。手动订阅返回 `BILLING_SUBSCRIPTION_NOT_MANAGED`；永久或固定期限 License 返回资源不支持该操作。缺少服务端 API 凭证、外部 Customer ID 或 provider 不支持客户门户时返回明确配置错误，例如 `BILLING_CUSTOMER_PORTAL_NOT_CONFIGURED` 或 `BILLING_CUSTOMER_PORTAL_UNSUPPORTED`，并在内部保留 provider 原始错误。
 
-## 6. Client API
+## 6. Public Checkout API
 
-### 6.1 激活
+```text
+GET /api/v1/public/accounts/:accountSlug/products/:productSlug/checkout
+```
+
+该接口无鉴权、无 Cookie，供任意来源的参考产品页或用户自定义产品页读取。响应允许 `Access-Control-Allow-Origin: *`，禁止 credentials，并设置 `Cache-Control: no-store`，避免关键依赖失效后浏览器继续使用旧的可购买配置。
+
+可购买响应示例：
+
+```json
+{
+  "success": true,
+  "data": {
+    "product": {
+      "slug": "example-app",
+      "name": "Example App",
+      "description": "A focused desktop tool"
+    },
+    "checkout": {
+      "available": true,
+      "provider": "paddle",
+      "environment": "sandbox",
+      "clientSideToken": "test_..."
+    },
+    "offers": [
+      {
+        "id": "off_01...",
+        "name": "Pro Annual",
+        "purchaseType": "subscription",
+        "priceId": "pri_01...",
+        "quantity": 1
+      }
+    ]
+  }
+}
+```
+
+公开字段只有 Product 展示信息、Product `billingEnvironment` 对应的 active Offer 展示信息、Provider 类型与环境、Client-side Token、Price ID 和固定数量。服务端不得混合返回 Sandbox 与 Live Offer。API Key、Webhook Secret、Provider 内部 ID、Notification Gateway URL/Secret、内部事件、邮箱、验证令牌、测试证据和详细错误不得进入响应。`offerId` 是 SDK 接受的购买选择器；SDK 不接受调用方直接传入 `priceId` 或 `quantity`。
+
+服务端每次读取当前状态并执行 Checkout Readiness。不可购买仍返回成功的配置查询，但不返回 Client-side Token 或 Price ID：
+
+```json
+{
+  "success": true,
+  "data": {
+    "product": {
+      "slug": "example-app",
+      "name": "Example App"
+    },
+    "checkout": {
+      "available": false,
+      "reasonCodes": ["CHECKOUT_NOTIFICATION_UNAVAILABLE"]
+    },
+    "offers": []
+  }
+}
+```
+
+公开原因码只表达调用方可采取的安全动作，例如 `PRODUCT_UNAVAILABLE`、`PRODUCT_BILLING_ENVIRONMENT_NOT_CONFIGURED`、`NO_ACTIVE_OFFER`、`CHECKOUT_PROVIDER_UNAVAILABLE`、`CHECKOUT_NOTIFICATION_UNAVAILABLE`、`CHECKOUT_PROCESSING_UNAVAILABLE` 或 `CHECKOUT_CONFIGURATION_PENDING`。完整失败项只在 Admin API 中返回。Product 不存在仍使用普通 404，不能通过 unavailable 响应泄露其他账户资源。
+
+公开 API 只决定“官方页面现在是否允许打开 Checkout”，不是支付结果查询。浏览器成功回调、成功 URL 或公开 API 响应都不能触发履约；发码只由第 8 节的已验签事件推进。
+
+`available=true` 只证明 LicenKit 共享依赖与所选 Provider/Offer 就绪，不证明调用该 API 的任意外部页面 Origin 已通过 Paddle Website Approval。Sandbox 与 Live 必须分别设置 Default Payment Link，Live 自定义产品页必须在实际 Origin 运行 Paddle.js 打开测试；Origin/Default Payment Link 错误由 SDK 保留 Paddle 原始错误并 fail-fast，不得误报为服务端支付失败。
+
+## 7. Client API
+
+### 7.1 激活
 
 ```text
 POST /api/v1/client/activate
@@ -537,7 +733,7 @@ POST /api/v1/client/activate
 }
 ```
 
-### 6.2 在线验证
+### 7.2 在线验证
 
 ```text
 POST /api/v1/client/validate
@@ -547,7 +743,50 @@ POST /api/v1/client/validate
 
 激活和在线校验都必须携带 App 内置的版本标识和平台。服务端在当前 Account 与 Product 下查找受信 Product Release；查不到时返回 `PRODUCT_RELEASE_UNKNOWN`。对受版本期限约束的永久 License，受信 `released_at > updates_until` 返回 `UPDATE_ENTITLEMENT_REQUIRED`；该错误不改变 License 状态，也不能转换成 `LICENSE_EXPIRED`。
 
-### 6.3 主动解绑
+激活和在线校验在其他 License 状态判断前拒绝 `is_checkout_verification=1`，返回 `LICENSE_CHECKOUT_VERIFICATION_ONLY`。管理员恢复、状态编辑和方案迁移也不得清除该标记；验证注册码只能证明邮件闭环，不能成为可用授权。
+
+### 7.3 无需支付方式的 Product/设备试用
+
+```text
+POST /api/v1/client/trials/claim
+POST /api/v1/client/trials/validate
+```
+
+领取请求：
+
+```json
+{
+  "account_id": "acc_01...",
+  "product_id": "prd_01...",
+  "fingerprint": "sha256:...",
+  "device_platform": "macos-arm64",
+  "release_version": "2.4.0",
+  "release_platform": "macos-universal"
+}
+```
+
+服务端要求 Product 为 active 且已启用试用，并在当前 Account 与 Product 下找到受信 Product Release。首次领取以 `Cache-Control: no-store` 返回一次 Trial Token：
+
+```json
+{
+  "success": true,
+  "data": {
+    "trial_id": "trl_01...",
+    "trial_token": "ttk_...",
+    "status": "active",
+    "expires_at": "2026-10-03T10:00:00Z",
+    "features": ["pro_export"]
+  }
+}
+```
+
+服务端只保存 Token 哈希。重复或并发领取同一 `account_id + product_id + fingerprint` 返回 `TRIAL_ALREADY_CLAIMED`，不得延长到期时间或再次返回 Token。领取接口按 Account、Product、来源 IP 和设备指纹限流。
+
+校验请求携带 `trial_id`、`trial_token`、同一设备指纹、`release_version` 和 `release_platform`。服务端同时限定 Account 与 Product，验证 Token 哈希、设备绑定、吊销状态、绝对到期时间和 Product Release；成功时更新 `last_validated_at`。未知 Release、到期和吊销分别返回 `PRODUCT_RELEASE_UNKNOWN`、`TRIAL_EXPIRED` 和 `TRIAL_REVOKED`，不得归一化成 License 错误。V1 Trial Claim 只在线有效，不返回 Signed License Token。
+
+Paddle 免费订阅试用不调用这两个接口。它在已验签支付事件履约后得到普通 License Key，随后走 7.1 和 7.2 的正常 License 激活与校验合同。
+
+### 7.4 主动解绑
 
 ```text
 POST /api/v1/client/deactivate
@@ -555,7 +794,7 @@ POST /api/v1/client/deactivate
 
 服务端成功后 Activation 进入 `deactivated`。网络失败时 SDK 不能假装远端已经释放席位；本地是否清理凭证由 SDK 合同定义。
 
-### 6.4 公钥集合
+### 7.5 公钥集合
 
 ```text
 GET /api/v1/client/products/:productId/signing-keys
@@ -563,26 +802,46 @@ GET /api/v1/client/products/:productId/signing-keys
 
 该接口用于诊断和密钥轮换信息发布，不能替代 App 内置的信任根。响应包含 key ID、状态和公钥，不包含私钥。
 
-## 7. Payment Inbound Webhook
+## 8. Payment Inbound Webhook
 
 ```text
 POST /api/v1/webhooks/payments/:accountSlug/:billingProviderId
 ```
+
+V1 的首个真实实现是 Paddle；同一路由和处理顺序同时用于 Paddle Sandbox 与 Live，只由 Billing Provider 配置区分环境。
 
 处理顺序固定为：
 
 1. 根据 accountSlug 解析 Account，再以 `account_id + billingProviderId` 读取唯一 provider 和 environment 配置；
 2. 对原始请求体执行渠道签名验证；
 3. 提取稳定的外部事件 ID；
-4. 尝试写入 Inbound Event；
+4. 提取事件中存在的外部 Customer、Transaction、Subscription 与 Adjustment ID，并尝试写入 Inbound Event；
 5. 重复事件返回已有接收结果；
 6. 新事件持久化成功后返回 2xx；
 7. 请求后立即尝试履约以降低延迟；
 8. 即时处理未完成时，由 Scheduled Worker 根据同一条 Inbound Event 恢复。
 
-Billing Provider ID 只用于路由配置，不能替代验签，也不从请求体接受 `account_id`。所有 provider，包括 custom Adapter，都必须验签。没有签名配置时返回配置错误，不得继续处理。
+Billing Provider ID 只用于路由配置，不能替代验签，也不从请求体接受 `account_id`。所有已注册 provider，以及未来新增的 custom Adapter，都必须验签。没有签名配置时返回配置错误，不得继续处理。
 
-## 8. Notification Webhook
+只有 Inbound Event 已可靠持久化才返回 2xx。签名无效返回 4xx，数据库写入失败返回 5xx 让 Paddle 重试；事件已持久化后的 Customer API 超时、依赖未齐或履约失败不再改变本次接收响应，由内部状态机和 Scheduled Worker 重试，避免把 Paddle 重投当作内部任务队列。
+
+Paddle Notification Destination 最小事件合同为 `customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created` 和 `adjustment.updated`。Offer 激活检查必须在当前 Provider 配置更新时间之后找到每种事件对应的 Inbound Event 且验签成功，通常由管理员通过官方模拟器逐项触发；不能只验证 URL 可达，也不能要求 API Key 才能读取远端配置。Customer 事件 upsert Billing Customer 镜像并尝试建立内部映射。购买事件先按外部 Customer ID 查询映射；缺失时以 `BILLING_CUSTOMER_PENDING` 保持 `pending` 并等待 Customer 事件。只有配置了具备 `customer.read` 权限的 API Key 时才调用 Paddle Get Customer 加速恢复，API 失败不改变 Webhook 等待路径。
+
+只有 `linkStatus=linked` 才能创建新 License 和发码 Delivery。`email_mismatch`、无效/归档 provider Customer 或无法安全链接时进入 `needs_attention`。已有 Subscription 的续费根据 Subscription 直接更新原 License，不重新按邮箱链接。处理器不得读取 `custom_data.email`、Checkout 参数或调用方自报邮箱作为发码身份。
+
+普通首次购买还必须根据已验签 Transaction 行项目验证：恰好一个行项目、`quantity=1`、Price 命中当前 active Offer、Offer Provider 环境等于 Product `billingEnvironment`，并且 Offer、Product、Plan 和 `purchaseType` 一致。任何不满足项都以保留外部 Transaction、Price、数量、Provider 环境、Product 环境和事件 ID 的具体错误进入 `needs_attention`，不创建 Customer、License、Subscription 或 Delivery；不能选择第一项、忽略附加项目或按总金额猜测授权。
+
+唯一例外是首次验证 Transaction 的 `custom_data.licenkit_checkout_verification` 通过哈希等值查询命中同账户、当前 Offer 的 `pending` Checkout Verification，且令牌未过期、Provider 为 Sandbox、Price 和数量完全匹配。服务端以条件更新原子消费该令牌，再调用同一 Fulfillment Service 创建 `is_checkout_verification=1`、`suspended + checkout_verification` 的 License 和发码 Delivery；Delivery accepted 后验证状态才变为 completed。错误、过期、重复、Offer 不匹配或 Live Provider 的令牌进入 `needs_attention`，不得回退到普通付款。除这个窄用途随机令牌外，其他 `custom_data` 仍不得参与 Customer、Product、Plan 或授权身份判断。
+
+Paddle 会把 Checkout Transaction 的 custom data 复制到新 Subscription，并继续复制到该 Subscription 的后续 Transaction。处理器必须先按已验签事件中的外部 Subscription ID 查询既有 Billing Subscription：如果它绑定验证 License，则后续事件按验证订阅镜像处理，不再次消费 token，也不因为 token 已使用而产生新的 `needs_attention`。只有尚无已绑定 Subscription 的首次交易才允许令牌开启验证履约。
+
+对配置了免费试用的 Paddle recurring price，Adapter 必须从已验签事件取得 Subscription 的 `trialing` 状态、当前试用周期和下一扣款时间，再由统一 Fulfillment Service 原子创建 `subscription + billing` License、Billing Subscription 和首次发码 Delivery。`subscription.created` 和 `transaction.completed` 可以乱序到达；事实不足时 Inbound Event 保持 `pending`、把 `BILLING_DEPENDENCY_PENDING` 写入 `last_error_code` 并由同一调度器重试，不能创建半成品或对支付平台返回失败以诱发无界即时重投。试用转为 `active` 或 `past_due` 时只更新同一 License 与 Subscription；不得根据前端 Checkout 参数、未验签回调或本地计时器自行认定试用开始或结束。
+
+若 Billing Subscription 绑定 `is_checkout_verification=1` 的 License，后续 `subscription.updated`、续费、试用转正或付款恢复只能更新支付镜像和验证诊断，不能把 License 改为 active、清除验证标记或再次发码；数据库约束应使错误状态更新直接失败并保留原始事件。此规则优先于后续 Transaction 中被 Paddle 复制的已消费 verification token。
+
+`adjustment.created|updated` 必须按外部 Adjustment ID 幂等写入 Billing Adjustment。只有 `refund + full + approved` 和 `action=chargeback` 自动暂停已明确关联的 License，且不吊销 Activation；两者仍把 Adjustment 设为 open、Inbound Event 设为 `needs_attention`，等待管理员决定。`refund + pending_approval`、已批准部分退款、`chargeback_warning`、反转和无法关联的 Adjustment 同样进入 `needs_attention`，但不自动改变 License。`refund + rejected` 与 credit 类事件保留记录、标记 processed 且默认不改变授权。任何反转都不能隐式恢复 License；管理员通过独立 resolve API 决定 `no_action`、保持暂停、恢复、吊销或安全重置。扣款失败、取消、退款和拒付保留各自的 provider 事件类型、action、type、status、金额和原因。
+
+## 9. Notification Webhook
 
 LicenKit 向客户系统发送：
 
@@ -606,7 +865,7 @@ X-LicenKit-Signature: v1=...
 
 Notification Gateway 还需要处理 `customer.portal_access_requested`。该事件携带一次性 Magic Link，必须按敏感负载处理；接收方不能把完整 URL 写入普通日志。
 
-## 9. 业务事件 Webhook
+## 10. 业务事件 Webhook
 
 业务事件使用同一签名头，但不包含发码明文，典型事件包括：
 
@@ -616,8 +875,12 @@ Notification Gateway 还需要处理 `customer.portal_access_requested`。该事
 - `license.revoked`；
 - `activation.created`；
 - `activation.deactivated`；
+- `subscription.trial_started`；
+- `subscription.activated`；
 - `subscription.renewed`；
 - `subscription.past_due`；
 - `subscription.canceled`。
 
 客户通知与业务事件是两类 Delivery，不能因为配置了通配业务事件端点就自动触发客户邮件。
+
+订阅事件负载必须携带 `renewal_mode`；`subscription.renewed` 还携带 `renewal_source=manual|billing`，避免接收方把管理员续期误当成支付成功。Paddle provider 的原始事件类型和 ID 仍保存在来源字段中，不能被内部事件名覆盖。

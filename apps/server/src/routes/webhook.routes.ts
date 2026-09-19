@@ -1,836 +1,197 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
-import { eq, and, sql } from "drizzle-orm";
 import type { AppContext } from "../types";
-import { getTenantDB } from "../infra/db";
-import { accounts, webhookEvents, licenses, policies } from "../infra/db/schema";
-import {
-  decryptEnvelope,
-  getStorageEncryptionKey,
-  verifyPaddleSignature,
-  verifyStripeSignature,
-  verifyLemonSqueezySignature,
-  verifyOutboundWebhookSignature,
-  generateLicenseKey,
-  normalizeLicenseKey,
-  hashLicenseKey,
-} from "../infra/crypto";
-import { broadcastOutboundEvent } from "../infra/events/broadcast";
 import { AppError, NotFoundError } from "../middleware/error";
+import {
+  extractPaddleReferences,
+  hashPaddlePayload,
+  parsePaddleWebhook,
+  verifyPaddleWebhookSignature,
+} from "../infra/billing/paddle";
+import { decryptBillingProviderWebhookSecret, encryptInboundPayload } from "../infra/billing/storage";
+import type { BillingProviderRecord } from "../infra/billing/types";
+import { BillingProcessingError } from "../infra/billing/errors";
+import { processBillingInboundEvent } from "../services/billing/fulfillment";
 
 export const webhookRouter = new Hono<AppContext>();
 
-// POST /api/v1/webhooks/:provider/:account_id
-webhookRouter.post("/:provider/:account_id", async (c) => {
-  const provider = c.req.param("provider").toLowerCase();
-  const accountId = c.req.param("account_id");
+function inboundPayloadTtlSeconds(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return 86_400;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new AppError(
+      "BILLING_INBOUND_PAYLOAD_TTL_INVALID",
+      "SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS must be a positive integer.",
+      500,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Paddle receipt boundary. This route verifies the raw request and durably
+ * records one immutable Inbound Event. After that durable boundary it invokes
+ * the same processor used by the Scheduled Worker; the HTTP response never
+ * waits for fulfillment to finish.
+ */
+webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
+  const accountSlug = c.req.param("accountSlug");
+  const billingProviderId = c.req.param("billingProviderId");
+  const route = await c.env.DB.prepare(
+    `SELECT provider.id, provider.account_id, provider.provider, provider.environment,
+            provider.client_side_token, provider.webhook_secret_ciphertext,
+            provider.api_secret_ciphertext, provider.status,
+            provider.created_at, provider.updated_at
+     FROM billing_providers AS provider
+     JOIN accounts AS account ON account.id = provider.account_id
+     WHERE account.slug = ?1
+       AND account.status = 'active'
+       AND provider.account_id = account.id
+       AND provider.id = ?2
+       AND provider.provider = 'paddle'
+       AND provider.status = 'active'
+     LIMIT 1`,
+  ).bind(accountSlug, billingProviderId).first<BillingProviderRecord>();
+  if (!route) throw new NotFoundError("Paddle webhook destination was not found.");
+
   const rawBody = await c.req.text();
-
-  if (!["stripe", "paddle", "lemonsqueezy", "custom"].includes(provider)) {
-    throw new AppError("INVALID_PROVIDER", "Unsupported payment provider", 400);
+  const signatureHeader = c.req.header("paddle-signature");
+  if (!rawBody || !signatureHeader) {
+    throw new AppError(
+      "BILLING_WEBHOOK_SIGNATURE_OR_BODY_MISSING",
+      "Paddle-Signature and a raw request body are required.",
+      400,
+      { provider: "paddle", billingProviderId },
+    );
   }
 
-  const db = getTenantDB(c, accountId);
-
-  // 1. Fetch account and payment config
-  const account = await db.select().from(accounts).where(eq(accounts.id, accountId)).get();
-  if (!account || !account.isActive) {
-    throw new NotFoundError("Account not found or inactive");
+  const webhookSecret = await decryptBillingProviderWebhookSecret(route, c.env);
+  if (!await verifyPaddleWebhookSignature(rawBody, signatureHeader, webhookSecret)) {
+    throw new AppError(
+      "BILLING_WEBHOOK_SIGNATURE_INVALID",
+      "Paddle webhook signature verification failed.",
+      401,
+      { provider: "paddle", billingProviderId },
+    );
   }
 
-  // 2. Decrypt payment config to get webhook secret
-  let webhookSecret = "";
-  if (account.paymentConfigs) {
-    const encKey = getStorageEncryptionKey(c.env);
-    try {
-      const decrypted = await decryptEnvelope(account.paymentConfigs, encKey);
-      const parsed = JSON.parse(decrypted);
-      webhookSecret = parsed[provider]?.webhook_secret || "";
-    } catch (e: any) {
-      console.error(`Failed to decrypt webhook secret for provider ${provider}:`, e);
+  let event;
+  try {
+    event = parsePaddleWebhook(rawBody);
+  } catch (error) {
+    if (error instanceof BillingProcessingError) {
+      throw new AppError(error.code, error.message, 400, error.details);
+    }
+    throw error;
+  }
+  if (event.event_id.length > 255 || event.event_type.length > 255) {
+    throw new AppError(
+      "BILLING_WEBHOOK_IDENTIFIER_TOO_LONG",
+      "Paddle event ID or event type exceeds the accepted length.",
+      400,
+      { provider: "paddle", externalEventIdLength: event.event_id.length, eventTypeLength: event.event_type.length },
+    );
+  }
+
+  const references = extractPaddleReferences(event);
+  const inboundEventId = `ine_${ulid().toLowerCase()}`;
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const payloadExpiresAt = new Date(
+    now.getTime() + inboundPayloadTtlSeconds(c.env.SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS) * 1000,
+  ).toISOString();
+  const payloadCiphertext = await encryptInboundPayload(
+    rawBody,
+    c.env,
+    route.account_id,
+    inboundEventId,
+  );
+  const payloadHash = await hashPaddlePayload(rawBody);
+
+  await c.env.DB.prepare(
+    `INSERT INTO inbound_events (
+       id, account_id, billing_provider_id, external_event_id, external_event_type,
+       external_customer_id, external_transaction_id, external_subscription_id,
+       external_adjustment_id, external_occurred_at, payload_ciphertext,
+       payload_hash, payload_expires_at, status, attempt_count, next_attempt_at,
+       received_at, updated_at
+     ) VALUES (
+       ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+       'pending', 0, ?14, ?14, ?14
+     )
+     ON CONFLICT(billing_provider_id, external_event_id) DO NOTHING`,
+  ).bind(
+    inboundEventId,
+    route.account_id,
+    route.id,
+    event.event_id,
+    event.event_type,
+    references.externalCustomerId,
+    references.externalTransactionId,
+    references.externalSubscriptionId,
+    references.externalAdjustmentId,
+    event.occurred_at,
+    payloadCiphertext,
+    payloadHash,
+    payloadExpiresAt,
+    nowIso,
+  ).run();
+
+  const persisted = await c.env.DB.prepare(
+    `SELECT id, status, received_at
+     FROM inbound_events
+     WHERE account_id = ?1 AND billing_provider_id = ?2 AND external_event_id = ?3
+     LIMIT 1`,
+  ).bind(route.account_id, route.id, event.event_id).first<{
+    id: string; status: string; received_at: string;
+  }>();
+  if (!persisted) {
+    throw new AppError(
+      "BILLING_WEBHOOK_PERSISTENCE_FAILED",
+      "Paddle event was verified but could not be persisted.",
+      500,
+      { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
+    );
+  }
+
+  let executionContext: { waitUntil(promise: Promise<unknown>): void } | undefined;
+  try {
+    executionContext = c.executionCtx;
+  } catch (error) {
+    if (c.env.ENVIRONMENT === "production") {
       throw new AppError(
-        "DECRYPTION_FAILED",
-        `Failed to decrypt payment configuration for ${provider}. Please verify STORAGE_ENCRYPTION_KEY.`,
-        500
+        "BILLING_WEBHOOK_EXECUTION_CONTEXT_MISSING",
+        "Paddle event was persisted, but its immediate background processor could not be registered.",
+        500,
+        { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
+        { contextError: error instanceof Error ? error.message : String(error) },
       );
     }
   }
-
-  // Strict check: if no webhook secret is configured, reject inbound request to prevent spoofing
-  if (!webhookSecret) {
-    throw new AppError("PAYMENT_CONFIG_MISSING", `Webhook secret for ${provider} is not configured`, 400);
+  if (executionContext) {
+    executionContext.waitUntil(processBillingInboundEvent({
+      env: c.env,
+      accountId: route.account_id,
+      eventId: persisted.id,
+      workerId: `billing_http_${ulid().toLowerCase()}`,
+    }).then(() => undefined));
+  } else if (c.env.ENVIRONMENT === "production") {
+    throw new AppError(
+      "BILLING_WEBHOOK_EXECUTION_CONTEXT_MISSING",
+      "Paddle event was persisted, but its immediate background processor could not be registered.",
+      500,
+      { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
+    );
   }
-
-  // 3. Cryptographic Signature Verification
-  if (provider === "paddle") {
-    const signatureHeader = c.req.header("paddle-signature");
-    const isValid = await verifyPaddleSignature(rawBody, signatureHeader, webhookSecret);
-    if (!isValid) {
-      throw new AppError("INVALID_SIGNATURE", "Paddle signature verification failed", 401);
-    }
-  } else if (provider === "stripe") {
-    const signatureHeader = c.req.header("stripe-signature");
-    const isValid = await verifyStripeSignature(rawBody, signatureHeader, webhookSecret);
-    if (!isValid) {
-      throw new AppError("INVALID_SIGNATURE", "Stripe signature verification failed", 401);
-    }
-  } else if (provider === "lemonsqueezy") {
-    const signatureHeader = c.req.header("x-signature");
-    const isValid = await verifyLemonSqueezySignature(rawBody, signatureHeader, webhookSecret);
-    if (!isValid) {
-      throw new AppError("INVALID_SIGNATURE", "Lemon Squeezy signature verification failed", 401);
-    }
-  } else if (provider === "custom") {
-    const signatureHeader = c.req.header("x-licenkit-signature") || c.req.header("x-signature");
-    const isValid = await verifyOutboundWebhookSignature(rawBody, signatureHeader, webhookSecret);
-    if (!isValid) {
-      throw new AppError("INVALID_SIGNATURE", "Custom webhook signature verification failed", 401);
-    }
-  }
-
-  // 4. Parse webhook payload
-  let payload: any;
-  try {
-    payload = JSON.parse(rawBody);
-  } catch {
-    throw new AppError("INVALID_JSON", "Payload is not valid JSON", 400);
-  }
-
-  // Extract external event_id and event_type
-  let externalEventId: string | null = null;
-  let eventType = "unknown";
-
-  if (provider === "paddle") {
-    externalEventId = payload.event_id || payload.id || null;
-    eventType = payload.event_type || payload.type || "unknown";
-  } else if (provider === "stripe") {
-    externalEventId = payload.id || null;
-    eventType = payload.type || "unknown";
-  } else if (provider === "lemonsqueezy") {
-    eventType = payload.meta?.event_name || "unknown";
-    externalEventId =
-      payload.meta?.event_id ||
-      payload.meta?.custom_data?.event_id ||
-      (payload.data?.id ? `${eventType}_${payload.data.id}` : null);
-  } else {
-    externalEventId = payload.id || payload.event_id || null;
-    eventType = payload.type || payload.event_type || "unknown";
-  }
-
-  // 5. 3D Idempotency Check: (accountId, provider, externalEventId)
-  let existingRecord: { id: string; status: string } | null = null;
-  if (externalEventId) {
-    const existing = await db
-      .select({ id: webhookEvents.id, status: webhookEvents.status })
-      .from(webhookEvents)
-      .where(
-        and(
-          eq(webhookEvents.accountId, accountId),
-          eq(webhookEvents.provider, provider),
-          eq(webhookEvents.eventId, externalEventId)
-        )
-      )
-      .get();
-
-    if (existing) {
-      if (existing.status === "processed") {
-        return c.json({ success: true, message: "Duplicate event already processed" }, 200);
-      }
-      existingRecord = existing;
-    }
-  }
-
-  const inboundEventId = existingRecord ? existingRecord.id : `evt_${ulid().toLowerCase()}`;
-  const now = new Date().toISOString();
-
-  // 6. Pre-reserve inbound event as pending before business fulfillment (Atomic idempotency shield)
-  if (existingRecord) {
-    await db
-      .update(webhookEvents)
-      .set({
-        status: "pending",
-        attempts: sql`${webhookEvents.attempts} + 1`,
-        payload: rawBody,
-      })
-      .where(eq(webhookEvents.id, existingRecord.id));
-  } else {
-    await db.insert(webhookEvents).values({
-      id: inboundEventId,
-      accountId,
-      provider,
-      direction: "inbound",
-      eventId: externalEventId,
-      eventType,
-      payload: rawBody,
-      status: "pending",
-      attempts: 1,
-      createdAt: now,
-    });
-  }
-
-  // 7. Automated Fulfillment & Business Processing
-  let fulfillmentResult: { licenseId?: string; action: string } = { action: "ignored" };
-
-  try {
-    if (provider === "paddle") {
-      fulfillmentResult = await handlePaddleFulfillment(c.env, db, accountId, eventType, payload);
-    } else if (provider === "stripe") {
-      fulfillmentResult = await handleStripeFulfillment(c.env, db, accountId, eventType, payload);
-    } else if (provider === "lemonsqueezy") {
-      fulfillmentResult = await handleLemonSqueezyFulfillment(c.env, db, accountId, eventType, payload);
-    }
-  } catch (err: any) {
-    console.error(`Fulfillment error for ${provider} event ${eventType}:`, err);
-    // Record event as failed for auditing
-    await db
-      .update(webhookEvents)
-      .set({
-        status: "failed",
-        lastError: err.message || "Fulfillment error",
-        processedAt: new Date().toISOString(),
-      })
-      .where(eq(webhookEvents.id, inboundEventId));
-
-    throw err;
-  }
-
-  // 8. Record inbound event as processed
-  await db
-    .update(webhookEvents)
-    .set({
-      status: "processed",
-      lastError: null,
-      processedAt: new Date().toISOString(),
-    })
-    .where(eq(webhookEvents.id, inboundEventId));
 
   return c.json({
     success: true,
     data: {
       received: true,
-      event_id: inboundEventId,
-      fulfillment: fulfillmentResult,
+      eventId: persisted.id,
+      externalEventId: event.event_id,
+      status: persisted.status,
+      duplicate: persisted.id !== inboundEventId,
     },
-  });
+  }, 200);
 });
-
-/**
- * Handles Paddle Billing events fulfillment:
- * - transaction.completed / transaction.paid: Issue license based on price ID or custom policy ID
- * - subscription.canceled / subscription.past_due: Revoke or suspend matching license
- */
-async function handlePaddleFulfillment(
-  env: any,
-  db: any,
-  accountId: string,
-  eventType: string,
-  payload: any
-): Promise<{ licenseId?: string; action: string }> {
-  const data = payload.data || {};
-
-  if (eventType === "transaction.completed" || eventType === "transaction.paid") {
-    const customData = data.custom_data || {};
-    const customerEmail =
-      data.customer?.email || customData.customer_email || customData.email || "customer@paddle.com";
-
-    // Extract price IDs from items
-    const items = data.items || data.details?.line_items || [];
-    const priceIds: string[] = items.map((i: any) => i.price?.id || i.price_id).filter(Boolean);
-
-    let matchedPolicy: typeof policies.$inferSelect | null = null;
-
-    // 1. Pushdown query: Match by custom_data.policy_id
-    if (customData.policy_id) {
-      matchedPolicy = await db
-        .select()
-        .from(policies)
-        .where(
-          and(
-            eq(policies.accountId, accountId),
-            eq(policies.id, customData.policy_id),
-            eq(policies.isActive, true)
-          )
-        )
-        .get();
-    }
-
-    // 2. Pushdown query: Match by paddle_price_id in metadata using SQLite json_extract
-    if (!matchedPolicy && priceIds.length > 0) {
-      matchedPolicy = await db
-        .select()
-        .from(policies)
-        .where(
-          and(
-            eq(policies.accountId, accountId),
-            eq(policies.isActive, true),
-            sql`json_extract(${policies.metadata}, '$.paddle_price_id') IN (${sql.join(
-              priceIds.map((id) => sql`${id}`),
-              sql`, `
-            )})`
-          )
-        )
-        .get();
-    }
-
-    // 3. Fallback: single active policy (guarded by pushdown count)
-    if (!matchedPolicy) {
-      const activeCountResult = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(policies)
-        .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-        .get();
-
-      if (activeCountResult?.count === 1) {
-        matchedPolicy = await db
-          .select()
-          .from(policies)
-          .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-          .get();
-      }
-    }
-
-    if (!matchedPolicy) {
-      return { action: "no_matching_policy" };
-    }
-
-    // Secondary Idempotency Shield: check if license already issued for this transaction
-    if (data.id) {
-      const existingLicense = await db
-        .select()
-        .from(licenses)
-        .where(
-          and(
-            eq(licenses.accountId, accountId),
-            sql`json_extract(${licenses.metadata}, '$.external_transaction_id') = ${data.id}`
-          )
-        )
-        .get();
-
-      if (existingLicense) {
-        return { licenseId: existingLicense.id, action: "license_already_issued" };
-      }
-    }
-
-    // Issue License
-    const licenseId = `lic_${ulid().toLowerCase()}`;
-    const key = generateLicenseKey();
-    const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
-    const now = new Date();
-
-    let expiresAt: string | null = null;
-    if (data.billing_period?.ends_at) {
-      expiresAt = new Date(data.billing_period.ends_at).toISOString();
-    } else if (matchedPolicy.duration) {
-      expiresAt = new Date(now.getTime() + matchedPolicy.duration * 1000).toISOString();
-    }
-
-    const metadataObj = {
-      external_provider: "paddle",
-      external_transaction_id: data.id || null,
-      external_subscription_id: data.subscription_id || null,
-      external_customer_id: data.customer_id || null,
-      ...customData,
-    };
-
-    await db.insert(licenses).values({
-      id: licenseId,
-      accountId,
-      productId: matchedPolicy.productId,
-      policyId: matchedPolicy.id,
-      keyHash,
-      customerEmail: customerEmail.toLowerCase().trim(),
-      status: "active",
-      metadata: JSON.stringify(metadataObj),
-      expiresAt,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    });
-
-    const issuedLicense = {
-      id: licenseId,
-      key,
-      customerEmail,
-      productId: matchedPolicy.productId,
-      policyId: matchedPolicy.id,
-      status: "active",
-      expiresAt,
-    };
-
-    // Broadcast outbound event
-    await broadcastOutboundEvent(
-      env,
-      db,
-      accountId,
-      "license.created",
-      issuedLicense,
-      matchedPolicy.productId
-    );
-
-    return { licenseId, action: "license_issued" };
-  }
-
-  if (eventType === "subscription.canceled" || eventType === "subscription.past_due") {
-    const subscriptionId = data.id;
-    if (!subscriptionId) return { action: "no_subscription_id" };
-
-    // Pushdown SQL query: Find license linked to this subscription ID without in-memory full scanning
-    const targetLicense = await db
-      .select()
-      .from(licenses)
-      .where(
-        and(
-          eq(licenses.accountId, accountId),
-          sql`(json_extract(${licenses.metadata}, '$.external_subscription_id') = ${subscriptionId} OR json_extract(${licenses.metadata}, '$.externalSubscriptionId') = ${subscriptionId})`
-        )
-      )
-      .get();
-
-    if (!targetLicense) {
-      return { action: "subscription_license_not_found" };
-    }
-
-    const newStatus = eventType === "subscription.canceled" ? "revoked" : "suspended";
-    const nowIso = new Date().toISOString();
-
-    await db
-      .update(licenses)
-      .set({
-        status: newStatus,
-        suspendedAt: newStatus === "suspended" ? nowIso : targetLicense.suspendedAt,
-        updatedAt: nowIso,
-      })
-      .where(eq(licenses.id, targetLicense.id));
-
-    const updatedLicense = {
-      ...targetLicense,
-      status: newStatus,
-    };
-
-    await broadcastOutboundEvent(
-      env,
-      db,
-      accountId,
-      newStatus === "revoked" ? "license.revoked" : "license.suspended",
-      updatedLicense,
-      targetLicense.productId
-    );
-
-    return { licenseId: targetLicense.id, action: `license_${newStatus}` };
-  }
-
-  return { action: "unhandled_event" };
-}
-
-/**
- * Handles Stripe events fulfillment:
- * - checkout.session.completed: Issue license based on metadata or matching stripe_price_id
- * - customer.subscription.deleted: Revoke matching license
- */
-async function handleStripeFulfillment(
-  env: any,
-  db: any,
-  accountId: string,
-  eventType: string,
-  payload: any
-): Promise<{ licenseId?: string; action: string }> {
-  const session = payload.data?.object || {};
-
-  if (eventType === "checkout.session.completed") {
-    const customerEmail =
-      session.customer_details?.email || session.customer_email || "customer@stripe.com";
-    const metadata = session.metadata || {};
-    const subscriptionId = session.subscription || null;
-    const customerId = session.customer || null;
-
-    let matchedPolicy: typeof policies.$inferSelect | null = null;
-
-    // 1. Pushdown query: Match by metadata.policy_id or client_reference_id
-    const targetPolicyId = metadata.policy_id || session.client_reference_id;
-    if (targetPolicyId) {
-      matchedPolicy = await db
-        .select()
-        .from(policies)
-        .where(
-          and(
-            eq(policies.accountId, accountId),
-            eq(policies.id, targetPolicyId),
-            eq(policies.isActive, true)
-          )
-        )
-        .get();
-    }
-
-    // 2. Pushdown query: Match by metadata.stripe_price_id using SQLite json_extract
-    if (!matchedPolicy && metadata.stripe_price_id) {
-      matchedPolicy = await db
-        .select()
-        .from(policies)
-        .where(
-          and(
-            eq(policies.accountId, accountId),
-            eq(policies.isActive, true),
-            sql`(json_extract(${policies.metadata}, '$.stripe_price_id') = ${metadata.stripe_price_id} OR json_extract(${policies.metadata}, '$.stripePriceId') = ${metadata.stripe_price_id})`
-          )
-        )
-        .get();
-    }
-
-    // 3. Fallback: single active policy (guarded by pushdown count)
-    if (!matchedPolicy) {
-      const activeCountResult = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(policies)
-        .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-        .get();
-
-      if (activeCountResult?.count === 1) {
-        matchedPolicy = await db
-          .select()
-          .from(policies)
-          .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-          .get();
-      }
-    }
-
-    if (!matchedPolicy) {
-      return { action: "no_matching_policy" };
-    }
-
-    // Secondary Idempotency Shield: check if license already issued for this checkout session
-    if (session.id) {
-      const existingLicense = await db
-        .select()
-        .from(licenses)
-        .where(
-          and(
-            eq(licenses.accountId, accountId),
-            sql`json_extract(${licenses.metadata}, '$.external_checkout_session_id') = ${session.id}`
-          )
-        )
-        .get();
-
-      if (existingLicense) {
-        return { licenseId: existingLicense.id, action: "license_already_issued" };
-      }
-    }
-
-    // Issue License
-    const licenseId = `lic_${ulid().toLowerCase()}`;
-    const key = generateLicenseKey();
-    const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
-    const now = new Date();
-
-    let expiresAt: string | null = null;
-    if (matchedPolicy.duration) {
-      expiresAt = new Date(now.getTime() + matchedPolicy.duration * 1000).toISOString();
-    }
-
-    const metadataObj = {
-      external_provider: "stripe",
-      external_checkout_session_id: session.id || null,
-      external_subscription_id: subscriptionId,
-      external_customer_id: customerId,
-      ...metadata,
-    };
-
-    await db.insert(licenses).values({
-      id: licenseId,
-      accountId,
-      productId: matchedPolicy.productId,
-      policyId: matchedPolicy.id,
-      keyHash,
-      customerEmail: customerEmail.toLowerCase().trim(),
-      status: "active",
-      metadata: JSON.stringify(metadataObj),
-      expiresAt,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    });
-
-    const issuedLicense = {
-      id: licenseId,
-      key,
-      customerEmail,
-      productId: matchedPolicy.productId,
-      policyId: matchedPolicy.id,
-      status: "active",
-      expiresAt,
-    };
-
-    // Broadcast outbound event
-    await broadcastOutboundEvent(
-      env,
-      db,
-      accountId,
-      "license.created",
-      issuedLicense,
-      matchedPolicy.productId
-    );
-
-    return { licenseId, action: "license_issued" };
-  }
-
-  if (eventType === "customer.subscription.deleted") {
-    const subscriptionId = session.id;
-    if (!subscriptionId) return { action: "no_subscription_id" };
-
-    // Pushdown SQL query: Find license linked to this subscription ID without in-memory full scanning
-    const targetLicense = await db
-      .select()
-      .from(licenses)
-      .where(
-        and(
-          eq(licenses.accountId, accountId),
-          sql`(json_extract(${licenses.metadata}, '$.external_subscription_id') = ${subscriptionId} OR json_extract(${licenses.metadata}, '$.externalSubscriptionId') = ${subscriptionId})`
-        )
-      )
-      .get();
-
-    if (!targetLicense) {
-      return { action: "subscription_license_not_found" };
-    }
-
-    const nowIso = new Date().toISOString();
-
-    await db
-      .update(licenses)
-      .set({
-        status: "revoked",
-        updatedAt: nowIso,
-      })
-      .where(eq(licenses.id, targetLicense.id));
-
-    const updatedLicense = {
-      ...targetLicense,
-      status: "revoked",
-    };
-
-    await broadcastOutboundEvent(
-      env,
-      db,
-      accountId,
-      "license.revoked",
-      updatedLicense,
-      targetLicense.productId
-    );
-
-    return { licenseId: targetLicense.id, action: "license_revoked" };
-  }
-
-  return { action: "unhandled_event" };
-}
-
-/**
- * Handles Lemon Squeezy events fulfillment:
- * - order_created: Issue license based on variant_id or custom policy ID
- * - subscription_cancelled / subscription_expired: Revoke matching license
- */
-async function handleLemonSqueezyFulfillment(
-  env: any,
-  db: any,
-  accountId: string,
-  eventType: string,
-  payload: any
-): Promise<{ licenseId?: string; action: string }> {
-  const data = payload.data || {};
-  const attributes = data.attributes || {};
-  const meta = payload.meta || {};
-  const customData = meta.custom_data || {};
-
-  if (eventType === "order_created") {
-    const customerEmail =
-      attributes.user_email || attributes.customer_email || customData.email || "customer@lemonsqueezy.com";
-
-    // Extract variant ID from first_order_item or attributes
-    const firstOrderItem = attributes.first_order_item || {};
-    const variantId =
-      firstOrderItem.variant_id ||
-      attributes.variant_id ||
-      customData.variant_id ||
-      null;
-
-    let matchedPolicy: typeof policies.$inferSelect | null = null;
-
-    // 1. Pushdown query: Match by custom_data.policy_id
-    if (customData.policy_id) {
-      matchedPolicy = await db
-        .select()
-        .from(policies)
-        .where(
-          and(
-            eq(policies.accountId, accountId),
-            eq(policies.id, customData.policy_id),
-            eq(policies.isActive, true)
-          )
-        )
-        .get();
-    }
-
-    // 2. Pushdown query: Match by variant_id in metadata using SQLite json_extract
-    if (!matchedPolicy && variantId) {
-      const variantIdStr = String(variantId);
-      matchedPolicy = await db
-        .select()
-        .from(policies)
-        .where(
-          and(
-            eq(policies.accountId, accountId),
-            eq(policies.isActive, true),
-            sql`(json_extract(${policies.metadata}, '$.lemonsqueezy_variant_id') = ${variantIdStr} OR json_extract(${policies.metadata}, '$.lemonsqueezyVariantId') = ${variantIdStr})`
-          )
-        )
-        .get();
-    }
-
-    // 3. Fallback: single active policy (guarded by pushdown count)
-    if (!matchedPolicy) {
-      const activeCountResult = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(policies)
-        .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-        .get();
-
-      if (activeCountResult?.count === 1) {
-        matchedPolicy = await db
-          .select()
-          .from(policies)
-          .where(and(eq(policies.accountId, accountId), eq(policies.isActive, true)))
-          .get();
-      }
-    }
-
-    if (!matchedPolicy) {
-      return { action: "no_matching_policy" };
-    }
-
-    // Secondary Idempotency Shield: check if license already issued for this order ID
-    const orderIdStr = data.id ? String(data.id) : null;
-    if (orderIdStr) {
-      const existingLicense = await db
-        .select()
-        .from(licenses)
-        .where(
-          and(
-            eq(licenses.accountId, accountId),
-            sql`json_extract(${licenses.metadata}, '$.external_order_id') = ${orderIdStr}`
-          )
-        )
-        .get();
-
-      if (existingLicense) {
-        return { licenseId: existingLicense.id, action: "license_already_issued" };
-      }
-    }
-
-    // Issue License
-    const licenseId = `lic_${ulid().toLowerCase()}`;
-    const key = generateLicenseKey();
-    const keyHash = await hashLicenseKey(normalizeLicenseKey(key));
-    const now = new Date();
-
-    let expiresAt: string | null = null;
-    if (matchedPolicy.duration) {
-      expiresAt = new Date(now.getTime() + matchedPolicy.duration * 1000).toISOString();
-    }
-
-    const subscriptionId =
-      attributes.subscription_id ? String(attributes.subscription_id) :
-      data.relationships?.subscription?.data?.id ? String(data.relationships.subscription.data.id) : null;
-
-    const metadataObj = {
-      external_provider: "lemonsqueezy",
-      external_order_id: orderIdStr,
-      external_subscription_id: subscriptionId,
-      external_customer_id: attributes.customer_id ? String(attributes.customer_id) : null,
-      variant_id: variantId ? String(variantId) : null,
-      order_number: attributes.order_number ? String(attributes.order_number) : null,
-      ...customData,
-    };
-
-    await db.insert(licenses).values({
-      id: licenseId,
-      accountId,
-      productId: matchedPolicy.productId,
-      policyId: matchedPolicy.id,
-      keyHash,
-      customerEmail: customerEmail.toLowerCase().trim(),
-      status: "active",
-      metadata: JSON.stringify(metadataObj),
-      expiresAt,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    });
-
-    const issuedLicense = {
-      id: licenseId,
-      key,
-      customerEmail,
-      productId: matchedPolicy.productId,
-      policyId: matchedPolicy.id,
-      status: "active",
-      expiresAt,
-    };
-
-    // Broadcast outbound event
-    await broadcastOutboundEvent(
-      env,
-      db,
-      accountId,
-      "license.created",
-      issuedLicense,
-      matchedPolicy.productId
-    );
-
-    return { licenseId, action: "license_issued" };
-  }
-
-  if (eventType === "subscription_cancelled" || eventType === "subscription_expired") {
-    const subscriptionId = data.id ? String(data.id) : null;
-    if (!subscriptionId) return { action: "no_subscription_id" };
-
-    // Pushdown SQL query: Find license linked to this subscription ID without in-memory full scanning
-    const targetLicense = await db
-      .select()
-      .from(licenses)
-      .where(
-        and(
-          eq(licenses.accountId, accountId),
-          sql`(json_extract(${licenses.metadata}, '$.external_subscription_id') = ${subscriptionId} OR json_extract(${licenses.metadata}, '$.externalSubscriptionId') = ${subscriptionId})`
-        )
-      )
-      .get();
-
-    if (!targetLicense) {
-      return { action: "subscription_license_not_found" };
-    }
-
-    const nowIso = new Date().toISOString();
-
-    await db
-      .update(licenses)
-      .set({
-        status: "revoked",
-        updatedAt: nowIso,
-      })
-      .where(eq(licenses.id, targetLicense.id));
-
-    const updatedLicense = {
-      ...targetLicense,
-      status: "revoked",
-    };
-
-    await broadcastOutboundEvent(
-      env,
-      db,
-      accountId,
-      "license.revoked",
-      updatedLicense,
-      targetLicense.productId
-    );
-
-    return { licenseId: targetLicense.id, action: "license_revoked" };
-  }
-
-  return { action: "unhandled_event" };
-}
-

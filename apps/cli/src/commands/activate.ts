@@ -1,117 +1,92 @@
 import pc from "picocolors";
 import os from "node:os";
 import { getMachineFingerprint } from "../lib/machine";
-import { apiActivate, apiFetchProductPublicKey } from "../lib/client-api";
-import { saveStoredLicense, type StoredLicenseData } from "../lib/storage";
-import { base64UrlToJson, type OfflineLicenseClaims } from "../lib/crypto";
+import { apiActivate } from "../lib/client-api";
+import { parseTrustedSigningKeys, verifyCredentialResponse } from "../lib/credentials";
+import { describeClientError } from "../lib/errors";
+import { saveStoredLicense } from "../lib/storage";
 
 export interface ActivateOptions {
   server?: string;
   account?: string;
+  product?: string;
+  release?: string;
+  releasePlatform?: string;
   name?: string;
-  pubkey?: string;
+  signingKey?: string | string[];
+}
+
+function required(value: string | undefined, description: string): string {
+  if (!value) throw new Error(`${description} is required`);
+  return value;
+}
+
+function devicePlatform(): string {
+  const platform = os.platform() === "darwin" ? "macos" : os.platform();
+  return `${platform}-${os.arch()}`;
 }
 
 export async function activateCommand(licenseKey: string, options: ActivateOptions): Promise<void> {
-  const serverUrl = options.server || process.env.LICENKIT_SERVER_URL || "http://localhost:8787";
-  const accountId = options.account || process.env.LICENKIT_ACCOUNT_ID;
-
-  if (!accountId) {
-    console.error(pc.red("Error: Account ID is required. Pass --account <accountId> or set LICENKIT_ACCOUNT_ID."));
-    process.exit(1);
-  }
-
-  if (!licenseKey) {
-    console.error(pc.red("Error: License key is required. Syntax: licenkit activate <licenseKey>"));
-    process.exit(1);
-  }
-
-  console.log(pc.cyan(`Connecting to LicenKit server: ${serverUrl}`));
-  console.log(pc.gray("Collecting unique hardware fingerprint..."));
-
-  const fingerprint = await getMachineFingerprint();
-  const machineName = options.name || os.hostname();
-
   try {
-    const result = await apiActivate({
-      serverUrl,
-      accountId,
-      licenseKey: licenseKey.trim(),
-      fingerprint,
-      platform: os.platform(),
-      name: machineName,
-    });
+    const serverUrl = options.server || process.env.LICENKIT_SERVER_URL || "http://localhost:8787";
+    const accountId = required(options.account || process.env.LICENKIT_ACCOUNT_ID, "Account ID");
+    const productId = required(options.product || process.env.LICENKIT_PRODUCT_ID, "Product ID");
+    const releaseVersion = required(options.release || process.env.LICENKIT_RELEASE_VERSION, "Release version");
+    const releasePlatform = required(
+      options.releasePlatform || process.env.LICENKIT_RELEASE_PLATFORM,
+      "Release platform"
+    );
+    if (!licenseKey?.trim()) throw new Error("License key is required");
 
-    let publicKey = options.pubkey;
-    let productId: string | undefined;
-
-    // If Ed25519 token returned, extract product ID and fetch public key if not provided
-    if (result.token) {
-      try {
-        const parts = result.token.split(".");
-        if (parts.length === 3) {
-          const claims = base64UrlToJson<OfflineLicenseClaims>(parts[1]);
-          productId = claims.prd;
-        }
-      } catch {}
-
-      if (!publicKey && productId) {
-        try {
-          const keyInfo = await apiFetchProductPublicKey(serverUrl, accountId, productId);
-          publicKey = keyInfo.publicKey;
-        } catch (e: any) {
-          console.warn(pc.yellow(`Warning: Could not automatically cache product public key: ${e.message}`));
-        }
-      }
-    }
-
-    const nowIso = new Date().toISOString();
-    const storedData: StoredLicenseData = {
+    const fingerprint = await getMachineFingerprint();
+    const diagnosticPlatform = devicePlatform();
+    const trustedSigningKeys = parseTrustedSigningKeys(options.signingKey);
+    const response = await apiActivate({
       serverUrl,
       accountId,
       productId,
-      machineId: result.machine_id,
-      machineToken: result.machine_token,
-      token: result.token || "",
-      publicKey,
-      activatedAt: nowIso,
-      lastValidatedAt: nowIso,
-      tokenExpiresAt: result.token_expires_at || undefined,
-      licenseExpiresAt: result.license_expires_at,
-      policy: result.policy
-        ? {
-            name: result.policy.name,
-            maxMachines: result.policy.max_machines,
-            offlineGracePeriod: result.policy.offline_grace_period,
-            features: result.policy.features,
-          }
-        : undefined,
-    };
+      licenseKey: licenseKey.trim(),
+      fingerprint,
+      devicePlatform: diagnosticPlatform,
+      releaseVersion,
+      releasePlatform,
+      name: options.name || os.hostname(),
+    });
+    await verifyCredentialResponse(response, trustedSigningKeys, {
+      accountId,
+      productId,
+      activationId: response.activation_id,
+      fingerprint,
+      releaseVersion,
+      releasePlatform,
+    });
 
-    saveStoredLicense(storedData);
+    const now = new Date().toISOString();
+    saveStoredLicense({
+      serverUrl,
+      accountId,
+      productId,
+      releaseVersion,
+      releasePlatform,
+      devicePlatform: diagnosticPlatform,
+      activationId: response.activation_id,
+      machineToken: response.machine_token,
+      credentialMode: response.credential_mode,
+      signedLicenseToken: response.signed_license_token || undefined,
+      signingKeyId: response.signing_key_id || undefined,
+      trustedSigningKeys: response.credential_mode === "signed" ? trustedSigningKeys : undefined,
+      activatedAt: now,
+      lastValidatedAt: now,
+      licenseExpiresAt: response.license_expires_at,
+      terms: response.terms,
+    });
 
-    console.log();
-    console.log(pc.bold(pc.green("✔ License activated successfully! (Machine credential saved, License Key discarded from disk)")));
-    console.log(`  ${pc.gray("Machine Seat ID:")} ${result.machine_id} ${result.reused ? pc.yellow("(Seat Reused)") : pc.green("(New Seat)")}`);
-    console.log(`  ${pc.gray("Fingerprint:")}     ${fingerprint}`);
-    console.log(`  ${pc.gray("Policy:")}          ${result.policy?.name}`);
-    console.log(`  ${pc.gray("Max Machines:")}    ${result.policy?.max_machines}`);
-    const formatTimestamp = (val: number | string | null | undefined, fallback: string) => {
-      if (!val) return fallback;
-      if (typeof val === "number") return new Date(val * 1000).toISOString();
-      return String(val);
-    };
-
-    console.log(`  ${pc.gray("Grace Expires:")}   ${formatTimestamp(result.token_expires_at, "N/A")}`);
-    console.log(`  ${pc.gray("License Expires:")} ${formatTimestamp(result.license_expires_at, "Perpetual (Never)")}`);
-    if (publicKey) {
-      console.log(`  ${pc.gray("Public Key:")}      ${pc.green("Cached for offline verification")}`);
-    }
-    console.log();
-  } catch (err: any) {
-    console.error();
-    console.error(pc.bold(pc.red(`✖ Activation failed [${err.code || "ERROR"}]:`)), err.message);
-    console.error();
-    process.exit(1);
+    console.log(pc.bold(pc.green("✔ License activated")));
+    console.log(`  ${pc.gray("Activation ID:")} ${response.activation_id}`);
+    console.log(`  ${pc.gray("Credential mode:")} ${response.credential_mode}`);
+    console.log(`  ${pc.gray("Release:")} ${releaseVersion} (${releasePlatform})`);
+  } catch (error) {
+    for (const line of describeClientError(error)) console.error(pc.red(line));
+    process.exitCode = 1;
   }
 }

@@ -44,6 +44,21 @@
 23. 注册码找回和安全重置成功后，在最近认证页面一次性展示新注册码并同时创建通知 Delivery。
 24. V1 不开放 Customer 自助修改登录邮箱；由管理员显式修改并吊销旧 Challenge 与 Session。
 25. V1 出站 Webhook 只允许公网 HTTPS，不支持任意私网目标。
+26. V1 首个必须完成真实联调的支付平台是 Paddle；Stripe 和其他支付 Adapter 不属于首发闭环。
+27. 订阅支付宽限期的账户默认值为 5 天。该默认值保存在 Account，创建订阅授权方案时解析为方案实际值，签发时再固化到 License Terms；不是不可配置的代码常量。
+28. Paddle 调整事件按 `action + type + status` 处理：已批准的全额退款和 `action=chargeback` 自动暂停 License，但不吊销 Activation；部分退款、待审批退款、`chargeback_warning` 和反转事件进入人工处理且不自动恢复。管理员再选择保持暂停、恢复、吊销或安全重置。
+29. Notification Webhook 默认在首次请求之外自动重试 3 次，即最多 4 次 HTTP Attempt；凭证到期可以提前终止重试。
+30. V1 同时支持两类免费试用：无需支付方式的 Product/设备级 Trial Claim，以及要求预先绑定支付方式、由 Paddle 管理周期的免费订阅试用。两者使用不同状态机和凭证，不能互相冒充。
+31. 管理员和受信 API 可以直接签发订阅 License，但必须提供明确的未来到期时间并使用 `renewal_mode=manual`；该 License 不绑定 Paddle、没有支付宽限期，只能通过显式、可审计的手动续期延长。
+32. 管理员可以签发永久 License；永久授权使用 `license_model=perpetual`、`renewal_mode=none`、`expires_at=NULL`，不要求 `expiresAt`。V1 不增加语义矛盾的“永久订阅”状态。
+33. Paddle Customer 解析以 `customer.created`/`customer.updated` 为正常路径，使用外部 Customer ID 建立稳定映射。购买事件先到时保持 `pending`，等待关联 Customer 事件后重试；若配置了具备 `customer.read` 权限的 Paddle API Key，可以用服务器端 API 读穿加速恢复，但 API Key 不是基础购买和发码闭环的必需配置。`custom_data.email` 不作为 Customer 身份或发码地址来源。
+34. Paddle Client-side Token 是公开的前端凭证，只用于初始化 Paddle.js、预览价格和打开 Checkout；Webhook Secret 用于验证入站事件；API Key 只允许服务端使用，启用托管客户门户时需要 `customer_portal_session.write`，启用 API 对账/读穿时需要对应只读权限。
+35. 普通 Checkout 只允许选择一个 active Offer 对应的 Price，数量固定为 1。履约事件不满足“一个已映射 Price、数量 1”时进入 `needs_attention`，不猜测发码；draft Sandbox Offer 只允许走第 39 条的一次性管理员验证例外。
+36. Offer 默认处于 `draft`。只有 Client-side Token、Webhook 事件合同、Notification Gateway、调度器、签名密钥（如需要）和真实 Sandbox 购买到通知接管链路均通过检查，才允许显式激活；公开产品页在关键依赖不可用时不返回可购买配置。
+37. V1 提供无界面的 Web Checkout SDK 和公开 Checkout 配置 API。用户拥有并可任意修改自己的产品页；参考产品页只是使用同一 SDK/契约的模板。浏览器 Checkout 回调只用于界面反馈，不能创建 Customer、License 或发码。
+38. Paddle Notification Destination 的最小事件合同为 `customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created`、`adjustment.updated`。缺少任一项时 Offer 不能激活；额外事件可以用于更细诊断，但不能替代最小合同。
+39. Product 明确选择唯一的公开收款环境。普通付款只有在 Provider 环境与 Product 一致且 Offer 已激活时才能签发可用 License；管理员的 Sandbox 端到端验证使用短期一次性令牌，生成的验证 License 永久不可激活，测试卡不能兑换正式授权。
+40. 自定义产品页只配置 LicenKit 基础 URL、Account slug 和 Product slug，但商户仍需在 Paddle 的 Sandbox/Live 分别设置 Default Payment Link，并为实际 Live 页面完成 Website Approval；公开 API 的 `available=true` 不冒充任意第三方 Origin 已获 Paddle 批准。
 
 ## 阅读顺序
 
@@ -57,13 +72,11 @@
 | [06-sdk-contract.md](./zh-CN/06-sdk-contract.md) | 不透明凭证与签名凭证在 SDK 中如何表现 |
 | [07-delivery-plan.md](./zh-CN/07-delivery-plan.md) | 当前已知差距、开发顺序和完成条件 |
 | [08-development-and-operations.md](./zh-CN/08-development-and-operations.md) | 本地开发、配置和运行检查 |
+| [09-web-checkout-sdk-contract.md](./zh-CN/09-web-checkout-sdk-contract.md) | 用户自定义产品页如何通过公开配置 API 和 Web Checkout SDK 安全发起购买 |
 
-## 尚待确认但不阻塞领域设计的问题
+## 推荐的 V1 运行默认值
 
-- V1 首个必须完成真实联调的支付平台是 Paddle、Stripe 还是其他平台；
-- 订阅扣款失败后的默认支付宽限期；
-- 退款、拒付事件默认执行暂停还是吊销；
-- 通知 Webhook 自动重试次数和敏感投递负载保留时长；
-- 免费试用是否继续属于 V1 首发范围。
+- 敏感 Delivery 负载最长保留 24 小时。Notification Gateway 返回 2xx 并可靠接管任务后立即清除，不为了凑满保留期继续保存；Magic Link 则以 15 分钟 Challenge 有效期为更早上限。
+- Product/设备级试用不设置全局隐式天数。启用时由管理员为 Product 显式填写正数时长；Paddle 订阅试用时长则来自已验签的 Paddle Subscription，不在 LicenKit 重复配置。
 
-这些问题可以改变具体配置和状态转换，但不改变本文档确定的领域边界。
+截至本轮评审，没有尚待确认的 V1 领域决策；上面的 24 小时保留值是安全与可恢复性的推荐默认值，可以在实现前按实际运维能力调整。

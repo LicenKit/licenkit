@@ -1,79 +1,53 @@
 import pc from "picocolors";
 import { getMachineFingerprint } from "../lib/machine";
-import { verifyOfflineToken, evaluateLicenseClaims } from "../lib/crypto";
+import {
+  decodeSignedLicenseHeader,
+  evaluateSignedLicenseClaims,
+  verifySignedLicenseToken,
+} from "../lib/crypto";
+import { describeClientError } from "../lib/errors";
 import { loadStoredLicense } from "../lib/storage";
 
 export interface VerifyOptions {
-  pubkey?: string;
   feature?: string;
   fingerprint?: string;
 }
 
 export async function verifyCommand(rawTokenArg: string | undefined, options: VerifyOptions): Promise<void> {
-  const stored = loadStoredLicense();
-
-  const token = rawTokenArg || stored?.token;
-  if (!token) {
-    console.error(pc.red("Error: No offline token provided and no local license found. Pass a token or activate first."));
-    process.exit(1);
-  }
-
-  const publicKey = options.pubkey || stored?.publicKey;
-  if (!publicKey) {
-    console.error(pc.red("Error: Public key is required for offline verification. Pass --pubkey <base64Key>."));
-    process.exit(1);
-  }
-
-  const currentFingerprint = options.fingerprint || (await getMachineFingerprint());
-
-  console.log();
-  console.log(pc.bold(pc.cyan("=== Offline Cryptographic Token Verification ===")));
-  console.log(pc.gray("Running pure local mathematical verification (Zero Network)..."));
-
-  // 1. Ed25519 Cryptographic Verification
-  const verification = await verifyOfflineToken(token, publicKey);
-
-  if (!verification.valid || !verification.claims) {
-    console.error();
-    console.error(pc.bold(pc.red("✖ Verification Failed: ")), verification.error || "Invalid cryptographic signature");
-    console.error();
-    process.exit(1);
-  }
-
-  const claims = verification.claims;
-  const evaluation = evaluateLicenseClaims(claims, currentFingerprint, options.feature);
-
-  console.log();
-  if (evaluation.valid) {
-    console.log(pc.bold(pc.green("✔ OFFLINE VERIFICATION PASSED (Genuine & Active)")));
-  } else {
-    console.log(pc.bold(pc.red("✖ OFFLINE VERIFICATION FAILED")));
-    for (const reason of evaluation.reasons) {
-      console.log(`  ${pc.red("•")} ${pc.red(reason)}`);
+  try {
+    const stored = loadStoredLicense();
+    if (!stored) throw new Error("Offline verification requires a local signed activation context");
+    if (stored.credentialMode === "opaque") {
+      console.log(pc.yellow("Online validation required: opaque machine credentials are not offline-verifiable."));
+      process.exitCode = 2;
+      return;
     }
-  }
-
-  console.log();
-  console.log(pc.bold(pc.cyan("Token Claims & Metadata:")));
-  console.log(`  ${pc.gray("Type:")}              ${verification.header?.typ}`);
-  console.log(`  ${pc.gray("Key ID (kid):")}      ${verification.header?.kid}`);
-  console.log(`  ${pc.gray("Subject / Key:")}     ${pc.bold("sub" in claims ? claims.sub : "N/A")}`);
-  console.log(`  ${pc.gray("Account ID:")}        ${claims.acc}`);
-  console.log(`  ${pc.gray("Product ID:")}        ${claims.prd}`);
-  console.log(`  ${pc.gray("Bound Fingerprint:")} ${claims.fp} ${evaluation.isFingerprintMatch ? pc.green("(Matches host)") : pc.red("(Mismatch!)")}`);
-  console.log(`  ${pc.gray("Host Fingerprint:")}  ${currentFingerprint}`);
-  console.log(`  ${pc.gray("Issued At:")}         ${new Date(claims.iat * 1000).toISOString()}`);
-  console.log(`  ${pc.gray("Expires At:")}        ${new Date(claims.exp * 1000).toISOString()} ${evaluation.isExpired ? pc.red("(Expired)") : pc.green(`(${Math.floor(evaluation.expiresInSeconds / 86400)}d remaining)`)}`);
-  console.log(`  ${pc.gray("Entitlements:")}      ${claims.fea.length ? pc.green(claims.fea.join(", ")) : "(None)"}`);
-
-  if (options.feature) {
-    const granted = claims.fea.includes(options.feature);
-    console.log(`  ${pc.gray("Checked Feature:")}   ${options.feature} ${granted ? pc.green("(Granted)") : pc.red("(Denied)")}`);
-  }
-
-  console.log();
-
-  if (!evaluation.valid) {
-    process.exit(1);
+    const token = rawTokenArg || stored.signedLicenseToken;
+    if (!token) throw new Error("Local signed activation is missing its Signed License Token");
+    const header = decodeSignedLicenseHeader(token);
+    const publicKey = stored.trustedSigningKeys?.[header.kid];
+    if (!publicKey) throw new Error(`No trusted signing key is configured for '${header.kid}'`);
+    const { claims } = await verifySignedLicenseToken(token, publicKey);
+    const fingerprint = options.fingerprint || (await getMachineFingerprint());
+    const evaluation = evaluateSignedLicenseClaims(claims, {
+      accountId: stored.accountId,
+      productId: stored.productId,
+      activationId: stored.activationId,
+      fingerprint,
+      releaseVersion: stored.releaseVersion,
+      releasePlatform: stored.releasePlatform,
+    });
+    if (!evaluation.valid) throw new Error(`${evaluation.code}: ${evaluation.reason}`);
+    if (options.feature && !claims.fea.includes(options.feature)) {
+      throw new Error(`FEATURE_NOT_GRANTED: '${options.feature}' is not present in the signed claims`);
+    }
+    console.log(pc.bold(pc.green("✔ Signed License Token is valid locally")));
+    console.log(`  ${pc.gray("License ID:")} ${claims.lic}`);
+    console.log(`  ${pc.gray("Activation ID:")} ${claims.act}`);
+    console.log(`  ${pc.gray("Release:")} ${claims.ver} (${claims.plt})`);
+    console.log(`  ${pc.gray("Features:")} ${claims.fea.join(", ") || "(none)"}`);
+  } catch (error) {
+    for (const line of describeClientError(error)) console.error(pc.red(line));
+    process.exitCode = 1;
   }
 }

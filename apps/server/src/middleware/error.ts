@@ -5,16 +5,22 @@ import { ZodError } from "zod";
 export class AppError extends Error {
   code: string;
   status: ContentfulStatusCode;
+  details?: Record<string, unknown>;
+  source?: Record<string, unknown>;
 
   constructor(
     code: string,
     message: string,
-    status: ContentfulStatusCode = 400
+    status: ContentfulStatusCode = 400,
+    details?: Record<string, unknown>,
+    source?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "AppError";
     this.code = code;
     this.status = status;
+    this.details = details;
+    this.source = source;
   }
 }
 
@@ -45,17 +51,47 @@ export class ConflictError extends AppError {
 import { ConfigurationError } from "../infra/crypto";
 export { ConfigurationError };
 
+function redactErrorSource(value: unknown, key = ""): unknown {
+  const normalizedKey = key.toLowerCase();
+  if (/password|secret|token|authorization|cookie|payload|private[_-]?key/.test(normalizedKey)) {
+    return "[REDACTED]";
+  }
+  if (Array.isArray(value)) return value.map((item) => redactErrorSource(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
+        childKey,
+        redactErrorSource(childValue, childKey),
+      ]),
+    );
+  }
+  return value;
+}
+
 export const errorHandler: ErrorHandler = (err, c) => {
+  const requestId = c.get("requestId") || c.req.header("x-request-id") || "unknown";
+
   if (err instanceof AppError || err instanceof ConfigurationError || (err && (err as any).code === "CONFIGURATION_ERROR")) {
+    const appError = err as AppError;
+    if (appError.source) {
+      console.error("Application error source", {
+        requestId,
+        code: appError.code,
+        status: appError.status,
+        source: redactErrorSource(appError.source),
+      });
+    }
     return c.json(
       {
         success: false,
         error: {
-          code: (err as any).code || "APP_ERROR",
+          code: appError.code || "APP_ERROR",
           message: err.message,
+          ...(appError.details ? { details: appError.details } : {}),
+          request_id: requestId,
         },
       },
-      (err as any).status || 500
+      appError.status || 500
     );
   }
 
@@ -66,6 +102,14 @@ export const errorHandler: ErrorHandler = (err, c) => {
         error: {
           code: "VALIDATION_ERROR",
           message: err.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; "),
+          details: {
+            issues: err.errors.map((issue) => ({
+              path: issue.path.join("."),
+              code: issue.code,
+              message: issue.message,
+            })),
+          },
+          request_id: requestId,
         },
       },
       400
@@ -80,6 +124,7 @@ export const errorHandler: ErrorHandler = (err, c) => {
       error: {
         code: "INTERNAL_SERVER_ERROR",
         message: isProduction ? "An internal error occurred" : (err.message || "An internal error occurred"),
+        request_id: requestId,
       },
     },
     500

@@ -19,25 +19,27 @@ cli
 cli
   .command("activate <key>", "Activate a license key and bind current device seat")
   .option("-s, --server <url>", "LicenKit API server URL (default: http://localhost:8787)")
-  .option("-a, --account <accountId>", "LicenKit Account/Workspace ID")
+  .option("-a, --account <accountId>", "LicenKit Account ID")
+  .option("-p, --product <productId>", "LicenKit Product ID")
+  .option("-r, --release <version>", "Immutable Product Release version")
+  .option("--release-platform <platform>", "Immutable Product Release artifact platform")
   .option("-n, --name <name>", "Friendly machine name (default: hostname)")
-  .option("-p, --pubkey <publicKey>", "Optional product public key for offline verification")
+  .option("--signing-key <key...>", "Trusted signed-mode key as <key-id>=<base64-or-pem-public-key>")
   .action(async (key: string, options) => {
     await activateCommand(key, options);
   });
 
 // 3. Validate Command (Heartbeat)
 cli
-  .command("validate", "Perform online heartbeat check and refresh offline token grace period")
+  .command("validate", "Validate the current activation online")
   .action(async () => {
     await validateCommand();
   });
 
 // 4. Verify Command (Offline Mathematical Verification)
 cli
-  .command("verify-token [token]", "Perform zero-network offline Ed25519 cryptographic token verification")
+  .command("verify-token [token]", "Verify a signed-mode credential locally (opaque mode requires online validation)")
   .alias("verify")
-  .option("-p, --pubkey <publicKey>", "Product Ed25519 public key (Base64)")
   .option("-f, --feature <feature>", "Check if a specific feature entitlement is granted")
   .option("--fingerprint <fp>", "Override current host fingerprint (for testing)")
   .action(async (token: string | undefined, options) => {
@@ -46,7 +48,7 @@ cli
 
 // 5. Deactivate Command
 cli
-  .command("deactivate", "Unregister this machine seat from the license and clear local cache")
+  .command("deactivate", "Deactivate the remote seat, then clear local credentials")
   .action(async () => {
     await deactivateCommand();
   });

@@ -1,229 +1,221 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import fs from "node:fs";
-import { getMachineFingerprint } from "../src/lib/machine";
 import {
-  saveStoredLicense,
-  loadStoredLicense,
-  clearStoredLicense,
-  type StoredLicenseData,
-} from "../src/lib/storage";
+  apiActivate,
+  apiDeactivate,
+  ClientApiError,
+  ClientTransportError,
+  requestClientApi,
+  type ClientCredentialResponse,
+} from "../src/lib/client-api";
 import {
-  verifyOfflineToken,
-  evaluateLicenseClaims,
   bufferToBase64,
-  base64ToBuffer,
-  type OfflineLicenseClaims,
+  evaluateSignedLicenseClaims,
+  verifySignedLicenseToken,
+  type SignedLicenseClaims,
 } from "../src/lib/crypto";
+import { verifyCredentialResponse } from "../src/lib/credentials";
+import { clearStoredLicense, loadStoredLicense, saveStoredLicense } from "../src/lib/storage";
 
-describe("LicenKit CLI - Machine Fingerprint", () => {
-  it("should extract a persistent, non-empty hardware fingerprint", async () => {
-    const fp1 = await getMachineFingerprint();
-    const fp2 = await getMachineFingerprint();
+function base64url(data: Uint8Array | string): string {
+  const bytes = typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
+  return bytes.toString("base64url");
+}
 
-    expect(fp1).toBeDefined();
-    expect(typeof fp1).toBe("string");
-    expect(fp1.length).toBeGreaterThanOrEqual(8);
-    // Deterministic across multiple calls
-    expect(fp1).toBe(fp2);
+async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
+  const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "EdDSA", typ: "licenkit-license+jwt", kid: "key_v1" };
+  const claims: SignedLicenseClaims = {
+    lic: "lic_1",
+    act: "act_1",
+    acc: "acc_1",
+    prd: "prd_1",
+    rel: "rel_1",
+    ver: "2.4.0",
+    plt: "macos-arm64",
+    rat: now - 100,
+    fp: "device-fingerprint",
+    iat: now - 100,
+    exp: now + 3600,
+    lexp: null,
+    upd: now + 1000,
+    fea: ["export"],
+    ...overrides,
+  };
+  const headerPart = base64url(JSON.stringify(header));
+  const claimsPart = base64url(JSON.stringify(claims));
+  const signature = await crypto.subtle.sign("Ed25519", keys.privateKey, Buffer.from(`${headerPart}.${claimsPart}`));
+  return {
+    token: `${headerPart}.${claimsPart}.${base64url(new Uint8Array(signature))}`,
+    publicKey: bufferToBase64(await crypto.subtle.exportKey("raw", keys.publicKey)),
+    claims,
+  };
+}
+
+describe("V1 client API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends account, product, device and immutable release identity", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ success: true, data: { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }));
+    await apiActivate({
+      serverUrl: "https://license.example.com",
+      accountId: "acc_1",
+      productId: "prd_1",
+      licenseKey: "LK-SECRET",
+      fingerprint: "fp",
+      devicePlatform: "macos-arm64",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+    });
+    expect(body).toMatchObject({
+      account_id: "acc_1",
+      product_id: "prd_1",
+      device_platform: "macos-arm64",
+      release_version: "2.4.0",
+      release_platform: "macos-universal",
+    });
   });
-});
 
-describe("LicenKit CLI - Local License Storage", () => {
-  const tempConfigDir = path.join(os.tmpdir(), `licenkit-test-${Date.now()}`);
-
-  beforeEach(() => {
-    process.env.LICENKIT_CONFIG_DIR = tempConfigDir;
+  it("uses the strict deactivate payload without release-only fields", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        success: true,
+        data: { activation_id: "act_1", status: "deactivated" },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+    await apiDeactivate({
+      serverUrl: "https://license.example.com",
+      accountId: "acc_1",
+      productId: "prd_1",
+      activationId: "act_1",
+      machineToken: "mtk_secret",
+      fingerprint: "fp",
+    });
+    expect(body).toEqual({
+      account_id: "acc_1",
+      product_id: "prd_1",
+      activation_id: "act_1",
+      machine_token: "mtk_secret",
+      fingerprint: "fp",
+    });
   });
 
-  afterEach(() => {
-    if (fs.existsSync(tempConfigDir)) {
-      fs.rmSync(tempConfigDir, { recursive: true, force: true });
-    }
-  });
-
-  it("should save, load, and clear stored license data correctly", () => {
-    expect(loadStoredLicense()).toBeNull();
-
-    const sampleData: StoredLicenseData = {
-      serverUrl: "http://localhost:8787",
-      accountId: "acc_demo_01",
-      productId: "prd_super_app",
-      machineId: "mac_001",
-      machineToken: "mt_machine_token_secret_123",
-      token: "header.payload.signature",
-      publicKey: "pubkey_base64_test",
-      tokenExpiresAt: new Date(Date.now() + 86400 * 1000).toISOString(),
-      policy: {
-        name: "Pro Tier",
-        maxMachines: 2,
-        offlineGracePeriod: 2592000,
-        features: ["export", "sync"],
+  it("preserves business error code, request ID and safe details", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: false,
+      error: {
+        code: "UPDATE_ENTITLEMENT_REQUIRED",
+        message: "Update entitlement ended",
+        request_id: "req_1",
+        details: { release_version: "2.4.0", machine_token: "secret" },
       },
-    };
+    }), { status: 403, headers: { "content-type": "application/json" } })));
+    await expect(requestClientApi("https://license.example.com", "/api/v1/client/validate"))
+      .rejects.toMatchObject({
+        code: "UPDATE_ENTITLEMENT_REQUIRED",
+        requestId: "req_1",
+        details: { release_version: "2.4.0", machine_token: "[REDACTED]" },
+      });
+  });
 
-    saveStoredLicense(sampleData);
-
-    const loaded = loadStoredLicense();
-    expect(loaded).toBeDefined();
-    expect(loaded?.machineId).toBe("mac_001");
-    expect(loaded?.machineToken).toBe("mt_machine_token_secret_123");
-    expect((loaded as any)?.licenseKey).toBeUndefined();
-    expect(loaded?.policy?.name).toBe("Pro Tier");
-    expect(loaded?.policy?.features).toEqual(["export", "sync"]);
-
-    const cleared = clearStoredLicense();
-    expect(cleared).toBe(true);
-    expect(loadStoredLicense()).toBeNull();
+  it("keeps server 5xx separate from business rejection", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: false,
+      error: { code: "DATABASE_UNAVAILABLE", message: "retry later", request_id: "req_2" },
+    }), { status: 503, headers: { "content-type": "application/json" } })));
+    await expect(requestClientApi("https://license.example.com", "/api/v1/client/validate"))
+      .rejects.toMatchObject({ kind: "server", serverCode: "DATABASE_UNAVAILABLE", requestId: "req_2" });
   });
 });
 
-describe("LicenKit CLI - Offline Cryptographic Token Verification", () => {
-  // Helper to generate keypair and sign token using WebCrypto native
-  async function createTestSignedToken(claims: OfflineLicenseClaims): Promise<{
-    token: string;
-    publicKeyBase64: string;
-  }> {
-    const keyPair = (await crypto.subtle.generateKey(
-      { name: "Ed25519" },
-      true,
-      ["sign", "verify"]
-    )) as any;
-
-    const rawPub = (await crypto.subtle.exportKey("raw", keyPair.publicKey)) as ArrayBuffer;
-    const publicKeyBase64 = bufferToBase64(rawPub);
-
-    const header = { alg: "Ed25519", typ: "LK-TOKEN", kid: "kid_test_01" };
-    const headerB64Url = btoa(JSON.stringify(header)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-    const claimsB64Url = btoa(JSON.stringify(claims)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-    const dataToSign = `${headerB64Url}.${claimsB64Url}`;
-
-    const encoder = new TextEncoder();
-    const signatureBuffer = await crypto.subtle.sign(
-      "Ed25519",
-      keyPair.privateKey,
-      encoder.encode(dataToSign) as any
-    );
-    const signatureBase64 = bufferToBase64(signatureBuffer);
-    const signatureB64Url = signatureBase64.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-
-    const token = `${headerB64Url}.${claimsB64Url}.${signatureB64Url}`;
-    return { token, publicKeyBase64 };
-  }
-
-  it("should mathematically verify genuine offline token without network access", async () => {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const claims: OfflineLicenseClaims = {
-      typ: "license",
-      lic_id: "lic_offline_test",
-      sub: "LIC-OFFL-TEST-0001",
-      acc: "acc_test",
-      prd: "prd_test",
-      pol: "pol_test",
-      fp: "mac-hardware-uuid-12345",
-      iat: nowSec,
-      exp: nowSec + 3600, // Valid for 1h
-      fea: ["pro_export", "gpu_acceleration"],
+describe("V1 signed and opaque credentials", () => {
+  it("allows opaque mode with no signing key", async () => {
+    const response: ClientCredentialResponse = {
+      activation_id: "act_1",
+      machine_token: "mtk_secret",
+      credential_mode: "opaque",
+      signed_license_token: null,
+      license_expires_at: null,
+      terms: { max_activations: 1, features: [], updates_until: null },
     };
-
-    const { token, publicKeyBase64 } = await createTestSignedToken(claims);
-
-    const res = await verifyOfflineToken<OfflineLicenseClaims>(token, publicKeyBase64);
-    expect(res.valid).toBe(true);
-    expect(res.claims).toBeDefined();
-    expect(res.claims?.sub).toBe("LIC-OFFL-TEST-0001");
-    expect(res.claims?.fea).toEqual(["pro_export", "gpu_acceleration"]);
-
-    // Test evaluation against matching fingerprint
-    const evalValid = evaluateLicenseClaims(res.claims!, "mac-hardware-uuid-12345");
-    expect(evalValid.valid).toBe(true);
-    expect(evalValid.isFingerprintMatch).toBe(true);
-    expect(evalValid.isExpired).toBe(false);
-
-    // Test evaluation with granted feature
-    const evalFeature = evaluateLicenseClaims(res.claims!, "mac-hardware-uuid-12345", "pro_export");
-    expect(evalFeature.valid).toBe(true);
-
-    // Test evaluation with missing feature
-    const evalMissingFeature = evaluateLicenseClaims(res.claims!, "mac-hardware-uuid-12345", "enterprise_sso");
-    expect(evalMissingFeature.valid).toBe(false);
+    await expect(verifyCredentialResponse(response, {}, {
+      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "fp",
+      releaseVersion: "1.0", releasePlatform: "macos-arm64",
+    })).resolves.toBeUndefined();
   });
 
-  it("should fail evaluation when machine fingerprint does not match host (Anti-Copy Protection)", async () => {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const claims: OfflineLicenseClaims = {
-      typ: "license",
-      lic_id: "lic_stolen",
-      sub: "LIC-COPY-STOLEN-0001",
-      acc: "acc_test",
-      prd: "prd_test",
-      pol: "pol_test",
-      fp: "device_A_hardware_uuid",
-      iat: nowSec,
-      exp: nowSec + 3600,
-      fea: ["pro"],
+  it("requires the configured key ID and verifies all signed claims", async () => {
+    const signed = await signedToken();
+    const response: ClientCredentialResponse = {
+      activation_id: "act_1",
+      machine_token: "mtk_secret",
+      credential_mode: "signed",
+      signed_license_token: signed.token,
+      signing_key_id: "key_v1",
+      license_expires_at: null,
+      terms: { max_activations: 1, features: ["export"], updates_until: null },
     };
-
-    const { token, publicKeyBase64 } = await createTestSignedToken(claims);
-    const res = await verifyOfflineToken<OfflineLicenseClaims>(token, publicKeyBase64);
-    expect(res.valid).toBe(true);
-
-    // Host machine is device_B, but token is bound to device_A
-    const evalResult = evaluateLicenseClaims(res.claims!, "device_B_hardware_uuid");
-    expect(evalResult.valid).toBe(false);
-    expect(evalResult.isFingerprintMatch).toBe(false);
-    expect(evalResult.reasons.some((r) => r.includes("fingerprint mismatch"))).toBe(true);
+    await expect(verifyCredentialResponse(response, {}, {
+      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
+    })).rejects.toMatchObject({ code: "TRUSTED_SIGNING_KEY_MISSING" });
+    await expect(verifyCredentialResponse(response, { key_v1: signed.publicKey }, {
+      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
+    })).resolves.toMatchObject({ lic: "lic_1", rel: "rel_1" });
   });
 
-  it("should fail evaluation when token is past expiration timestamp", async () => {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const claims: OfflineLicenseClaims = {
-      typ: "license",
-      lic_id: "lic_expired",
-      sub: "LIC-EXPIRED-TOKEN",
-      acc: "acc_test",
-      prd: "prd_test",
-      pol: "pol_test",
-      fp: "device_uuid_99",
-      iat: nowSec - 7200,
-      exp: nowSec - 100, // Expired 100 seconds ago
-      fea: ["basic"],
-    };
+  it("rejects release builds after updates_until independently of expiration", async () => {
+    const signed = await signedToken({ rat: 2_000, upd: 1_999, lexp: null });
+    const verified = await verifySignedLicenseToken(signed.token, signed.publicKey);
+    expect(evaluateSignedLicenseClaims(verified.claims, {
+      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
+    })).toMatchObject({ valid: false, code: "UPDATE_ENTITLEMENT_REQUIRED" });
+  });
+});
 
-    const { token, publicKeyBase64 } = await createTestSignedToken(claims);
-    const res = await verifyOfflineToken<OfflineLicenseClaims>(token, publicKeyBase64);
-    expect(res.valid).toBe(true);
-
-    const evalResult = evaluateLicenseClaims(res.claims!, "device_uuid_99");
-    expect(evalResult.valid).toBe(false);
-    expect(evalResult.isExpired).toBe(true);
-    expect(evalResult.reasons.some((r) => r.includes("expired"))).toBe(true);
+describe("V1 local credential storage", () => {
+  const configDir = path.join(os.tmpdir(), `licenkit-v1-cli-${process.pid}`);
+  beforeEach(() => {
+    process.env.LICENKIT_CONFIG_DIR = configDir;
+  });
+  afterEach(() => {
+    fs.rmSync(configDir, { recursive: true, force: true });
+    delete process.env.LICENKIT_CONFIG_DIR;
   });
 
-  it("should fail cryptographic verification when token signature or payload is tampered", async () => {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const claims: OfflineLicenseClaims = {
-      typ: "license",
-      lic_id: "lic_tamper",
-      sub: "LIC-TAMPER-0001",
-      acc: "acc_test",
-      prd: "prd_test",
-      pol: "pol_test",
-      fp: "device_uuid",
-      iat: nowSec,
-      exp: nowSec + 3600,
-      fea: ["free_tier"],
-    };
-
-    const { token, publicKeyBase64 } = await createTestSignedToken(claims);
-    const parts = token.split(".");
-    // Tamper with payload
-    const tamperedPayload = btoa(JSON.stringify({ ...claims, fea: ["unlimited_enterprise"] }));
-    const tamperedToken = `${parts[0]}.${tamperedPayload}.${parts[2]}`;
-
-    const res = await verifyOfflineToken(tamperedToken, publicKeyBase64);
-    expect(res.valid).toBe(false);
-    expect(res.error).toContain("Cryptographic signature verification failed");
+  it("stores machine credentials without the activation license key", () => {
+    saveStoredLicense({
+      serverUrl: "https://license.example.com",
+      accountId: "acc_1",
+      productId: "prd_1",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-arm64",
+      devicePlatform: "macos-arm64",
+      activationId: "act_1",
+      machineToken: "mtk_secret",
+      credentialMode: "opaque",
+      activatedAt: new Date().toISOString(),
+      lastValidatedAt: new Date().toISOString(),
+      licenseExpiresAt: null,
+      terms: { max_activations: 1, features: [], updates_until: null },
+    });
+    const loaded = loadStoredLicense();
+    expect(loaded?.activationId).toBe("act_1");
+    expect((loaded as unknown as Record<string, unknown>)?.licenseKey).toBeUndefined();
+    expect(clearStoredLicense()).toBe(true);
   });
 });

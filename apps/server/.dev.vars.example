@@ -7,13 +7,24 @@
 #    from `.dev.vars` into `env`.
 # 3. For production deployment, set these secrets via Wrangler CLI:
 #      npx wrangler secret put STORAGE_ENCRYPTION_KEY
-#      npx wrangler secret put JWT_SECRET
+#      npx wrangler secret put STORAGE_ENCRYPTION_KEY_ID
+#      npx wrangler secret put INITIAL_SETUP_TOKEN
 # ==============================================================================
 
-# Platform Master Key Encryption Key (KEK) - Min 16 chars (recommended 32 chars)
-# Used to AES-256-GCM encrypt payment webhook secrets and product Ed25519 private keys.
+# Platform Master Key Encryption Key (KEK) - Min 16 chars (recommended 32+ chars).
+# Used by the V1 AES-256-GCM envelope for provider credentials, signing keys,
+# inbound event payloads, and sensitive Delivery payloads.
 STORAGE_ENCRYPTION_KEY=licenkit_local_dev_storage_encryption_key_32b!
 
-# JWT Authentication Secret - Min 16 chars (recommended 32 chars)
-# Used to HMAC-SHA256 sign and verify admin session tokens.
-JWT_SECRET=licenkit_local_dev_jwt_auth_secret_key_32b!
+# Identifies the active envelope key. Ciphertexts fail closed on unknown IDs.
+STORAGE_ENCRYPTION_KEY_ID=local-primary
+
+# High-entropy one-time Setup secret. Setup closes permanently after success.
+INITIAL_SETUP_TOKEN=licenkit_local_dev_initial_setup_token_32b!
+
+# Optional TTL overrides (seconds).
+# ADMIN_SESSION_TTL_SECONDS=43200
+# CUSTOMER_MAGIC_LINK_TTL_SECONDS=900
+# CUSTOMER_SESSION_TTL_SECONDS=43200
+# CUSTOMER_RECENT_AUTH_SECONDS=900
+# SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS=86400

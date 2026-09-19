@@ -114,132 +114,6 @@ export async function verifyPassword(password: string, storedHash: string): Prom
   return timingSafeEqual(calculatedHash, expectedHash);
 }
 
-// --- 2. Envelope Encryption (AES-256-GCM) ---
-async function deriveAesKey(masterKeyHexOrStr: string): Promise<CryptoKey> {
-  const encoder = new TextEncoder();
-  // Standard SHA-256 derivation expands master secret entropy evenly into a 256-bit key
-  const keyDigest = await crypto.subtle.digest("SHA-256", encoder.encode(masterKeyHexOrStr));
-  return await crypto.subtle.importKey("raw", keyDigest, "AES-GCM", false, ["encrypt", "decrypt"]);
-}
-
-export async function encryptEnvelope(plaintext: string, masterSecret: string): Promise<string> {
-  const key = await deriveAesKey(masterSecret);
-  const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit nonce
-  const encoded = new TextEncoder().encode(plaintext);
-
-  const ciphertext = await crypto.subtle.encrypt(
-    {
-      name: "AES-GCM",
-      iv,
-    },
-    key,
-    encoded
-  );
-
-  // Combine IV + ciphertext
-  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(ciphertext), iv.length);
-
-  return bufferToBase64(combined);
-}
-
-export async function decryptEnvelope(encryptedBase64: string, masterSecret: string): Promise<string> {
-  const key = await deriveAesKey(masterSecret);
-  const combined = base64ToBuffer(encryptedBase64);
-  const iv = combined.slice(0, 12);
-  const ciphertext = combined.slice(12);
-
-  const decrypted = await crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv,
-    },
-    key,
-    ciphertext
-  );
-
-  return new TextDecoder().decode(decrypted);
-}
-
-// --- 3. JWT Session Tokens (HMAC-SHA256) ---
-export interface JWTPayload {
-  userId: string;
-  accountId: string;
-  email: string;
-  role: "owner" | "admin" | "member" | "viewer";
-  exp: number; // Unix timestamp in seconds
-  iat: number;
-}
-
-export async function signJWT(payload: JWTPayload, secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const header = { alg: "HS256", typ: "JWT" };
-  const encodedHeader = bufferToBase64(encoder.encode(JSON.stringify(header)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const encodedPayload = bufferToBase64(encoder.encode(JSON.stringify(payload)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-  const dataToSign = `${encodedHeader}.${encodedPayload}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(dataToSign));
-  const encodedSignature = bufferToBase64(signature)
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-  return `${dataToSign}.${encodedSignature}`;
-}
-
-export async function verifyJWT(token: string, secret: string): Promise<JWTPayload | null> {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-
-    const [headerB64, payloadB64, signatureB64] = parts;
-    const dataToSign = `${headerB64}.${payloadB64}`;
-
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["verify"]
-    );
-
-    // Reconstruct standard Base64
-    const b64 = signatureB64.replace(/-/g, "+").replace(/_/g, "/");
-    const pad = b64.length % 4;
-    const padded = pad ? b64 + "=".repeat(4 - pad) : b64;
-    const signatureBytes = base64ToBuffer(padded);
-
-    const valid = await crypto.subtle.verify("HMAC", key, signatureBytes, encoder.encode(dataToSign));
-    if (!valid) return null;
-
-    // Decode payload
-    const payloadJson = new TextDecoder().decode(
-      base64ToBuffer(payloadB64.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payloadB64.length / 4) * 4, "="))
-    );
-    const payload = JSON.parse(payloadJson) as JWTPayload;
-
-    // Check expiration
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && payload.exp < now) {
-      return null;
-    }
-
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Retrieves and strictly validates the Storage Encryption Key (KEK).
  * Zero in-code fallback: throws ConfigurationError if missing or insecure.
@@ -259,26 +133,7 @@ export function getStorageEncryptionKey(env: { STORAGE_ENCRYPTION_KEY?: string }
   return key;
 }
 
-/**
- * Retrieves and strictly validates the JWT Authentication Secret.
- * Zero in-code fallback: throws ConfigurationError if missing or insecure.
- */
-export function getJwtSecret(env: { JWT_SECRET?: string }): string {
-  const secret = env?.JWT_SECRET?.trim();
-  if (!secret) {
-    throw new ConfigurationError(
-      "JWT_SECRET is required. Please configure it in .dev.vars (local development) or via 'npx wrangler secret put JWT_SECRET' (production)."
-    );
-  }
-  if (secret.length < 16) {
-    throw new ConfigurationError(
-      "JWT_SECRET must be at least 16 characters long."
-    );
-  }
-  return secret;
-}
-
-// --- 4. Webhook HMAC-SHA256 Signature Verification ---
+// --- 2. HMAC-SHA256 ---
 export function hexToBuffer(hex: string): Uint8Array {
   const cleanHex = hex.trim().toLowerCase();
   if (cleanHex.length % 2 !== 0) {
@@ -326,137 +181,6 @@ export async function verifyHmacSha256(
 }
 
 /**
- * Verifies official Paddle Billing webhook signature (`Paddle-Signature` header).
- * Format: `ts=1695287625;h1=028b03063806013a270f2095f32b4b248a318f7...`
- * Signature is computed over `${ts}:${rawBody}` using the webhook endpoint secret.
- */
-export async function verifyPaddleSignature(
-  rawBody: string,
-  signatureHeader: string | null | undefined,
-  secretKey: string,
-  toleranceSeconds: number = 300
-): Promise<boolean> {
-  if (!signatureHeader || !secretKey) return false;
-
-  try {
-    const parts = signatureHeader.split(";").map((p) => p.trim());
-    let ts: string | null = null;
-    let h1: string | null = null;
-
-    for (const part of parts) {
-      const [k, v] = part.split("=");
-      if (k === "ts") ts = v;
-      if (k === "h1") h1 = v;
-    }
-
-    if (!ts || !h1) return false;
-
-    // Check timestamp drift (anti-replay)
-    const timestampSec = parseInt(ts, 10);
-    if (isNaN(timestampSec)) return false;
-
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (Math.abs(nowSec - timestampSec) > toleranceSeconds) {
-      return false;
-    }
-
-    const dataToSign = `${ts}:${rawBody}`;
-    return await verifyHmacSha256(dataToSign, secretKey, h1);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Verifies official Stripe webhook signature (`Stripe-Signature` header).
- * Format: `t=1492774577,v1=5257a869e7ece2259f4a0ce354813b2bdec514f7263cb372f9e8a78624f97759,v0=...`
- * Signature is computed over `${t}.${rawBody}` using the endpoint secret (`whsec_...`).
- */
-export async function verifyStripeSignature(
-  rawBody: string,
-  signatureHeader: string | null | undefined,
-  secretKey: string,
-  toleranceSeconds: number = 300
-): Promise<boolean> {
-  if (!signatureHeader || !secretKey) return false;
-
-  try {
-    const items = signatureHeader.split(",").map((i) => i.trim());
-    let timestamp: string | null = null;
-    const signatures: string[] = [];
-
-    for (const item of items) {
-      const [k, v] = item.split("=");
-      if (k === "t") timestamp = v;
-      if (k === "v1" && v) signatures.push(v);
-    }
-
-    if (!timestamp || signatures.length === 0) return false;
-
-    const timestampSec = parseInt(timestamp, 10);
-    if (isNaN(timestampSec)) return false;
-
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (Math.abs(nowSec - timestampSec) > toleranceSeconds) {
-      return false;
-    }
-
-    const dataToSign = `${timestamp}.${rawBody}`;
-    for (const sig of signatures) {
-      const isValid = await verifyHmacSha256(dataToSign, secretKey, sig);
-      if (isValid) return true;
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Verifies Lemon Squeezy webhook signature (`x-signature` header).
- * Signature is computed over `rawBody` using the endpoint secret.
- */
-export async function verifyLemonSqueezySignature(
-  rawBody: string,
-  signatureHeader: string | null | undefined,
-  secretKey: string
-): Promise<boolean> {
-  if (!signatureHeader || !secretKey) return false;
-  return await verifyHmacSha256(rawBody, secretKey, signatureHeader);
-}
-
-/**
- * Computes standard outbound webhook signature header.
- * Uses Stripe-style anti-replay format: `t=${timestamp},v1=${signatureHex}`
- * Signature is computed over `${timestamp}.${payload}` using endpoint secret.
- */
-export async function computeOutboundWebhookSignature(
-  payload: string,
-  secretKey: string,
-  timestamp?: number
-): Promise<{ signatureHeader: string; timestamp: number; signatureHex: string }> {
-  const ts = timestamp ?? Math.floor(Date.now() / 1000);
-  const dataToSign = `${ts}.${payload}`;
-  const signatureHex = await computeHmacSha256(dataToSign, secretKey);
-  const signatureHeader = `t=${ts},v1=${signatureHex}`;
-  return { signatureHeader, timestamp: ts, signatureHex };
-}
-
-/**
- * Verifies outbound webhook signature header (`t=${timestamp},v1=${signatureHex}`).
- * Validates timestamp drift to prevent replay attacks.
- */
-export async function verifyOutboundWebhookSignature(
-  payload: string,
-  signatureHeader: string | null | undefined,
-  secretKey: string,
-  toleranceSeconds: number = 300
-): Promise<boolean> {
-  return await verifyStripeSignature(payload, signatureHeader, secretKey, toleranceSeconds);
-}
-
-/**
  * Standard formatted license key generator: `LIC-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XX`
  * Uses standard Crockford base32 alphabet (excludes ambiguous I, L, O, and U).
  * Extracts 26 characters (26 * 5 = 130 bits of true WebCrypto CSPRNG entropy)
@@ -487,17 +211,7 @@ export async function hashLicenseKey(cleanKey: string): Promise<string> {
   return sha256Hex(normalizeLicenseKey(cleanKey));
 }
 
-export function generateMachineToken(): string {
-  const bytes = new Uint8Array(32); // 256 bits entropy
-  crypto.getRandomValues(bytes);
-  return `mct_${bufferToHex(bytes)}`;
-}
-
-export async function hashMachineToken(machineToken: string): Promise<string> {
-  return sha256Hex(machineToken);
-}
-
-// --- 5. Ed25519 Key Generation, Import, Signing & Verification ---
+// --- 3. Ed25519 Key Generation, Import, Signing & Verification ---
 export function stripPem(pemOrBase64: string): string {
   return pemOrBase64
     .replace(/-----BEGIN [A-Z0-9 ]+-----/g, "")
@@ -659,7 +373,7 @@ export async function verifyEd25519(
   }
 }
 
-// --- 6. Offline Ed25519 License Token Assembly & Verification ---
+// --- 4. Base64URL helpers used by the V1 signed-license contract ---
 export function base64ToBase64Url(base64: string): string {
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
@@ -679,91 +393,5 @@ export function base64UrlToJson<T = any>(base64Url: string): T {
   const decoder = new TextDecoder();
   const bytes = base64ToBuffer(base64UrlToBase64(base64Url));
   return JSON.parse(decoder.decode(bytes)) as T;
-}
-
-export interface OfflineTokenHeader {
-  alg: "Ed25519";
-  typ: "LK-TOKEN" | "LK-TRIAL";
-  kid?: string;
-}
-
-export interface OfflineLicenseClaims {
-  typ: "license";
-  lic_id: string; // 内部 License ID
-  sub: string;    // License Key (e.g. LIC-ABCD-1234-EFGH-5678)
-  acc: string;    // Account ID
-  prd: string;    // Product ID
-  pol: string;    // Policy ID
-  fp: string;     // Machine Fingerprint
-  iat: number;    // Issued At (Unix timestamp in seconds)
-  exp: number;    // Offline Grace Expiration (Unix timestamp in seconds)
-  fea?: string[]; // Features list
-  meta?: Record<string, any>;
-}
-
-export interface OfflineTrialClaims {
-  typ: "trial";
-  acc: string;    // Account ID
-  prd: string;    // Product ID
-  fp: string;     // Machine Fingerprint
-  iat: number;    // Issued At (Unix timestamp in seconds)
-  exp: number;    // Trial Expiration (Unix timestamp in seconds)
-  fea?: string[]; // Features list
-}
-
-export type OfflineTokenClaims = OfflineLicenseClaims | OfflineTrialClaims;
-
-export async function signOfflineToken(
-  header: OfflineTokenHeader,
-  claims: OfflineTokenClaims,
-  privateKeyPkcs8Base64: string
-): Promise<string> {
-  const headerB64 = jsonToBase64Url(header);
-  const claimsB64 = jsonToBase64Url(claims);
-  const dataToSign = `${headerB64}.${claimsB64}`;
-
-  const sigBase64 = await signEd25519(dataToSign, privateKeyPkcs8Base64);
-  const sigB64Url = base64ToBase64Url(sigBase64);
-
-  return `${dataToSign}.${sigB64Url}`;
-}
-
-export async function verifyOfflineToken(
-  token: string,
-  publicKeyBase64: string
-): Promise<{
-  valid: boolean;
-  header?: OfflineTokenHeader;
-  claims?: OfflineTokenClaims;
-  error?: string;
-}> {
-  try {
-    const parts = token.trim().split(".");
-    if (parts.length !== 3) {
-      return { valid: false, error: "Malformed token: expected 3 dot-separated parts" };
-    }
-
-    const [headerB64, claimsB64, signatureB64Url] = parts;
-    const dataToVerify = `${headerB64}.${claimsB64}`;
-    const signatureBase64 = base64UrlToBase64(signatureB64Url);
-
-    // Verify Ed25519 signature
-    const isSigValid = await verifyEd25519(dataToVerify, signatureBase64, publicKeyBase64);
-    if (!isSigValid) {
-      return { valid: false, error: "Cryptographic signature verification failed" };
-    }
-
-    // Decode header and claims
-    const header = base64UrlToJson<OfflineTokenHeader>(headerB64);
-    const claims = base64UrlToJson<OfflineTokenClaims>(claimsB64);
-
-    return {
-      valid: true,
-      header,
-      claims,
-    };
-  } catch (err: any) {
-    return { valid: false, error: err?.message || "Failed to decode or verify token" };
-  }
 }
 

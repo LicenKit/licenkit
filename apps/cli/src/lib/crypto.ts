@@ -1,72 +1,48 @@
-/**
- * LicenKit CLI Cryptographic Infrastructure
- * Pure native WebCrypto API implementation for offline Ed25519 token verification.
- * Zero external cryptographic library dependencies.
- */
-
-export interface OfflineTokenHeader {
-  alg: "Ed25519";
-  typ: "LK-TOKEN" | "LK-TRIAL";
+export interface SignedLicenseHeader {
+  alg: "EdDSA";
+  typ: "licenkit-license+jwt";
   kid: string;
 }
 
-export interface OfflineLicenseClaims {
-  typ: "license";
-  lic_id: string;
-  sub: string; // License key, e.g. LIC-XXXX-XXXX-XXXX-XXXX
-  acc: string; // Account/Workspace ID
-  prd: string; // Product ID
-  pol: string; // Policy ID
-  fp: string; // Machine Hardware Fingerprint
-  iat: number; // Issued at timestamp (seconds)
-  exp: number; // Expiration timestamp (seconds)
-  fea: string[]; // Enabled feature entitlements
-}
-
-export interface OfflineTrialClaims {
-  typ: "trial";
+export interface SignedLicenseClaims {
+  lic: string;
+  act: string;
   acc: string;
   prd: string;
+  rel: string;
+  ver: string;
+  plt: string;
+  rat: number;
   fp: string;
   iat: number;
   exp: number;
+  lexp: number | null;
+  upd: number | null;
   fea: string[];
 }
 
-export type OfflineTokenClaims = OfflineLicenseClaims | OfflineTrialClaims;
-
-// --- Base64 / Base64Url Utilities ---
+export class SignedTokenError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = "SignedTokenError";
+  }
+}
 
 export function base64ToBuffer(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
+  const bytes = Buffer.from(base64, "base64");
+  return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
 export function bufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
+  return Buffer.from(bytes).toString("base64");
 }
 
-export function base64UrlToBase64(base64Url: string): string {
-  let base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-  while (base64.length % 4 !== 0) {
-    base64 += "=";
+export function base64UrlToBuffer(base64Url: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/.test(base64Url)) {
+    throw new SignedTokenError("TOKEN_BASE64URL_INVALID", "Token contains invalid Base64URL characters");
   }
-  return base64;
-}
-
-export function base64UrlToJson<T = any>(base64Url: string): T {
-  const base64 = base64UrlToBase64(base64Url);
-  const jsonStr = atob(base64);
-  return JSON.parse(jsonStr);
+  return base64ToBuffer(base64Url.replace(/-/g, "+").replace(/_/g, "/"));
 }
 
 export function stripPem(pemOrBase64: string): string {
@@ -76,133 +52,182 @@ export function stripPem(pemOrBase64: string): string {
     .replace(/\s+/g, "");
 }
 
-/**
- * Verifies Ed25519 cryptographic signature using native WebCrypto API.
- * Accepts raw 32-byte public key (Base64 or SPKI PEM).
- */
-export async function verifyEd25519(
-  dataToVerify: string,
-  signatureBase64: string,
-  publicKeyInput: string
-): Promise<boolean> {
-  try {
-    const cleanPub = stripPem(publicKeyInput);
-    const rawPubBytes = base64ToBuffer(cleanPub);
-    const signatureBytes = base64ToBuffer(signatureBase64);
-    const encoder = new TextEncoder();
-    const dataBytes = encoder.encode(dataToVerify);
-
-    let cryptoKey: CryptoKey;
-
-    if (rawPubBytes.byteLength === 32) {
-      cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        rawPubBytes as any,
-        { name: "Ed25519" },
-        false,
-        ["verify"]
-      );
-    } else {
-      cryptoKey = await crypto.subtle.importKey(
-        "spki",
-        rawPubBytes as any,
-        { name: "Ed25519" },
-        false,
-        ["verify"]
-      );
+function assertNoDuplicateTopLevelKeys(json: string): void {
+  const keys = new Set<string>();
+  let index = 0;
+  const skipWhitespace = () => {
+    while (/\s/.test(json[index] ?? "")) index += 1;
+  };
+  const scanString = (): string => {
+    const start = index;
+    index += 1;
+    let escaped = false;
+    while (index < json.length) {
+      const char = json[index++];
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        return JSON.parse(json.slice(start, index));
+      }
     }
+    throw new SignedTokenError("TOKEN_JSON_INVALID", "Unterminated JSON string");
+  };
 
-    return await crypto.subtle.verify("Ed25519", cryptoKey, signatureBytes as any, dataBytes as any);
-  } catch {
-    return false;
+  skipWhitespace();
+  if (json[index++] !== "{") throw new SignedTokenError("TOKEN_JSON_INVALID", "Token segment must be a JSON object");
+  while (index < json.length) {
+    skipWhitespace();
+    if (json[index] === "}") return;
+    if (json[index] !== '"') throw new SignedTokenError("TOKEN_JSON_INVALID", "Token object key must be a string");
+    const key = scanString();
+    if (keys.has(key)) throw new SignedTokenError("TOKEN_DUPLICATE_CLAIM", `Duplicate token field '${key}'`);
+    keys.add(key);
+    skipWhitespace();
+    if (json[index++] !== ":") throw new SignedTokenError("TOKEN_JSON_INVALID", "Token object field is missing ':'");
+
+    let nestedDepth = 0;
+    let inString = false;
+    let escaped = false;
+    while (index < json.length) {
+      const char = json[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+      } else if (char === '"') inString = true;
+      else if (char === "{" || char === "[") nestedDepth += 1;
+      else if (char === "}" || char === "]") {
+        if (nestedDepth === 0 && char === "}") break;
+        nestedDepth -= 1;
+      } else if (char === "," && nestedDepth === 0) break;
+      index += 1;
+    }
+    if (json[index] === ",") index += 1;
   }
+  throw new SignedTokenError("TOKEN_JSON_INVALID", "Token object is not closed");
 }
 
-export interface TokenVerificationResult<T = OfflineTokenClaims> {
-  valid: boolean;
-  header?: OfflineTokenHeader;
-  claims?: T;
-  error?: string;
+function parseStrictObject<T>(segment: string): T {
+  const json = new TextDecoder().decode(base64UrlToBuffer(segment));
+  assertNoDuplicateTopLevelKeys(json);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (error) {
+    throw new SignedTokenError("TOKEN_JSON_INVALID", error instanceof Error ? error.message : "Invalid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new SignedTokenError("TOKEN_JSON_INVALID", "Token segment must decode to an object");
+  }
+  return parsed as T;
 }
 
-/**
- * Pure offline mathematical verification of an Ed25519 structured token.
- * Does NOT require network connectivity.
- */
-export async function verifyOfflineToken<T = OfflineTokenClaims>(
+export function decodeSignedLicenseHeader(token: string): SignedLicenseHeader {
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) throw new SignedTokenError("TOKEN_FORMAT_INVALID", "Expected three JWS segments");
+  const header = parseStrictObject<Record<string, unknown>>(parts[0]);
+  const unknown = Object.keys(header).filter((key) => !["alg", "typ", "kid"].includes(key));
+  if (unknown.length) throw new SignedTokenError("TOKEN_HEADER_UNSUPPORTED", `Unsupported protected header '${unknown[0]}'`);
+  if (header.alg !== "EdDSA") throw new SignedTokenError("TOKEN_ALGORITHM_INVALID", "Protected alg must be EdDSA");
+  if (header.typ !== "licenkit-license+jwt") {
+    throw new SignedTokenError("TOKEN_TYPE_INVALID", "Protected typ must be licenkit-license+jwt");
+  }
+  if (typeof header.kid !== "string" || !header.kid) throw new SignedTokenError("TOKEN_KEY_ID_MISSING", "Protected kid is required");
+  return header as unknown as SignedLicenseHeader;
+}
+
+export async function verifySignedLicenseToken(
   token: string,
   publicKeyInput: string
-): Promise<TokenVerificationResult<T>> {
+): Promise<{ header: SignedLicenseHeader; claims: SignedLicenseClaims }> {
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) throw new SignedTokenError("TOKEN_FORMAT_INVALID", "Expected three JWS segments");
+  const header = decodeSignedLicenseHeader(token);
+  const cleanPublicKey = stripPem(publicKeyInput);
+  const publicKeyBytes = base64ToBuffer(cleanPublicKey);
+  const signature = base64UrlToBuffer(parts[2]);
+  const publicKeyBuffer = Uint8Array.from(publicKeyBytes).buffer;
+  const signatureBuffer = Uint8Array.from(signature).buffer;
+  let key: CryptoKey;
   try {
-    const parts = token.trim().split(".");
-    if (parts.length !== 3) {
-      return { valid: false, error: "Malformed token format: expected 3 dot-separated Base64Url segments" };
-    }
-
-    const [headerB64Url, payloadB64Url, signatureB64Url] = parts;
-    const dataToVerify = `${headerB64Url}.${payloadB64Url}`;
-    const signatureBase64 = base64UrlToBase64(signatureB64Url);
-
-    // 1. Verify mathematical Ed25519 signature
-    const isSigValid = await verifyEd25519(dataToVerify, signatureBase64, publicKeyInput);
-    if (!isSigValid) {
-      return { valid: false, error: "Cryptographic signature verification failed (Token tampered or wrong public key)" };
-    }
-
-    // 2. Decode claims
-    const header = base64UrlToJson<OfflineTokenHeader>(headerB64Url);
-    const claims = base64UrlToJson<T>(payloadB64Url);
-
-    return {
-      valid: true,
-      header,
-      claims,
-    };
-  } catch (err: any) {
-    return { valid: false, error: err?.message || "Failed to parse or verify offline token" };
+    key = await crypto.subtle.importKey(
+      publicKeyBytes.byteLength === 32 ? "raw" : "spki",
+      publicKeyBuffer,
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+  } catch (error) {
+    throw new SignedTokenError("TRUSTED_KEY_INVALID", error instanceof Error ? error.message : "Invalid Ed25519 public key");
   }
+  const verified = await crypto.subtle.verify(
+    "Ed25519",
+    key,
+    signatureBuffer,
+    new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+  );
+  if (!verified) throw new SignedTokenError("TOKEN_SIGNATURE_INVALID", "Ed25519 signature verification failed");
+
+  const claims = parseStrictObject<Record<string, unknown>>(parts[1]);
+  const requiredStrings = ["lic", "act", "acc", "prd", "rel", "ver", "plt", "fp"] as const;
+  for (const field of requiredStrings) {
+    if (typeof claims[field] !== "string" || claims[field] === "") {
+      throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be a non-empty string`);
+    }
+  }
+  for (const field of ["rat", "iat", "exp"] as const) {
+    if (!Number.isSafeInteger(claims[field])) {
+      throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be an integer timestamp`);
+    }
+  }
+  for (const field of ["lexp", "upd"] as const) {
+    if (claims[field] !== null && !Number.isSafeInteger(claims[field])) {
+      throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be null or an integer timestamp`);
+    }
+  }
+  if (!Array.isArray(claims.fea) || claims.fea.some((feature) => typeof feature !== "string")) {
+    throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Claim 'fea' must be an array of strings");
+  }
+  const typed = claims as unknown as SignedLicenseClaims;
+  if (typed.exp <= typed.iat) throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Token exp must be later than iat");
+  if (typed.lexp !== null && typed.exp > typed.lexp) {
+    throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Token exp cannot be later than License expiration");
+  }
+  return { header, claims: typed };
 }
 
-export interface LicenseValidationEvaluation {
+export interface ClaimsContext {
+  accountId: string;
+  productId: string;
+  activationId: string;
+  fingerprint: string;
+  releaseVersion: string;
+  releasePlatform: string;
+  nowSeconds?: number;
+}
+
+export interface ClaimsEvaluation {
   valid: boolean;
-  reasons: string[];
-  isExpired: boolean;
-  isFingerprintMatch: boolean;
-  expiresInSeconds: number;
+  code?: string;
+  reason?: string;
 }
 
-/**
- * Evaluates verified claims against current system constraints (time, machine fingerprint, feature).
- */
-export function evaluateLicenseClaims(
-  claims: OfflineTokenClaims,
-  currentMachineFingerprint: string,
-  requiredFeature?: string
-): LicenseValidationEvaluation {
-  const reasons: string[] = [];
-  const nowSec = Math.floor(Date.now() / 1000);
-
-  const expiresInSeconds = claims.exp - nowSec;
-  const isExpired = expiresInSeconds <= 0;
-
-  if (isExpired) {
-    reasons.push(`License token expired ${Math.abs(expiresInSeconds)}s ago`);
-  }
-
-  const isFingerprintMatch = claims.fp.toLowerCase() === currentMachineFingerprint.toLowerCase();
-  if (!isFingerprintMatch) {
-    reasons.push(`Machine fingerprint mismatch: token bound to '${claims.fp}', current machine is '${currentMachineFingerprint}'`);
-  }
-
-  if (requiredFeature && !claims.fea.includes(requiredFeature)) {
-    reasons.push(`Required feature entitlement '${requiredFeature}' is not granted in this license`);
-  }
-
-  return {
-    valid: !isExpired && isFingerprintMatch && (!requiredFeature || claims.fea.includes(requiredFeature)),
-    reasons,
-    isExpired,
-    isFingerprintMatch,
-    expiresInSeconds,
-  };
+export function evaluateSignedLicenseClaims(claims: SignedLicenseClaims, context: ClaimsContext): ClaimsEvaluation {
+  const now = context.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const comparisons: Array<[boolean, string, string]> = [
+    [claims.acc === context.accountId, "TOKEN_ACCOUNT_MISMATCH", "Token account does not match configuration"],
+    [claims.prd === context.productId, "TOKEN_PRODUCT_MISMATCH", "Token product does not match configuration"],
+    [claims.act === context.activationId, "TOKEN_ACTIVATION_MISMATCH", "Token activation does not match server response"],
+    [claims.fp.toLowerCase() === context.fingerprint.toLowerCase(), "TOKEN_FINGERPRINT_MISMATCH", "Token fingerprint does not match this device"],
+    [claims.ver === context.releaseVersion, "TOKEN_RELEASE_VERSION_MISMATCH", "Token release version does not match this build"],
+    [claims.plt === context.releasePlatform, "TOKEN_RELEASE_PLATFORM_MISMATCH", "Token release platform does not match this build"],
+    [claims.iat <= now + 300, "TOKEN_ISSUED_IN_FUTURE", "Token issue time is in the future"],
+    [claims.exp > now, "TOKEN_EXPIRED", "Signed License Token has expired"],
+    [claims.lexp === null || claims.lexp > now, "LICENSE_EXPIRED", "License has expired"],
+    [claims.upd === null || claims.rat <= claims.upd, "UPDATE_ENTITLEMENT_REQUIRED", "This build was released after the update entitlement ended"],
+  ];
+  const failure = comparisons.find(([matches]) => !matches);
+  return failure ? { valid: false, code: failure[1], reason: failure[2] } : { valid: true };
 }

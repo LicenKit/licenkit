@@ -1,107 +1,161 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppContext, Env } from "./types";
-import { errorHandler } from "./middleware/error";
-import { sessionAuth } from "./middleware/auth";
+import { errorHandler, AppError } from "./middleware/error";
+import {
+  adminCsrf,
+  adminSessionAuth,
+  requireDeclaredAdminPermission,
+  requireExactOrigin,
+} from "./middleware/auth";
+import { requestContext } from "./middleware/request-context";
+import { rateLimit } from "./middleware/rate-limit";
 import { systemRouter } from "./routes/system.routes";
-import { authRouter } from "./routes/auth.routes";
+import { setupRouter } from "./routes/setup.routes";
+import { adminAuthRouter } from "./routes/auth.routes";
 import { clientRouter } from "./routes/client.routes";
-import { adminSettingsRouter } from "./routes/admin/settings.routes";
+import { customerAuthRouter } from "./routes/customer-auth.routes";
+import { customerRouter } from "./routes/customer.routes";
+import { publicCheckoutRouter } from "./routes/public-checkout.routes";
+import { adminAccountRouter } from "./routes/admin/settings.routes";
 import { adminUsersRouter } from "./routes/admin/users.routes";
 import { adminProductsRouter } from "./routes/admin/products.routes";
-import { adminPoliciesRouter } from "./routes/admin/policies.routes";
+import { adminLicensePlansRouter } from "./routes/admin/license-plans.routes";
 import { adminLicensesRouter } from "./routes/admin/licenses.routes";
-import { adminWebhooksRouter } from "./routes/admin/webhooks.routes";
+import { adminBillingRouter } from "./routes/admin/billing.routes";
+import { adminOutboundRouter } from "./routes/admin/webhooks.routes";
+import { adminCustomersRouter } from "./routes/customer-admin.routes";
 import { adminStatsRouter } from "./routes/admin/stats.routes";
 import { adminAuditRouter } from "./routes/admin/audit.routes";
 import { webhookRouter } from "./routes/webhook.routes";
-import { handleQueueBatch, type WebhookMessage } from "./queue/consumer";
+import { processDueBillingInboundEvents } from "./services/billing/fulfillment";
+import { runDeliveryScheduler } from "./services/delivery/scheduler";
+import { recordSchedulerSuccess } from "./services/runtime/scheduler-health";
 
 const app = new Hono<AppContext>();
-
-// Global Error Handler
 app.onError(errorHandler);
+app.use("*", requestContext);
 
-// Global CORS Configuration
 app.use(
-  "*",
-  async (c, next) => {
-    const isDev = c.env.ENVIRONMENT !== "production";
-    const allowedOrigins = new Set(
-      [c.env.ENVIRONMENT === "test" ? "*" : null].filter(Boolean) as string[]
-    );
-
-    const corsMiddleware = cors({
-      origin: (requestOrigin) => {
-        if (!requestOrigin) return "";
-        // In unit tests, allow request origin
-        if (c.env.ENVIRONMENT === "test") return requestOrigin;
-        // In development, allow localhost origins
-        if (isDev && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(requestOrigin)) {
-          return requestOrigin;
-        }
-        // In production, match configured domains
-        if (allowedOrigins.has(requestOrigin)) {
-          return requestOrigin;
-        }
-        return "";
-      },
-      allowHeaders: ["Content-Type", "Authorization", "X-LicenKit-Signature", "Paddle-Signature", "Stripe-Signature", "X-Signature"],
-      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      exposeHeaders: ["Content-Length", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-      maxAge: 86400,
-      credentials: true,
-    });
-
-    return corsMiddleware(c, next);
-  }
+  "/api/v1/public/*",
+  cors({
+    origin: "*",
+    allowHeaders: ["Content-Type", "X-Request-Id"],
+    allowMethods: ["GET", "OPTIONS"],
+    exposeHeaders: ["X-Request-Id"],
+    maxAge: 600,
+    credentials: false,
+  }),
 );
+app.use("*", async (c, next) => {
+  if (c.req.path.startsWith("/api/v1/public/")) {
+    await next();
+    return;
+  }
+  const middleware = cors({
+    origin: (origin) => {
+      if (!origin) return "";
+      if (
+        c.env.ENVIRONMENT !== "production" &&
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      ) {
+        return origin;
+      }
+      return "";
+    },
+    allowHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-CSRF-Token",
+      "X-Request-Id",
+      "Paddle-Signature",
+    ],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    exposeHeaders: ["X-Request-Id", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    maxAge: 600,
+    credentials: true,
+  });
+  await middleware(c, next);
+});
 
-// Mount API v1 Routes
 const api = new Hono<AppContext>();
 
+api.route("/setup", setupRouter);
 api.route("/system", systemRouter);
-api.route("/auth", authRouter);
-api.route("/client", clientRouter);
 
-// Protected Admin Routes
+api.use("*", async (c, next) => {
+  if (c.req.path.startsWith("/api/v1/setup") || c.req.path === "/api/v1/system/status") {
+    await next();
+    return;
+  }
+  const initialized = await c.env.DB
+    .prepare(`SELECT id FROM system_settings WHERE id = 'current' LIMIT 1`)
+    .first<{ id: string }>();
+  if (!initialized) {
+    throw new AppError("SETUP_REQUIRED", "LicenKit setup has not completed.", 503);
+  }
+  await next();
+});
+
+api.route("/admin/auth", adminAuthRouter);
+api.route("/client", clientRouter);
+api.route("/customer/auth", customerAuthRouter);
+api.route("/customer", customerRouter);
+api.route("/public", publicCheckoutRouter);
+api.route("/webhooks", webhookRouter);
+
 const admin = new Hono<AppContext>();
-admin.use("*", sessionAuth);
-admin.route("/settings", adminSettingsRouter);
+admin.use("*", adminSessionAuth);
+admin.use("*", requireDeclaredAdminPermission);
+admin.use("*", async (c, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
+    await next();
+    return;
+  }
+  await rateLimit({
+    limit: 120,
+    windowSeconds: 60,
+    keyPrefix: "admin_mutation",
+    key: (context) => `${context.get("accountId")}:${context.get("userId")}`,
+  })(c, async () => {
+    await requireExactOrigin(c, async () => {
+      await adminCsrf(c, async () => {
+        await next();
+      });
+    });
+  });
+});
+admin.route("/account", adminAccountRouter);
 admin.route("/users", adminUsersRouter);
 admin.route("/products", adminProductsRouter);
-admin.route("/policies", adminPoliciesRouter);
+admin.route("/license-plans", adminLicensePlansRouter);
 admin.route("/licenses", adminLicensesRouter);
-admin.route("/webhooks", adminWebhooksRouter);
+admin.route("/billing", adminBillingRouter);
+admin.route("/outbound", adminOutboundRouter);
+admin.route("/customers", adminCustomersRouter);
 admin.route("/stats", adminStatsRouter);
 admin.route("/audit-logs", adminAuditRouter);
-
 api.route("/admin", admin);
-api.route("/webhooks", webhookRouter);
 
 app.route("/api/v1", api);
 
-// Static Assets Fallback (Single Domain Deployment)
 app.all("*", async (c) => {
-  if (c.env.ASSETS) {
-    return c.env.ASSETS.fetch(c.req.raw);
-  }
+  if (c.env.ASSETS) return c.env.ASSETS.fetch(c.req.raw);
   return c.text("LicenKit Server is running. Static assets binding not configured.", 404);
 });
 
-import { cleanExpiredUnusedLicenses } from "./routes/admin/licenses.routes";
-import { drizzle } from "drizzle-orm/d1";
-import * as schema from "./infra/db/schema";
-
-// Export Cloudflare Workers Handlers and App instance
 export { app };
 export default {
   fetch: app.fetch,
-  async queue(batch: MessageBatch<WebhookMessage>, env: Env): Promise<void> {
-    await handleQueueBatch(batch, env);
-  },
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const db = drizzle(env.DB, { schema });
-    await cleanExpiredUnusedLicenses(db);
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const startedAt = Date.now();
+    ctx.waitUntil(
+      Promise.all([
+        processDueBillingInboundEvents(env),
+        runDeliveryScheduler(env),
+      ]).then(async () => {
+        await recordSchedulerSuccess(env.KEYS_KV, startedAt);
+      }),
+    );
   },
 };

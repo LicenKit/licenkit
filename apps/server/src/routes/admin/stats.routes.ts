@@ -1,62 +1,48 @@
 import { Hono } from "hono";
-import { eq, and, gte, lte, sql } from "drizzle-orm";
 import type { AppContext } from "../../types";
-import { getTenantDB } from "../../infra/db";
-import { products, licenses, machines } from "../../infra/db/schema";
+import { requireRole } from "../../middleware/auth";
 
 export const adminStatsRouter = new Hono<AppContext>();
 
 // GET /api/v1/admin/stats
-adminStatsRouter.get("/", async (c) => {
-  const db = getTenantDB(c);
+adminStatsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
   const accountId = c.get("accountId")!;
-
   const now = new Date();
-  const in30Days = new Date(now.getTime() + 30 * 86400 * 1000);
-
-  // 1. Total active products
-  const productsResult = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(products)
-    .where(and(eq(products.accountId, accountId), eq(products.isActive, true)))
-    .get();
-
-  // 2. Total licenses
-  const licensesResult = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(licenses)
-    .where(eq(licenses.accountId, accountId))
-    .get();
-
-  // 3. Activated machines
-  const machinesResult = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(machines)
-    .innerJoin(licenses, eq(machines.licenseId, licenses.id))
-    .where(eq(licenses.accountId, accountId))
-    .get();
-
-  // 4. Licenses expiring in next 30 days
-  const expiringResult = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(licenses)
-    .where(
-      and(
-        eq(licenses.accountId, accountId),
-        eq(licenses.status, "active"),
-        gte(licenses.expiresAt, now.toISOString()),
-        lte(licenses.expiresAt, in30Days.toISOString())
-      )
+  const in30Days = new Date(now.getTime() + 30 * 86400 * 1000).toISOString();
+  const result = await c.env.DB
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM products WHERE account_id = ?1 AND status = 'active') AS total_products,
+         (SELECT COUNT(*) FROM licenses WHERE account_id = ?1) AS total_licenses,
+         (SELECT COUNT(*) FROM activations WHERE account_id = ?1 AND status = 'active') AS active_activations,
+         (SELECT COUNT(*) FROM licenses
+            WHERE account_id = ?1 AND status = 'active'
+              AND expires_at >= ?2 AND expires_at <= ?3) AS expiring_soon,
+         (SELECT COUNT(*) FROM inbound_events
+            WHERE account_id = ?1 AND status IN ('pending', 'processing', 'needs_attention')) AS pending_inbound_events,
+         (SELECT COUNT(*) FROM outbound_deliveries
+            WHERE account_id = ?1 AND status IN ('pending', 'processing', 'retry_scheduled', 'blocked_configuration', 'failed')) AS pending_deliveries`
     )
-    .get();
+    .bind(accountId, now.toISOString(), in30Days)
+    .all<{
+      total_products: number;
+      total_licenses: number;
+      active_activations: number;
+      expiring_soon: number;
+      pending_inbound_events: number;
+      pending_deliveries: number;
+    }>();
+  const row = result.results[0];
 
   return c.json({
     success: true,
     data: {
-      totalProducts: productsResult?.count || 0,
-      totalLicenses: licensesResult?.count || 0,
-      activatedMachines: machinesResult?.count || 0,
-      expiringSoon: expiringResult?.count || 0,
+      totalProducts: Number(row?.total_products || 0),
+      totalLicenses: Number(row?.total_licenses || 0),
+      activeActivations: Number(row?.active_activations || 0),
+      expiringSoon: Number(row?.expiring_soon || 0),
+      pendingInboundEvents: Number(row?.pending_inbound_events || 0),
+      pendingDeliveries: Number(row?.pending_deliveries || 0),
     },
   });
 });

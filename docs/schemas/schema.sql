@@ -23,6 +23,8 @@ CREATE TABLE accounts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     slug TEXT NOT NULL,
+    default_subscription_payment_grace_seconds INTEGER NOT NULL DEFAULT 432000
+        CHECK (default_subscription_payment_grace_seconds >= 0),
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'suspended', 'archived')),
     created_at TEXT NOT NULL,
@@ -53,12 +55,14 @@ CREATE TABLE admin_sessions (
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     user_id TEXT NOT NULL,
     session_token_hash TEXT NOT NULL,
+    csrf_token_hash TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     last_seen_at TEXT,
     revoked_at TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (account_id, id),
     UNIQUE (session_token_hash),
+    UNIQUE (csrf_token_hash),
     FOREIGN KEY (account_id, user_id)
         REFERENCES users(account_id, id) ON DELETE RESTRICT
 );
@@ -120,6 +124,7 @@ CREATE TABLE customer_sessions (
     customer_id TEXT NOT NULL,
     login_challenge_id TEXT NOT NULL,
     session_token_hash TEXT NOT NULL,
+    csrf_token_hash TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     last_seen_at TEXT,
     revoked_at TEXT,
@@ -127,6 +132,7 @@ CREATE TABLE customer_sessions (
     UNIQUE (account_id, id),
     UNIQUE (login_challenge_id),
     UNIQUE (session_token_hash),
+    UNIQUE (csrf_token_hash),
     FOREIGN KEY (account_id, customer_id)
         REFERENCES customers(account_id, id) ON DELETE RESTRICT,
     FOREIGN KEY (account_id, customer_id, login_challenge_id)
@@ -142,13 +148,26 @@ CREATE INDEX idx_customer_sessions_lookup
 CREATE TABLE products (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    slug TEXT NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
+    -- Selects the only provider environment allowed to issue usable
+    -- payment-sourced Licenses for this Product. NULL means that public
+    -- Checkout is not configured.
+    billing_environment TEXT
+        CHECK (billing_environment IN ('sandbox', 'live')),
+    trial_enabled INTEGER NOT NULL DEFAULT 0
+        CHECK (trial_enabled IN (0, 1)),
+    trial_duration_seconds INTEGER CHECK (trial_duration_seconds > 0),
+    trial_features_json TEXT NOT NULL DEFAULT '[]'
+        CHECK (json_valid(trial_features_json) AND json_type(trial_features_json) = 'array'),
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'archived')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id)
+    CHECK (trial_enabled = 0 OR trial_duration_seconds IS NOT NULL),
+    UNIQUE (account_id, id),
+    UNIQUE (account_id, slug)
 );
 
 CREATE INDEX idx_products_account_status
@@ -240,12 +259,12 @@ CREATE TABLE license_plans (
     update_window_seconds INTEGER CHECK (update_window_seconds > 0),
     signed_token_ttl_seconds INTEGER NOT NULL DEFAULT 0
         CHECK (signed_token_ttl_seconds >= 0),
-    payment_grace_seconds INTEGER NOT NULL DEFAULT 0
+    payment_grace_seconds INTEGER NOT NULL
         CHECK (payment_grace_seconds >= 0),
     max_activations INTEGER NOT NULL DEFAULT 1
         CHECK (max_activations >= 1),
     features_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(features_json)),
+        CHECK (json_valid(features_json) AND json_type(features_json) = 'array'),
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'archived')),
     created_at TEXT NOT NULL,
@@ -261,6 +280,10 @@ CREATE TABLE license_plans (
     CHECK (
         (credential_mode = 'opaque' AND signed_token_ttl_seconds = 0)
         OR (credential_mode = 'signed' AND signed_token_ttl_seconds > 0)
+    ),
+    CHECK (
+        (license_model = 'subscription' AND payment_grace_seconds >= 0)
+        OR (license_model IN ('perpetual', 'fixed_term') AND payment_grace_seconds = 0)
     ),
     UNIQUE (account_id, id),
     UNIQUE (account_id, product_id, id),
@@ -282,13 +305,15 @@ CREATE TABLE licenses (
     -- Immutable-by-default License Terms snapshot.
     license_model TEXT NOT NULL
         CHECK (license_model IN ('perpetual', 'fixed_term', 'subscription')),
+    renewal_mode TEXT NOT NULL
+        CHECK (renewal_mode IN ('none', 'manual', 'billing')),
     credential_mode TEXT NOT NULL
         CHECK (credential_mode IN ('opaque', 'signed')),
     signed_token_ttl_seconds INTEGER NOT NULL CHECK (signed_token_ttl_seconds >= 0),
     payment_grace_seconds INTEGER NOT NULL CHECK (payment_grace_seconds >= 0),
     max_activations INTEGER NOT NULL CHECK (max_activations >= 1),
     features_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(features_json)),
+        CHECK (json_valid(features_json) AND json_type(features_json) = 'array'),
 
     key_hash TEXT NOT NULL,
     key_version INTEGER NOT NULL DEFAULT 1 CHECK (key_version >= 1),
@@ -297,6 +322,10 @@ CREATE TABLE licenses (
         CHECK (source IN ('manual', 'api', 'payment')),
     source_billing_provider_id TEXT,
     source_external_transaction_id TEXT,
+    -- A real Sandbox end-to-end verification issues and delivers a key, but
+    -- the key must never become an activatable customer entitlement.
+    is_checkout_verification INTEGER NOT NULL DEFAULT 0
+        CHECK (is_checkout_verification IN (0, 1)),
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'suspended', 'revoked')),
     status_reason TEXT,
@@ -321,11 +350,38 @@ CREATE TABLE licenses (
         OR (credential_mode = 'signed' AND signed_token_ttl_seconds > 0)
     ),
     CHECK (
+        (license_model = 'subscription' AND payment_grace_seconds >= 0)
+        OR (license_model IN ('perpetual', 'fixed_term') AND payment_grace_seconds = 0)
+    ),
+    CHECK (
         (source = 'payment' AND source_billing_provider_id IS NOT NULL
             AND source_external_transaction_id IS NOT NULL)
         OR (source IN ('manual', 'api') AND source_billing_provider_id IS NULL
             AND source_external_transaction_id IS NULL)
     ),
+    CHECK (
+        is_checkout_verification = 0
+        OR (
+            source = 'payment'
+            AND status = 'suspended'
+            AND status_reason = 'checkout_verification'
+        )
+    ),
+    CHECK (
+        (license_model IN ('perpetual', 'fixed_term') AND renewal_mode = 'none')
+        OR (
+            license_model = 'subscription'
+            AND renewal_mode = 'manual'
+            AND source IN ('manual', 'api')
+        )
+        OR (
+            license_model = 'subscription'
+            AND renewal_mode = 'billing'
+            AND source = 'payment'
+        )
+    ),
+    CHECK (renewal_mode <> 'manual' OR expires_at > created_at),
+    CHECK (renewal_mode = 'billing' OR payment_grace_seconds = 0),
     FOREIGN KEY (account_id, customer_id)
         REFERENCES customers(account_id, id) ON DELETE RESTRICT,
     FOREIGN KEY (account_id, product_id)
@@ -457,31 +513,98 @@ CREATE TABLE trial_claims (
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     product_id TEXT NOT NULL,
     fingerprint_hash TEXT NOT NULL,
+    trial_token_hash TEXT NOT NULL,
+    features_json TEXT NOT NULL DEFAULT '[]'
+        CHECK (json_valid(features_json) AND json_type(features_json) = 'array'),
     claimed_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
+    last_validated_at TEXT,
+    revoked_at TEXT,
+    revoke_reason TEXT,
+    updated_at TEXT NOT NULL,
     UNIQUE (account_id, id),
+    UNIQUE (account_id, trial_token_hash),
     UNIQUE (account_id, product_id, fingerprint_hash),
+    CHECK (expires_at > claimed_at),
+    CHECK (
+        (revoked_at IS NULL AND revoke_reason IS NULL)
+        OR (revoked_at IS NOT NULL AND revoke_reason IS NOT NULL)
+    ),
     FOREIGN KEY (account_id, product_id)
         REFERENCES products(account_id, id) ON DELETE RESTRICT
 );
+
+CREATE INDEX idx_trial_claims_lookup
+    ON trial_claims(account_id, product_id, id);
+
+CREATE INDEX idx_trial_claims_expiry
+    ON trial_claims(account_id, product_id, expires_at, revoked_at);
 
 CREATE TABLE billing_providers (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     provider TEXT NOT NULL,
     environment TEXT NOT NULL CHECK (environment IN ('sandbox', 'live')),
+    -- Public Paddle.js credential. This is intentionally returned by the
+    -- public Checkout configuration API and must never be an API key.
+    client_side_token TEXT NOT NULL,
     webhook_secret_ciphertext TEXT NOT NULL,
+    -- Optional server-side credential for provider API capabilities such as
+    -- customer portal sessions or explicitly enabled reconciliation.
     api_secret_ciphertext TEXT,
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'disabled')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    CHECK (
+        (environment = 'sandbox' AND substr(client_side_token, 1, 5) = 'test_')
+        OR (environment = 'live' AND substr(client_side_token, 1, 5) = 'live_')
+    ),
     UNIQUE (account_id, id),
     UNIQUE (account_id, provider, environment)
 );
 
 CREATE INDEX idx_billing_providers_account_status
     ON billing_providers(account_id, status);
+
+CREATE TABLE billing_customers (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    billing_provider_id TEXT NOT NULL,
+    customer_id TEXT,
+    external_customer_id TEXT NOT NULL,
+    provider_email TEXT NOT NULL COLLATE NOCASE,
+    provider_name TEXT,
+    provider_status TEXT NOT NULL
+        CHECK (provider_status IN ('active', 'archived')),
+    link_status TEXT NOT NULL
+        CHECK (link_status IN ('pending', 'linked', 'email_mismatch', 'needs_attention')),
+    last_sync_source TEXT NOT NULL
+        CHECK (last_sync_source IN ('webhook', 'api', 'reconciliation')),
+    -- Paddle customer.updated_at may be null on creation; persist
+    -- COALESCE(provider updated_at, provider created_at) as the version time.
+    external_updated_at TEXT NOT NULL,
+    last_external_event_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, id),
+    UNIQUE (billing_provider_id, external_customer_id),
+    UNIQUE (account_id, billing_provider_id, external_customer_id),
+    CHECK (
+        (customer_id IS NULL AND link_status IN ('pending', 'needs_attention'))
+        OR (customer_id IS NOT NULL AND link_status IN ('linked', 'email_mismatch'))
+    ),
+    FOREIGN KEY (account_id, billing_provider_id)
+        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, customer_id)
+        REFERENCES customers(account_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_billing_customers_customer
+    ON billing_customers(account_id, customer_id, updated_at DESC);
+
+CREATE INDEX idx_billing_customers_link_status
+    ON billing_customers(account_id, billing_provider_id, link_status, updated_at);
 
 CREATE TABLE billing_offers (
     id TEXT PRIMARY KEY,
@@ -492,8 +615,8 @@ CREATE TABLE billing_offers (
     license_plan_id TEXT NOT NULL,
     purchase_type TEXT NOT NULL
         CHECK (purchase_type IN ('one_time', 'subscription')),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'archived')),
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'active', 'archived')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (account_id, id),
@@ -515,12 +638,17 @@ CREATE TABLE billing_subscriptions (
     billing_provider_id TEXT NOT NULL,
     license_id TEXT NOT NULL,
     external_subscription_id TEXT NOT NULL,
-    external_customer_id TEXT,
+    external_customer_id TEXT NOT NULL,
     external_price_id TEXT NOT NULL,
     status TEXT NOT NULL
         CHECK (status IN ('trialing', 'active', 'past_due', 'paused', 'canceled')),
     current_period_start TEXT,
     current_period_end TEXT,
+    next_billed_at TEXT,
+    trial_type TEXT
+        CHECK (trial_type IN ('free_payment_method_required')),
+    trial_started_at TEXT,
+    trial_ends_at TEXT,
     cancel_at_period_end INTEGER NOT NULL DEFAULT 0
         CHECK (cancel_at_period_end IN (0, 1)),
     last_external_occurred_at TEXT,
@@ -530,8 +658,29 @@ CREATE TABLE billing_subscriptions (
     UNIQUE (account_id, id),
     UNIQUE (billing_provider_id, external_subscription_id),
     UNIQUE (license_id),
+    CHECK (
+        (trial_type IS NULL AND trial_started_at IS NULL AND trial_ends_at IS NULL)
+        OR (
+            trial_type IS NOT NULL
+            AND trial_started_at IS NOT NULL
+            AND trial_ends_at IS NOT NULL
+            AND trial_ends_at > trial_started_at
+        )
+    ),
+    CHECK (
+        status <> 'trialing'
+        OR (
+            trial_type = 'free_payment_method_required'
+            AND trial_started_at IS NOT NULL
+            AND trial_ends_at IS NOT NULL
+            AND next_billed_at IS NOT NULL
+        )
+    ),
     FOREIGN KEY (account_id, billing_provider_id)
         REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, billing_provider_id, external_customer_id)
+        REFERENCES billing_customers(account_id, billing_provider_id, external_customer_id)
+        ON DELETE RESTRICT,
     FOREIGN KEY (account_id, license_id)
         REFERENCES licenses(account_id, id) ON DELETE RESTRICT
 );
@@ -539,12 +688,90 @@ CREATE TABLE billing_subscriptions (
 CREATE INDEX idx_billing_subscriptions_status_period
     ON billing_subscriptions(account_id, status, current_period_end);
 
+CREATE TABLE billing_adjustments (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    billing_provider_id TEXT NOT NULL,
+    license_id TEXT,
+    external_adjustment_id TEXT NOT NULL,
+    external_transaction_id TEXT NOT NULL,
+    external_subscription_id TEXT,
+    external_customer_id TEXT NOT NULL,
+    provider_action TEXT NOT NULL
+        CHECK (provider_action IN (
+            'credit',
+            'refund',
+            'chargeback',
+            'chargeback_reverse',
+            'chargeback_warning',
+            'chargeback_warning_reverse',
+            'credit_reverse'
+        )),
+    adjustment_type TEXT CHECK (adjustment_type IN ('full', 'partial')),
+    provider_status TEXT NOT NULL
+        CHECK (provider_status IN ('pending_approval', 'approved', 'rejected', 'reversed')),
+    currency_code TEXT NOT NULL,
+    total_amount TEXT NOT NULL,
+    provider_reason TEXT,
+    automatic_effect TEXT NOT NULL DEFAULT 'none'
+        CHECK (automatic_effect IN ('none', 'license_suspended')),
+    review_status TEXT NOT NULL
+        CHECK (review_status IN ('not_required', 'open', 'resolved')),
+    resolution_action TEXT
+        CHECK (resolution_action IN (
+            'no_action',
+            'keep_suspended',
+            'reinstate',
+            'revoke',
+            'security_reset'
+        )),
+    resolution_reason TEXT,
+    resolved_by_user_id TEXT,
+    resolved_at TEXT,
+    last_external_occurred_at TEXT NOT NULL,
+    last_external_event_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, id),
+    UNIQUE (billing_provider_id, external_adjustment_id),
+    CHECK (automatic_effect = 'none' OR license_id IS NOT NULL),
+    CHECK (review_status <> 'not_required' OR automatic_effect = 'none'),
+    CHECK (
+        (review_status IN ('not_required', 'open')
+            AND resolution_action IS NULL
+            AND resolution_reason IS NULL
+            AND resolved_by_user_id IS NULL
+            AND resolved_at IS NULL)
+        OR (review_status = 'resolved'
+            AND resolution_action IS NOT NULL
+            AND resolution_reason IS NOT NULL
+            AND resolved_by_user_id IS NOT NULL
+            AND resolved_at IS NOT NULL)
+    ),
+    FOREIGN KEY (account_id, billing_provider_id)
+        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, license_id)
+        REFERENCES licenses(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, resolved_by_user_id)
+        REFERENCES users(account_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_billing_adjustments_review
+    ON billing_adjustments(account_id, review_status, updated_at DESC);
+
+CREATE INDEX idx_billing_adjustments_transaction
+    ON billing_adjustments(account_id, billing_provider_id, external_transaction_id, updated_at DESC);
+
 CREATE TABLE inbound_events (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     billing_provider_id TEXT NOT NULL,
     external_event_id TEXT NOT NULL,
     external_event_type TEXT NOT NULL,
+    external_customer_id TEXT,
+    external_transaction_id TEXT,
+    external_subscription_id TEXT,
+    external_adjustment_id TEXT,
     external_occurred_at TEXT,
     payload_ciphertext TEXT,
     payload_hash TEXT NOT NULL,
@@ -575,6 +802,22 @@ CREATE INDEX idx_inbound_events_status_schedule
 CREATE INDEX idx_inbound_events_provider_type
     ON inbound_events(account_id, billing_provider_id, external_event_type, received_at DESC);
 
+CREATE INDEX idx_inbound_events_customer
+    ON inbound_events(account_id, billing_provider_id, external_customer_id, received_at DESC)
+    WHERE external_customer_id IS NOT NULL;
+
+CREATE INDEX idx_inbound_events_transaction
+    ON inbound_events(account_id, billing_provider_id, external_transaction_id, received_at DESC)
+    WHERE external_transaction_id IS NOT NULL;
+
+CREATE INDEX idx_inbound_events_subscription
+    ON inbound_events(account_id, billing_provider_id, external_subscription_id, received_at DESC)
+    WHERE external_subscription_id IS NOT NULL;
+
+CREATE INDEX idx_inbound_events_adjustment
+    ON inbound_events(account_id, billing_provider_id, external_adjustment_id, received_at DESC)
+    WHERE external_adjustment_id IS NOT NULL;
+
 CREATE TABLE outbound_endpoints (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -584,9 +827,11 @@ CREATE TABLE outbound_endpoints (
     url TEXT NOT NULL,
     signing_secret_ciphertext TEXT NOT NULL,
     subscribed_events_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(subscribed_events_json)),
+        CHECK (json_valid(subscribed_events_json) AND json_type(subscribed_events_json) = 'array'),
     timeout_ms INTEGER NOT NULL DEFAULT 10000 CHECK (timeout_ms BETWEEN 1000 AND 30000),
-    max_attempts INTEGER NOT NULL DEFAULT 8 CHECK (max_attempts BETWEEN 1 AND 20),
+    -- Initial request plus three automatic retries by default.
+    max_automatic_attempts INTEGER NOT NULL DEFAULT 4
+        CHECK (max_automatic_attempts BETWEEN 1 AND 20),
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'disabled')),
     created_at TEXT NOT NULL,
@@ -623,9 +868,12 @@ CREATE TABLE outbound_deliveries (
             'retry_scheduled',
             'failed',
             'payload_expired'
-        )),
+    )),
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-    max_attempts INTEGER NOT NULL CHECK (max_attempts BETWEEN 1 AND 20),
+    automatic_attempt_count INTEGER NOT NULL DEFAULT 0
+        CHECK (automatic_attempt_count >= 0),
+    max_automatic_attempts INTEGER NOT NULL
+        CHECK (max_automatic_attempts BETWEEN 1 AND 20),
     next_attempt_at TEXT,
     locked_by TEXT,
     locked_until TEXT,
@@ -639,6 +887,10 @@ CREATE TABLE outbound_deliveries (
     UNIQUE (account_id, customer_id, id),
     UNIQUE (account_id, license_id, id),
     UNIQUE (account_id, idempotency_key),
+    CHECK (
+        automatic_attempt_count <= attempt_count
+        AND automatic_attempt_count <= max_automatic_attempts
+    ),
     CHECK (
         status = 'blocked_configuration'
         OR (
@@ -664,11 +916,82 @@ CREATE INDEX idx_outbound_deliveries_license
 CREATE INDEX idx_outbound_deliveries_customer
     ON outbound_deliveries(account_id, customer_id, created_at DESC);
 
+CREATE TABLE billing_checkout_verifications (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    billing_offer_id TEXT NOT NULL,
+    requested_by_user_id TEXT NOT NULL,
+    -- Only the hash is persisted. The plaintext high-entropy token is
+    -- returned once to the authenticated admin SDK and copied into Paddle
+    -- custom_data solely to authorize this non-activatable test fulfillment.
+    token_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN (
+            'pending',
+            'delivery_pending',
+            'completed',
+            'needs_attention',
+            'expired'
+        )),
+    external_transaction_id TEXT,
+    license_id TEXT,
+    delivery_id TEXT,
+    expires_at TEXT NOT NULL,
+    completed_at TEXT,
+    last_error_code TEXT,
+    last_error_detail TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, id),
+    UNIQUE (token_hash),
+    CHECK (expires_at > created_at),
+    CHECK (
+        status NOT IN ('delivery_pending', 'completed')
+        OR (
+            external_transaction_id IS NOT NULL
+            AND license_id IS NOT NULL
+            AND delivery_id IS NOT NULL
+        )
+    ),
+    CHECK (
+        (status = 'completed' AND completed_at IS NOT NULL)
+        OR (status <> 'completed' AND completed_at IS NULL)
+    ),
+    CHECK (
+        status <> 'expired'
+        OR (
+            external_transaction_id IS NULL
+            AND license_id IS NULL
+            AND delivery_id IS NULL
+        )
+    ),
+    FOREIGN KEY (account_id, billing_offer_id)
+        REFERENCES billing_offers(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, requested_by_user_id)
+        REFERENCES users(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, license_id)
+        REFERENCES licenses(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, license_id, delivery_id)
+        REFERENCES outbound_deliveries(account_id, license_id, id) ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX uq_billing_checkout_verifications_transaction
+    ON billing_checkout_verifications(account_id, billing_offer_id, external_transaction_id)
+    WHERE external_transaction_id IS NOT NULL;
+
+CREATE INDEX idx_billing_checkout_verifications_status_expiry
+    ON billing_checkout_verifications(account_id, status, expires_at);
+
+CREATE INDEX idx_billing_checkout_verifications_offer
+    ON billing_checkout_verifications(account_id, billing_offer_id, completed_at DESC);
+
 CREATE TABLE outbound_attempts (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     delivery_id TEXT NOT NULL,
     attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+    attempt_source TEXT NOT NULL
+        CHECK (attempt_source IN ('initial', 'automatic_retry', 'manual_retry')),
     outcome TEXT NOT NULL
         CHECK (outcome IN ('accepted', 'http_error', 'transport_error', 'timeout')),
     http_status INTEGER,
@@ -678,6 +1001,10 @@ CREATE TABLE outbound_attempts (
     started_at TEXT NOT NULL,
     completed_at TEXT NOT NULL,
     duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+    CHECK (
+        (attempt_number = 1 AND attempt_source = 'initial')
+        OR (attempt_number > 1 AND attempt_source IN ('automatic_retry', 'manual_retry'))
+    ),
     UNIQUE (account_id, id),
     UNIQUE (delivery_id, attempt_number),
     FOREIGN KEY (account_id, delivery_id)
@@ -722,3 +1049,154 @@ CREATE INDEX idx_audit_logs_resource
 
 CREATE INDEX idx_audit_logs_action
     ON audit_logs(account_id, action, created_at DESC);
+
+-- Billing environment and Checkout verification are security boundaries, not
+-- presentation-only fields. Keep the database fail-closed if an application
+-- path forgets one of the service-layer checks.
+CREATE TRIGGER trg_billing_providers_immutable_identity
+BEFORE UPDATE OF account_id, provider, environment ON billing_providers
+WHEN NEW.account_id IS NOT OLD.account_id
+  OR NEW.provider IS NOT OLD.provider
+  OR NEW.environment IS NOT OLD.environment
+BEGIN
+    SELECT RAISE(ABORT, 'billing_provider_identity_immutable');
+END;
+
+CREATE TRIGGER trg_products_guard_billing_environment_change
+BEFORE UPDATE OF billing_environment ON products
+WHEN NEW.billing_environment IS NOT OLD.billing_environment
+BEGIN
+    SELECT CASE
+        WHEN EXISTS (
+            SELECT 1
+            FROM billing_offers AS offer
+            WHERE offer.account_id = OLD.account_id
+              AND offer.product_id = OLD.id
+              AND offer.status = 'active'
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM licenses AS license
+            WHERE license.account_id = OLD.account_id
+              AND license.product_id = OLD.id
+              AND license.source = 'payment'
+              AND license.is_checkout_verification = 0
+        )
+        THEN RAISE(ABORT, 'product_billing_environment_locked')
+    END;
+END;
+
+CREATE TRIGGER trg_billing_offers_active_environment_on_insert
+BEFORE INSERT ON billing_offers
+WHEN NEW.status = 'active'
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM products AS product
+        JOIN billing_providers AS provider
+          ON provider.account_id = NEW.account_id
+         AND provider.id = NEW.billing_provider_id
+        WHERE product.account_id = NEW.account_id
+          AND product.id = NEW.product_id
+          AND product.billing_environment IS NOT NULL
+          AND product.billing_environment = provider.environment
+    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END;
+END;
+
+CREATE TRIGGER trg_billing_offers_active_environment_on_update
+BEFORE UPDATE OF status, billing_provider_id, product_id, account_id ON billing_offers
+WHEN NEW.status = 'active'
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM products AS product
+        JOIN billing_providers AS provider
+          ON provider.account_id = NEW.account_id
+         AND provider.id = NEW.billing_provider_id
+        WHERE product.account_id = NEW.account_id
+          AND product.id = NEW.product_id
+          AND product.billing_environment IS NOT NULL
+          AND product.billing_environment = provider.environment
+    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END;
+END;
+
+CREATE TRIGGER trg_billing_offers_lock_verified_mapping
+BEFORE UPDATE OF account_id, billing_provider_id, external_price_id,
+    product_id, license_plan_id, purchase_type ON billing_offers
+WHEN EXISTS (
+    SELECT 1
+    FROM billing_checkout_verifications AS verification
+    WHERE verification.account_id = OLD.account_id
+      AND verification.billing_offer_id = OLD.id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'verified_billing_offer_mapping_immutable');
+END;
+
+CREATE TRIGGER trg_licenses_payment_environment_on_insert
+BEFORE INSERT ON licenses
+WHEN NEW.source = 'payment' AND NEW.is_checkout_verification = 0
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM products AS product
+        JOIN billing_providers AS provider
+          ON provider.account_id = NEW.account_id
+         AND provider.id = NEW.source_billing_provider_id
+        WHERE product.account_id = NEW.account_id
+          AND product.id = NEW.product_id
+          AND product.billing_environment IS NOT NULL
+          AND product.billing_environment = provider.environment
+    ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END;
+END;
+
+CREATE TRIGGER trg_licenses_verification_environment_on_insert
+BEFORE INSERT ON licenses
+WHEN NEW.is_checkout_verification = 1
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM billing_providers AS provider
+        WHERE provider.account_id = NEW.account_id
+          AND provider.id = NEW.source_billing_provider_id
+          AND provider.environment = 'sandbox'
+    ) THEN RAISE(ABORT, 'checkout_verification_requires_sandbox') END;
+END;
+
+CREATE TRIGGER trg_licenses_verification_flag_immutable
+BEFORE UPDATE OF is_checkout_verification ON licenses
+WHEN NEW.is_checkout_verification IS NOT OLD.is_checkout_verification
+BEGIN
+    SELECT RAISE(ABORT, 'checkout_verification_flag_immutable');
+END;
+
+CREATE TRIGGER trg_checkout_verifications_require_draft_sandbox
+BEFORE INSERT ON billing_checkout_verifications
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM billing_offers AS offer
+        JOIN billing_providers AS provider
+          ON provider.account_id = NEW.account_id
+         AND provider.id = offer.billing_provider_id
+        WHERE offer.account_id = NEW.account_id
+          AND offer.id = NEW.billing_offer_id
+          AND offer.status = 'draft'
+          AND provider.environment = 'sandbox'
+    ) THEN RAISE(ABORT, 'checkout_verification_requires_draft_sandbox_offer') END;
+END;
+
+CREATE TRIGGER trg_checkout_verifications_immutable_identity
+BEFORE UPDATE OF id, account_id, billing_offer_id, requested_by_user_id,
+    token_hash, expires_at, created_at
+ON billing_checkout_verifications
+WHEN NEW.id IS NOT OLD.id
+  OR NEW.account_id IS NOT OLD.account_id
+  OR NEW.billing_offer_id IS NOT OLD.billing_offer_id
+  OR NEW.requested_by_user_id IS NOT OLD.requested_by_user_id
+  OR NEW.token_hash IS NOT OLD.token_hash
+  OR NEW.expires_at IS NOT OLD.expires_at
+  OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+    SELECT RAISE(ABORT, 'checkout_verification_identity_immutable');
+END;

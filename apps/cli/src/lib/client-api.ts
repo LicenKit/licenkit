@@ -1,124 +1,218 @@
-export class ClientApiError extends Error {
-  code: string;
-  status: number;
-  constructor(code: string, message: string, status: number = 400) {
+export type CredentialMode = "opaque" | "signed";
+
+export interface LicenseTerms {
+  max_activations: number;
+  features: string[];
+  updates_until: string | number | null;
+}
+
+export interface ClientCredentialResponse {
+  activation_id: string;
+  machine_token: string;
+  credential_mode: CredentialMode;
+  signed_license_token: string | null;
+  signed_license_token_expires_at?: string | number | null;
+  signing_key_id?: string | null;
+  license_expires_at: string | number | null;
+  terms: LicenseTerms;
+}
+
+export type TransportErrorKind = "network" | "dns" | "tls" | "timeout" | "server";
+
+export class ClientTransportError extends Error {
+  constructor(
+    public readonly kind: TransportErrorKind,
+    message: string,
+    public readonly status?: number,
+    public readonly requestId?: string,
+    public readonly serverCode?: string,
+    public readonly details: Record<string, string> = {}
+  ) {
     super(message);
-    this.name = "ClientApiError";
-    this.code = code;
-    this.status = status;
+    this.name = "ClientTransportError";
   }
 }
 
-export async function requestClientApi<T = any>(
+export class ClientApiError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly status: number,
+    public readonly requestId?: string,
+    public readonly details: Record<string, string> = {}
+  ) {
+    super(message);
+    this.name = "ClientApiError";
+  }
+}
+
+export class ClientContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ClientContractError";
+  }
+}
+
+const SENSITIVE_KEY = /(token|secret|password|license[_-]?key|authorization)/i;
+
+function safeDetailValue(key: string, value: unknown): string {
+  if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
+  if (value === null) return "null";
+  if (["string", "number", "boolean"].includes(typeof value)) return String(value);
+  try {
+    return JSON.stringify(value, (nestedKey, nestedValue) =>
+      nestedKey && SENSITIVE_KEY.test(nestedKey) ? "[REDACTED]" : nestedValue
+    );
+  } catch {
+    return "[UNSERIALIZABLE]";
+  }
+}
+
+function sanitizeDetails(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, detail]) => [key, safeDetailValue(key, detail)])
+  );
+}
+
+function classifyFetchError(error: unknown): TransportErrorKind {
+  const candidate = error as { name?: string; message?: string; cause?: { code?: string } };
+  const code = candidate.cause?.code ?? "";
+  const message = `${candidate.name ?? ""} ${candidate.message ?? ""}`.toLowerCase();
+  if (candidate.name === "AbortError" || code === "UND_ERR_CONNECT_TIMEOUT" || message.includes("timeout")) return "timeout";
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN" || message.includes("dns")) return "dns";
+  if (code.startsWith("ERR_TLS") || message.includes("certificate") || message.includes("tls")) return "tls";
+  return "network";
+}
+
+export async function requestClientApi<T>(
   serverUrl: string,
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${serverUrl.replace(/\/+$/, "")}${path}`;
-  let res: Response;
+  let response: Response;
 
   try {
-    res = await fetch(url, {
+    response = await fetch(url, {
       ...options,
       headers: {
         "Content-Type": "application/json",
+        Accept: "application/json",
         "User-Agent": "LicenKit-CLI/1.0",
         ...(options.headers || {}),
       },
     });
-  } catch (err: any) {
-    throw new ClientApiError(
-      "NETWORK_ERROR",
-      `Failed to connect to LicenKit server at ${serverUrl}: ${err.message}`
+  } catch (error) {
+    throw new ClientTransportError(
+      classifyFetchError(error),
+      `Unable to reach LicenKit server at ${serverUrl}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 
-  let body: any;
+  const requestIdHeader = response.headers.get("x-request-id") ?? undefined;
+  let body: unknown;
   try {
-    body = await res.json();
+    body = await response.json();
   } catch {
-    throw new ClientApiError("INVALID_RESPONSE", `Server returned non-JSON response (${res.status} ${res.statusText})`, res.status);
+    if (response.status >= 500) {
+      throw new ClientTransportError(
+        "server",
+        `LicenKit server returned a non-JSON ${response.status} response`,
+        response.status,
+        requestIdHeader
+      );
+    }
+    throw new ClientContractError(`LicenKit server returned a non-JSON ${response.status} response`);
   }
 
-  if (!res.ok || body.success === false) {
-    const errCode = body.error?.code || "API_ERROR";
-    const errMsg = body.error?.message || `Server responded with HTTP ${res.status}`;
-    throw new ClientApiError(errCode, errMsg, res.status);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    if (response.status >= 500) {
+      throw new ClientTransportError(
+        "server",
+        `LicenKit server returned an invalid ${response.status} response envelope`,
+        response.status,
+        requestIdHeader
+      );
+    }
+    throw new ClientContractError("LicenKit response envelope must be a JSON object");
   }
 
-  return body.data as T;
+  const envelope = body as {
+    success?: unknown;
+    data?: T;
+    error?: { code?: unknown; message?: unknown; request_id?: unknown; details?: unknown };
+  };
+  const serverError = envelope.error;
+  const requestId = typeof serverError?.request_id === "string" ? serverError.request_id : requestIdHeader;
+  const serverCode = typeof serverError?.code === "string" ? serverError.code : undefined;
+  const serverMessage = typeof serverError?.message === "string"
+    ? serverError.message
+    : `LicenKit server returned HTTP ${response.status}`;
+  const details = sanitizeDetails(serverError?.details);
+
+  if (response.status >= 500) {
+    throw new ClientTransportError("server", serverMessage, response.status, requestId, serverCode, details);
+  }
+
+  if (!response.ok || envelope.success === false) {
+    throw new ClientApiError(serverCode ?? `HTTP_${response.status}`, serverMessage, response.status, requestId, details);
+  }
+
+  if (envelope.success !== true || !("data" in envelope)) {
+    throw new ClientContractError("LicenKit response does not match the V1 success envelope");
+  }
+  return envelope.data as T;
 }
 
-export interface ActivateParams {
+export interface ClientContext {
   serverUrl: string;
   accountId: string;
-  licenseKey: string;
+  productId: string;
   fingerprint: string;
-  platform?: string;
+  devicePlatform: string;
+  releaseVersion: string;
+  releasePlatform: string;
+}
+
+export interface ActivateParams extends ClientContext {
+  licenseKey: string;
   name?: string;
 }
 
-export interface ActivateResponse {
-  activated: boolean;
-  reused: boolean;
-  machine_id: string;
-  machine_token: string;
-  scheme: string;
-  token: string | null;
-  token_expires_at: number | string | null;
-  license_expires_at: number | string | null;
-  token_expires_at_iso?: string | null;
-  license_expires_at_iso?: string | null;
-  policy: {
-    name: string;
-    max_machines: number;
-    offline_grace_period: number;
-    features: string[];
-  };
-}
-
-export async function apiActivate(params: ActivateParams): Promise<ActivateResponse> {
-  return await requestClientApi<ActivateResponse>(params.serverUrl, "/api/v1/client/activate", {
+export async function apiActivate(params: ActivateParams): Promise<ClientCredentialResponse> {
+  return requestClientApi(params.serverUrl, "/api/v1/client/activate", {
     method: "POST",
     body: JSON.stringify({
       account_id: params.accountId,
+      product_id: params.productId,
       license_key: params.licenseKey,
       fingerprint: params.fingerprint,
-      platform: params.platform,
+      device_platform: params.devicePlatform,
       name: params.name,
+      release_version: params.releaseVersion,
+      release_platform: params.releasePlatform,
     }),
   });
 }
 
-export interface ValidateParams {
-  serverUrl: string;
-  accountId: string;
-  machineId: string;
+export interface ValidateParams extends ClientContext {
+  activationId: string;
   machineToken: string;
-  fingerprint: string;
 }
 
-export interface ValidateResponse {
-  valid: boolean;
-  scheme?: string;
-  token?: string | null;
-  token_expires_at?: number | string | null;
-  license_expires_at?: number | string | null;
-  token_expires_at_iso?: string | null;
-  license_expires_at_iso?: string | null;
-  last_heartbeat_at?: number | string;
-  last_heartbeat_at_iso?: string;
-  reason?: string;
-}
-
-export async function apiValidate(params: ValidateParams): Promise<ValidateResponse> {
-  return await requestClientApi<ValidateResponse>(params.serverUrl, "/api/v1/client/validate", {
+export async function apiValidate(params: ValidateParams): Promise<ClientCredentialResponse> {
+  return requestClientApi(params.serverUrl, "/api/v1/client/validate", {
     method: "POST",
     body: JSON.stringify({
       account_id: params.accountId,
-      machine_id: params.machineId,
+      product_id: params.productId,
+      activation_id: params.activationId,
       machine_token: params.machineToken,
       fingerprint: params.fingerprint,
+      device_platform: params.devicePlatform,
+      release_version: params.releaseVersion,
+      release_platform: params.releasePlatform,
     }),
   });
 }
@@ -126,43 +220,26 @@ export async function apiValidate(params: ValidateParams): Promise<ValidateRespo
 export interface DeactivateParams {
   serverUrl: string;
   accountId: string;
-  machineId: string;
+  productId: string;
+  activationId: string;
   machineToken: string;
   fingerprint: string;
 }
 
 export interface DeactivateResponse {
-  deactivated: boolean;
-  message: string;
+  activation_id: string;
+  status: "deactivated";
 }
 
 export async function apiDeactivate(params: DeactivateParams): Promise<DeactivateResponse> {
-  return await requestClientApi<DeactivateResponse>(params.serverUrl, "/api/v1/client/deactivate", {
+  return requestClientApi(params.serverUrl, "/api/v1/client/deactivate", {
     method: "POST",
     body: JSON.stringify({
       account_id: params.accountId,
-      machine_id: params.machineId,
+      product_id: params.productId,
+      activation_id: params.activationId,
       machine_token: params.machineToken,
       fingerprint: params.fingerprint,
     }),
   });
-}
-
-export interface ProductPublicKeyResponse {
-  productId: string;
-  kid: string;
-  algorithm: string;
-  publicKey: string;
-}
-
-export async function apiFetchProductPublicKey(
-  serverUrl: string,
-  accountId: string,
-  productId: string
-): Promise<ProductPublicKeyResponse> {
-  return await requestClientApi<ProductPublicKeyResponse>(
-    serverUrl,
-    `/api/v1/client/products/${productId}/pubkey?accountId=${encodeURIComponent(accountId)}`,
-    { method: "GET" }
-  );
 }
