@@ -1,102 +1,76 @@
-<div align="right">
-  <strong>English</strong> | <a href="./README_zh.md">简体中文</a>
-</div>
-
 # LicenKit
 
-> Modern, lightweight, high-performance API-First software licensing hub & key generator.
+LicenKit 是面向独立开发者和小型软件团队的自托管软件授权系统。它把支付平台确认的购买事实转换为 License，提供注册码签发、设备激活、在线校验、签名授权令牌、客户自助管理和通知等能力。
 
----
+LicenKit 专注授权生命周期，不承载支付结账，也不直接集成邮件服务商。支付由 Paddle、Stripe 等外部平台完成；客户邮件由 LicenKit 调用使用方配置的 Notification Webhook，再由外部接收方发送。
 
-> [!WARNING]
-> 🚧 **Active Development (Work in Progress / Alpha)**  
-> Core modules and API specifications are under rapid iteration. As the project is under active development, documentation may occasionally lag behind code changes. We appreciate your patience and understanding!
+## 核心能力
 
----
+- 管理 Product、License Plan、License 和 Activation；
+- 支持永久、固定期限和订阅三种 License 生命周期；
+- 永久 License 可配置全版本使用或限定期限内发布版本的永久使用权；
+- 接收支付 Webhook，并以幂等方式完成首次签发、续费、暂停和取消；
+- 使用机器令牌完成在线设备校验；
+- 可选签发 Ed25519 Signed License Token，供客户端本地验证授权快照，包括无网络场景；
+- 提供使用 Magic Link 登录的客户授权中心，用于查看 License、释放设备席位和进入支付平台管理订阅；
+- 通过 Notification Webhook 发送首次发码、注册码找回和安全重置通知；
+- 保存入站事件、出站投递、重试尝试和审计记录，支持失败诊断与恢复。
 
-## 🎯 Vision & Goals
-
-**LicenKit** is designed for indie hackers, micro-SaaS founders, and commercial software teams as a modern, truly self-hostable open-source licensing solution at near-zero operational cost.
-
-- **API-First & Edge-Native**: Built natively on Cloudflare Workers and D1, delivering millisecond latency globally with effortless, serverless self-hosting.
-- **Modern Cryptographic Security**: Built-in WebCrypto native Ed25519 asymmetric signatures and AES-256-GCM envelope encryption, supporting both online heartbeat verification and offline air-gapped cryptographic validation.
-- **Complete License Lifecycle**: Comprehensive coverage of software products, flexible licensing policies (lifetime, subscription, grace periods, machine concurrency limits), license key generation & distribution, hardware fingerprint binding, trial abuse prevention, and key revocation/rotation.
-- **Automated Payment & Fulfillment**: Deeply integrates with merchant of record and payment platforms like Paddle and Stripe via webhooks for automated key issuance, subscription status sync, and upcoming cross-platform client SDKs.
-
----
-
-## 🏗️ Architecture
-
-LicenKit is organized as a modern **Monorepo**:
+## 工作方式
 
 ```text
-licenkit/
-├── apps/
-│   ├── server/        # Core licensing & API engine (Hono + Cloudflare Workers + D1 + Drizzle ORM)
-│   ├── web/           # Modern admin dashboard SPA (React 19 + Tailwind CSS v4 + Vite)
-│   └── cli/           # Cross-platform licensing & offline verification CLI (Node.js + WebCrypto Ed25519)
-├── docs/
-│   ├── en/            # English documentation
-│   ├── zh-CN/         # Chinese documentation
-│   ├── schemas/       # Database DDL & structural schemas
-│   └── proposals/     # Architectural proposals & RFCs (archive inside)
-└── scripts/           # Maintenance and utility scripts
+支付平台 Webhook
+        │
+        ▼
+入站事件 ──> 支付履约 ──> License / Subscription
+                              │
+                              ├──> Activation / Validation / Signed License Token
+                              ├──> Customer Portal / Device Management
+                              │
+                              └──> Delivery ──> Notification Webhook ──> 邮件服务
 ```
 
-- **Runtime / Infra**: [Cloudflare Workers](https://workers.cloudflare.com/), [Cloudflare D1](https://developers.cloudflare.com/d1/), [Cloudflare Queues](https://developers.cloudflare.com/queues/)
-- **Backend**: [Hono](https://hono.dev/), [Drizzle ORM](https://orm.drizzle.team/), WebCrypto API (Ed25519, AES-256-GCM, PBKDF2)
-- **Frontend**: [React 19](https://react.dev/), [Vite](https://vitejs.dev/), [Tailwind CSS v4](https://tailwindcss.com/), [Lucide Icons](https://lucide.dev/)
-- **CLI**: [Node.js](https://nodejs.org/), [cac](https://github.com/cacjs/cac), native WebCrypto Ed25519
-- **Package Manager**: [pnpm](https://pnpm.io/) (Workspace)
+LicenKit 将数据库中的入站事件和 Delivery 作为异步任务的事实来源。请求后的即时处理用于降低延迟，Scheduled Worker 负责扫描、重试和崩溃恢复；当前架构不依赖 Cloudflare Queues。
 
----
+## 仓库结构
 
-## 🚀 Quick Start
+```text
+apps/server    Hono + Cloudflare Workers API
+apps/web       React 管理控制台与客户授权中心
+apps/cli       命令行客户端
+docs           产品、架构、数据模型和接口文档
+```
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) (>= 20.x)
-- [pnpm](https://pnpm.io/) (>= 10.x)
+Swift SDK 位于同级独立仓库 `licenkit-sdk-swift`。
 
-### Installation & Development
+## 技术栈
 
-1. **Clone the repository and install dependencies**:
-   ```bash
-   git clone https://github.com/your-org/licenkit.git
-   cd licenkit
-   pnpm install
-   ```
+- Cloudflare Workers、D1 和 Scheduled Triggers；
+- Hono、Drizzle ORM、TypeScript；
+- React、Vite；
+- Swift SDK 使用 Foundation、CryptoKit、Security 和 IOKit。
 
-2. **Start the local full-stack development environment**:
-   ```bash
-   # Concurrently starts Server API (port 8787) and Web Dashboard (port 5173)
-   pnpm dev
-   ```
+## 本地开发
 
-3. **Run individual modules**:
-   ```bash
-   pnpm dev:server   # Start backend API engine only
-   pnpm dev:web      # Start web dashboard only
-   pnpm dev:cli      # Run client CLI tool
-   ```
+```bash
+pnpm install
+pnpm dev
+```
 
-4. **Type check & Build**:
-   ```bash
-   pnpm typecheck    # Global TypeScript type checking
-   pnpm build        # Global production build
-   ```
+常用检查：
 
----
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+```
 
-## 📖 Documentation
+测试与正式环境使用相同模块和调用流程，只替换资源地址、Secret 和支付平台环境等配置。
 
-For deep dives into the system architecture and implementation roadmap, refer to the documents in `docs/`:
+## 文档
 
-> [!NOTE]
-> 💡 *As the project is currently in the **Active Development** stage, documentation updates may occasionally lag behind fast-moving code changes. Please feel free to open an issue or consult the latest codebase if you encounter discrepancies.*
+从 [文档入口](./docs/README.md) 开始阅读。目标数据结构见 [schema.sql](./docs/schemas/schema.sql)。
 
-- [Roadmap & WBS](./docs/en/development_plan.md) ([中文版](./docs/zh-CN/development_plan.md))
-- [Backend Architecture & Cryptography](./docs/en/backend_architecture.md) ([中文版](./docs/zh-CN/backend_architecture.md))
-- [Database Schema & Design](./docs/en/database_design.md) ([中文版](./docs/zh-CN/database_design.md))
-- [RESTful API Specification](./docs/en/api_specification.md) ([中文版](./docs/zh-CN/api_specification.md))
-- [Configuration, Secrets & Keys](./docs/en/configuration_and_keys.md) ([中文版](./docs/zh-CN/configuration_and_keys.md))
-- [Local Development Guide](./docs/en/local_development_guide.md) ([中文版](./docs/zh-CN/local_development_guide.md))
+## 当前状态
+
+项目正在按 V1 合同重新开发。现有代码包含可复用的原型实现，但数据表、迁移和接口仍可能与目标文档不一致；功能是否完成以实现、测试和实际运行验证为准。
