@@ -360,7 +360,7 @@ Paddle-Version: 1
 成功响应使用 `data.id`、`data.email`、`data.name`、`data.status`、`data.created_at` 和 `data.updated_at` 进入统一 Billing Customer 同步服务，并保存 `meta.request_id` 用于诊断。处理规则固定为：
 
 - `200`：校验响应 Customer ID 与请求一致后同步并重试当前履约；
-- `401`、`403`：已启用的 API 读穿配置无效、过期或缺少权限，停止继续调用该能力、报告 Provider 配置错误，事件仍可等待 Customer Webhook；只有依赖等待超过显式上限时才进入 `needs_attention`；
+- `401`、`403`：已启用的 API 读穿配置无效、过期或缺少权限。事件保持 `pending`，将 `BILLING_PROVIDER_API_AUTH_INVALID` 和字段级脱敏后的 `httpStatus + providerCode + requestId + message` 写入自己的 last error；同时按 Provider 与 `customer_read` 能力 upsert 一条 System Issue 并阻塞该事件。相同问题不重复建行，等待 Customer Webhook 或管理员修复；
 - `404` 或返回 `status=archived`：外部 Customer 不可用于新履约，进入 `needs_attention`；
 - `429`、`5xx`、网络超时：Inbound Event 保持 `pending`，保存 HTTP 状态、Paddle 错误码和 request ID 后退避重试。
 
@@ -405,7 +405,9 @@ PATCH 只允许修改尚无 Checkout Verification 的 draft Offer。只要存在
 
 服务端只保存 `verificationToken` 哈希；管理控制台不得写入日志、localStorage、分析事件或 URL。该 POST 还必须通过管理员 Session 权限、精确 Origin 和双提交 CSRF 校验。Web Checkout SDK 的受限验证入口把令牌附加为 `custom_data.licenkit_checkout_verification`，调用方不能另行传入任意 custom data。该接口不允许 Live Offer、不公开到无鉴权路由，也不绕过一个 Price、数量 1、Webhook、Customer 解析、Fulfillment 或 Notification Gateway。令牌的权限只是在完全匹配的 Sandbox 交易中生成一条永久不可激活的验证 License，不授予正式权益。
 
-`activate` 不接受调用方传入 `ready=true`；服务端实时执行 Checkout Readiness 检查并返回每项状态。至少包括 Product/Plan/Provider、Provider 环境等于 Product `billingEnvironment`、Client-side Token 环境与 PricePreview、当前 Provider 配置更新时间之后最小 Paddle 事件合同中每一种事件的成功验签证据（通常由官方模拟器触发）、Notification Gateway 的 active 状态和当前配置之后的 accepted Endpoint Test、Scheduled Worker、`signed` 模式密钥，以及同一 Account、Product、License Plan 与 `purchaseType` 的 `billing_checkout_verifications.status=completed` 真实 Sandbox 证据。Sandbox Offer 通过 `verification-config` 产生该证据；Live Offer 复用对应 Sandbox 证据并额外要求 Live Client-side Token 对当前 Live Price 的 PricePreview 成功。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和管理端可见的具体检查项，不改变 Offer 状态。
+`activate` 不接受调用方传入 `ready=true`；服务端实时执行 Checkout Readiness 检查并返回每项状态。至少包括 Product/Plan/Provider、Provider 环境等于 Product `billingEnvironment`、Client-side Token 的环境标识与 Provider 匹配、当前 Provider 配置更新时间之后最小 Paddle 事件合同中每一种事件的成功验签证据（通常由官方模拟器触发）、Notification Gateway 的 active 状态和当前配置之后的 accepted Endpoint Test、Scheduled Worker、`signed` 模式密钥，以及同一 Account、Product、License Plan 与 `purchaseType` 的 `billing_checkout_verifications.status=completed` 真实 Sandbox 证据。Sandbox Offer 通过 `verification-config` 产生该证据；Live Offer 可以复用对应 Sandbox 闭环证据，不执行真实扣款验证。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和管理端可见的具体检查项，不改变 Offer 状态。
+
+PricePreview 不属于服务端 Offer 激活门禁，也不保存为 Readiness 证据。它由公开 Checkout SDK 使用本次配置中的 Client-side Token 和 Price 在当前页面实时执行；成功后才允许启用购买和调用 `open()`，失败时保留 Paddle 原始错误并阻断当前购买。一次 Preview 成功不能证明未来页面、Origin 或 Paddle 状态仍然可用。服务端支付履约继续只信任已验签 Webhook，并精确校验 Offer、Price、数量、环境和 Customer 合同。
 
 若 Paddle recurring price 配置了免费试用，V1 只支持要求 Checkout 预先收集支付方式的免费试用。试用天数和下一扣款时间以已验签 Paddle Subscription 为准，不复制到 Offer 或 Product Trial 配置；Offer 仍只负责把外部 Price 映射到 `subscription` License Plan。
 
@@ -423,6 +425,9 @@ POST  /api/v1/admin/billing/events/:eventId/replay
 GET   /api/v1/admin/billing/adjustments
 GET   /api/v1/admin/billing/adjustments/:adjustmentId
 POST  /api/v1/admin/billing/adjustments/:adjustmentId/resolve
+GET   /api/v1/admin/system/issues
+GET   /api/v1/admin/system/issues/:issueId
+POST  /api/v1/admin/system/issues/:issueId/resolve
 ```
 
 Billing Customer 详情展示 provider Customer ID、镜像邮箱、关联 Customer、`linkStatus` 和最后同步来源，但不返回服务端 API 凭证。只有 Provider 已配置相应 API Key 时才开放 `reconcile`；它使用服务器端凭证重新读取同一个外部 Customer ID，不接受调用方传入邮箱，也不自动修改或改绑 LicenKit Customer。未配置时返回 `BILLING_PROVIDER_API_CAPABILITY_DISABLED`，不影响 Webhook 驱动的购买履约。邮箱一致时可把映射恢复为 `linked`；仍不一致时保持 `email_mismatch`。
@@ -432,6 +437,26 @@ Billing Customer 详情展示 provider Customer ID、镜像邮箱、关联 Custo
 列表和详情必须以当前 Session 的 `account_id` 查询；详情、对账和支付履约都使用 `account_id + billing_provider_id + external_customer_id` 定位映射。API 不提供仅按外部 Customer ID 的全局查询，也不把 Paddle、未来其他平台或 sandbox/live 中相同字符串的 ID 视为同一身份。
 
 Replay 重新执行同一持久化事件，不能跳过事件唯一约束，也不能复制为新事件规避幂等。
+
+System Issue 列表只返回当前账户的问题；默认先显示 open，再按 severity 与最近发生时间排序。详情返回 Issue 当前状态、Provider/能力、安全诊断、发生次数，以及通过 `system_issue_inbound_events` 关联的 Event 摘要。管理端不得根据 `last_error_detail_json` 拼接任意重试请求；服务端根据 `issue_code + capability` 决定唯一允许的验证与恢复策略。
+
+“已修复”使用以下请求：
+
+```json
+{
+  "resolutionNote": "Replaced the Paddle API key with customer.read permission.",
+  "retryAffectedEvents": true,
+  "expectedUpdatedAt": "2026-09-19T10:30:00Z"
+}
+```
+
+提交前，界面必须根据详情接口返回的恢复预览提示：“当前关联 N 条事件，其中 M 条仍受阻且 payload 有效；是否在验证修复后重新处理这 M 条事件？”不能使用笼统的“自动重试所有错误”。`expectedUpdatedAt` 防止管理员基于已过期的问题详情提交操作。
+
+服务端先用当前 Provider 配置执行该 capability 的只读验证。`customer_read` 使用 Paddle Customer 列表读取验证 API Key、环境与权限：再次 `401/403` 时 Issue 保持 open；`429/5xx` 或网络失败返回暂时无法确认，不写 resolved；成功后才写解决人、时间和说明。列表读取成功只证明当前 Key 能在配置环境使用 `customer.read`，不证明它必然属于原 Event 的正确 Paddle 商户；该事实必须在逐事件 Get Customer 时用原 Event 携带的 Customer ID 验证。若 `retryAffectedEvents=false`，只解决 System Issue，既有 Event 状态和错误完全不变。若为 `true`，只将当前仍被该 Issue 阻塞、状态为 `pending`、最近错误码仍匹配、payload 未到期的 Event 解除阻塞并设置为立即可调度；不清空 last error，不重置 attempt count。
+
+Scheduled Worker 对这些 Event 执行完整原始状态机，而不是直接调用发码：Billing Customer 已由 Webhook 补齐时跳过 API 读取；仍缺失时先 Get Customer 并进入统一同步服务；之后重新验证交易合同并依靠业务唯一键决定创建或关联既有 License、Subscription、Delivery。`404/archived`、身份冲突、`429/5xx`、再次 `401/403`、payload 过期和已完成业务结果分别按业务流程处理，不能由 System Issue 的 resolved 状态覆盖。
+
+手动 Billing Customer reconcile 的 `401/403` 会 upsert 同一个 System Issue，但没有原始 Inbound Event，因此不创建虚假关联；恢复操作只允许重试 reconcile。`customer_portal_session` 是独立 capability，旧门户 URL 请求不能自动重放，修复后由 Customer 重新发起。
 
 Adjustment 详情必须返回 provider、外部 Adjustment/Transaction/Subscription/Customer ID、原始 `action + type + status`、金额/币种、关联 License、自动影响、人工状态和来源事件。`resolve` 只允许 owner/admin，要求 `action` 为 `no_action|keep_suspended|reinstate|revoke|security_reset` 之一并提交非空原因。服务端根据当前 Adjustment 与 License 状态验证动作是否合法，在一个原子批次中更新 License/Activation、Adjustment 和审计；请求不能直接提交目标 License 状态。
 
@@ -510,9 +535,12 @@ POST /api/v1/customer/auth/magic-link
 ```json
 {
   "accountSlug": "example-studio",
-  "email": "buyer@example.com"
+  "email": "buyer@example.com",
+  "turnstileToken": "一次性 Turnstile Token"
 }
 ```
+
+`turnstileToken` 最长 2048 字符。Worker 必须调用 Cloudflare Siteverify，并校验 `success=true`、`action=customer_magic_link`、返回 hostname 与 `system_settings.app_url` 的 hostname 一致。Turnstile Token 五分钟过期且只能验证一次；服务端对同一次 Siteverify 的短暂重试使用相同 idempotency key。缺失、无效、重复、过期、action/hostname 不匹配或无法确认时，在查询 Customer 前 fail-closed；Token、Secret 和完整 Siteverify 响应不进入日志、审计或 D1。
 
 无论是否存在匹配的 active Customer，公开响应都保持一致并使用 `Cache-Control: no-store`：
 
@@ -525,7 +553,9 @@ POST /api/v1/customer/auth/magic-link
 }
 ```
 
-有效 Customer 会在一个事务中吊销此前未消费 Challenge、停止其尚未完成的 Delivery，然后创建默认 15 分钟有效的 Login Challenge 和 `customer.portal_access_requested` Notification Delivery；无匹配 Customer 时不创建 Customer、Challenge 或 Delivery。接口必须按账户、规范化邮箱和来源 IP 限流，响应不能包含 Customer ID、Challenge ID 或是否已发送邮件。存在和不存在两个分支使用相同的最短响应时间策略和小幅随机抖动，避免稳定时差成为邮箱枚举信号。
+Turnstile 验证成功后才查询 Customer。有效 Customer 使用 `customer_login_challenges(account_id, customer_id, created_at)` 检查默认 60 秒冷却：冷却命中时不创建 Challenge/Delivery，也不吊销仍有效的旧链接；冷却结束后，在一个 D1 原子批次中条件创建默认 15 分钟有效的 Login Challenge 和 `customer.portal_access_requested` Notification Delivery，并且只有新记录已创建才吊销此前未消费 Challenge、停止其尚未完成的 Delivery。无匹配 Customer 时不创建 Customer、Challenge、Delivery 或邮箱冷却记录。该流程不依赖 KV 或 Durable Object。
+
+Turnstile 已通过、Customer 不存在、Customer 存在但命中冷却、成功创建新链接四个分支的公开响应保持相同，不包含 Customer ID、Challenge ID、冷却剩余时间或是否已发送邮件，并使用相同的缓存头、最短响应时间策略和小幅随机抖动。Magic Link 请求页可以加载 Turnstile 官方资源；携带 Magic Link Token 的 `/auth#token=...` 落地页仍不得加载任何第三方资源。
 
 通知中的 URL 使用账户路径与 Fragment 携带 Token，例如 `https://license.example.com/customer/example-studio/auth#token=...`。落地页不得加载第三方资源，设置 `Referrer-Policy: no-referrer`、`Cache-Control: no-store`，并使用只允许同源脚本、样式、连接和表单的严格 Content Security Policy。页面读取 Token 后立即用 `history.replaceState` 清除 Fragment。GET 或页面加载不得消费 Challenge；用户显式点击“继续登录”后才发起消费 POST，避免邮件扫描器提前消费。
 

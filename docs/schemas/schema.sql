@@ -4,6 +4,8 @@
 
 PRAGMA foreign_keys = ON;
 
+-- 用途：保存整套自部署实例的初始化结果和公开地址，是全局配置而不是租户数据。
+-- 机制：固定主键 `current` 保证全库只有一行；初始化后只允许更新，删除由 Trigger 拒绝。
 CREATE TABLE system_settings (
     id TEXT PRIMARY KEY CHECK (id = 'current'),
     instance_name TEXT NOT NULL,
@@ -19,6 +21,8 @@ BEGIN
     SELECT RAISE(ABORT, 'SYSTEM_SETUP_STATE_DELETE_FORBIDDEN');
 END;
 
+-- 用途：保存租户账户，是用户、客户、产品、授权和支付数据的最上层隔离边界。
+-- 机制：`slug` 全局唯一用于稳定定位账户；状态控制账户是否可继续提供服务，默认宽限期供订阅授权快照使用。
 CREATE TABLE accounts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -32,6 +36,8 @@ CREATE TABLE accounts (
     UNIQUE (slug)
 );
 
+-- 用途：保存账户内的后台管理员身份，不与购买者 Customer 身份混用。
+-- 机制：邮箱在同一账户内大小写不敏感且唯一；角色决定权限，状态决定是否允许继续登录。
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -50,6 +56,8 @@ CREATE TABLE users (
 CREATE INDEX idx_users_account_status
     ON users(account_id, status);
 
+-- 用途：保存可吊销的后台登录会话。
+-- 机制：数据库只保存 Session Token 和 CSRF Token 的哈希；每条会话绑定同账户 User，并通过过期和吊销时间控制有效性。
 CREATE TABLE admin_sessions (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -73,6 +81,8 @@ CREATE INDEX idx_admin_sessions_user_expiry
 CREATE INDEX idx_admin_sessions_lookup
     ON admin_sessions(account_id, session_token_hash);
 
+-- 用途：保存购买者的稳定内部身份，承载 License 归属和 Customer Portal 访问。
+-- 机制：邮箱在同一账户内大小写不敏感且唯一；禁用只关闭客户访问，不隐式改变其 License 状态。
 CREATE TABLE customers (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -89,6 +99,8 @@ CREATE TABLE customers (
 CREATE INDEX idx_customers_account_status
     ON customers(account_id, status, created_at DESC);
 
+-- 用途：保存一次 Magic Link 请求及其一次性认证凭证。
+-- 机制：只保存 Token 哈希，并用过期、消费、吊销时间判断可用性；关联 Delivery 追踪实际通知，按 Customer 的创建时间索引可支持重复请求冷却和旧 Challenge 吊销。
 CREATE TABLE customer_login_challenges (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -118,6 +130,8 @@ CREATE INDEX idx_customer_login_challenges_lookup
 CREATE INDEX idx_customer_login_challenges_expiry
     ON customer_login_challenges(account_id, expires_at, consumed_at, revoked_at);
 
+-- 用途：保存 Customer 消费 Magic Link 后建立的 Portal 会话。
+-- 机制：每个 Challenge 最多绑定一个 Session；数据库只保存 Session/CSRF Token 哈希，并在每次使用时结合过期、吊销和 Customer 状态校验。
 CREATE TABLE customer_sessions (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -145,6 +159,8 @@ CREATE INDEX idx_customer_sessions_customer_expiry
 CREATE INDEX idx_customer_sessions_lookup
     ON customer_sessions(account_id, session_token_hash);
 
+-- 用途：保存账户销售和签发授权的产品定义，也是 Release、Plan、License 与 Offer 的业务根节点。
+-- 机制：`slug` 在账户内唯一；收款环境一次只选择 sandbox 或 live，试用开关与时长由约束保持一致，归档不删除历史。
 CREATE TABLE products (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -173,6 +189,8 @@ CREATE TABLE products (
 CREATE INDEX idx_products_account_status
     ON products(account_id, status);
 
+-- 用途：保存可被客户端声明和服务端信任的产品发布工件事实。
+-- 机制：产品、版本和平台组合唯一，SHA-256 格式受约束；身份、工件哈希和发布时间由 Trigger 锁定且整行不可删除，只允许修正说明或下载地址。
 CREATE TABLE product_releases (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -219,6 +237,8 @@ BEGIN
     SELECT RAISE(ABORT, 'PRODUCT_RELEASE_DELETE_FORBIDDEN');
 END;
 
+-- 用途：保存产品签发离线凭证所需的 Ed25519 密钥材料。
+-- 机制：私钥只保存密文，每个产品最多一个 active key；轮换通过保留 retired/revoked 旧公钥继续验证历史凭证。
 CREATE TABLE signing_keys (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -245,6 +265,8 @@ CREATE UNIQUE INDEX uq_signing_keys_product_active
     ON signing_keys(account_id, product_id)
     WHERE status = 'active';
 
+-- 用途：保存产品可签发的授权方案模板。
+-- 机制：版本号和状态管理方案演进；授权类型、凭证模式、有效期、宽限期和激活上限通过 CHECK 形成合法组合，签发时复制到 License 快照。
 CREATE TABLE license_plans (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -294,6 +316,8 @@ CREATE TABLE license_plans (
 CREATE INDEX idx_license_plans_product_status
     ON license_plans(account_id, product_id, status);
 
+-- 用途：保存已经签发给 Customer 的授权及其当前生命周期状态。
+-- 机制：签发时复制 Plan 条款，避免后续模板修改回写旧授权；注册码只存哈希，支付来源用外部交易唯一键幂等，验证 License 被约束为不可激活的 suspended 状态。
 CREATE TABLE licenses (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -406,6 +430,8 @@ CREATE INDEX idx_licenses_product_plan
 CREATE INDEX idx_licenses_customer
     ON licenses(account_id, customer_id, created_at DESC);
 
+-- 用途：记录注册码从旧版本轮换到新版本的历史和发起来源。
+-- 机制：版本必须单向递增，区分找回、安全重置和管理员操作，并关联可选 Delivery；注册码明文本身不进入本表。
 CREATE TABLE license_key_rotations (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -434,6 +460,8 @@ CREATE TABLE license_key_rotations (
 CREATE INDEX idx_license_key_rotations_license
     ON license_key_rotations(account_id, license_id, created_at DESC);
 
+-- 用途：保存一条 License 与具体设备之间的激活绑定及其历史状态。
+-- 机制：设备指纹和机器令牌只存哈希；同一 License/指纹最多一个 active 绑定，插入或重新激活时由 Trigger 按 License 快照强制执行激活上限。
 CREATE TABLE activations (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -508,6 +536,8 @@ BEGIN
     END;
 END;
 
+-- 用途：保存不依赖支付的产品设备试用领取记录。
+-- 机制：同一账户、产品和设备指纹只能领取一次；Token 只存哈希，过期时间固定，吊销时间与原因必须成对出现。
 CREATE TABLE trial_claims (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -540,6 +570,8 @@ CREATE INDEX idx_trial_claims_lookup
 CREATE INDEX idx_trial_claims_expiry
     ON trial_claims(account_id, product_id, expires_at, revoked_at);
 
+-- 用途：保存账户连接到支付平台的 sandbox 或 live 配置。
+-- 机制：Client-side Token 是可公开给 Paddle.js 的凭证，Webhook/API Secret 保存密文；账户、平台和环境组合唯一，Token 前缀必须与环境一致。
 CREATE TABLE billing_providers (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -567,6 +599,66 @@ CREATE TABLE billing_providers (
 CREATE INDEX idx_billing_providers_account_status
     ON billing_providers(account_id, status);
 
+-- 用途：保存需要管理员处理的系统能力故障；它描述 Provider 配置等共享依赖，不替代单个事件自己的错误。
+-- 机制：同一账户、Provider、能力和错误码永远复用一行；重复发生只更新最近错误和次数，已解决后再次发生则重新打开同一行。
+CREATE TABLE system_issues (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    billing_provider_id TEXT NOT NULL,
+    capability TEXT NOT NULL
+        CHECK (capability IN ('customer_read', 'customer_portal_session')),
+    issue_code TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'error'
+        CHECK (severity IN ('warning', 'error', 'critical')),
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'resolved')),
+    occurrence_count INTEGER NOT NULL DEFAULT 1
+        CHECK (occurrence_count >= 1),
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    last_error_detail_json TEXT NOT NULL DEFAULT '{}'
+        CHECK (
+            json_valid(last_error_detail_json)
+            AND json_type(last_error_detail_json) = 'object'
+        ),
+    resolved_at TEXT,
+    resolved_by_user_id TEXT,
+    resolution_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, id),
+    UNIQUE (
+        account_id,
+        billing_provider_id,
+        capability,
+        issue_code
+    ),
+    CHECK (last_seen_at >= first_seen_at),
+    CHECK (
+        (status = 'open'
+            AND resolved_at IS NULL
+            AND resolved_by_user_id IS NULL
+            AND resolution_note IS NULL)
+        OR (status = 'resolved'
+            AND resolved_at IS NOT NULL
+            AND resolved_by_user_id IS NOT NULL
+            AND resolution_note IS NOT NULL
+            AND length(trim(resolution_note)) > 0)
+    ),
+    FOREIGN KEY (account_id, billing_provider_id)
+        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, resolved_by_user_id)
+        REFERENCES users(account_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_system_issues_status
+    ON system_issues(account_id, status, severity, last_seen_at DESC);
+
+CREATE INDEX idx_system_issues_provider_capability
+    ON system_issues(account_id, billing_provider_id, capability, status);
+
+-- 用途：保存支付平台 Customer 的本地镜像及其与内部 Customer 的稳定映射。
+-- 机制：外部 Customer ID 在同一 Provider 连接内唯一；Webhook/API/对账共用同一记录，并用 pending、linked、email_mismatch、needs_attention 表达链接是否可安全用于履约。
 CREATE TABLE billing_customers (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -606,6 +698,8 @@ CREATE INDEX idx_billing_customers_customer
 CREATE INDEX idx_billing_customers_link_status
     ON billing_customers(account_id, billing_provider_id, link_status, updated_at);
 
+-- 用途：把一个支付平台 Price 精确映射到 Product、License Plan 和购买类型。
+-- 机制：Offer 从 draft 开始，显式通过 Readiness 后才能 active；同一 Provider 下 Price 唯一，产生 Checkout Verification 后关键映射由 Trigger 锁定，变更合同应归档并新建。
 CREATE TABLE billing_offers (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -632,6 +726,8 @@ CREATE TABLE billing_offers (
 CREATE INDEX idx_billing_offers_plan_status
     ON billing_offers(account_id, license_plan_id, status);
 
+-- 用途：保存支付平台 Subscription 与本地 License 的一对一镜像。
+-- 机制：以外部 Subscription ID 幂等更新，用外部事件时间和事件 ID 处理乱序；周期、试用和取消字段驱动同一 License 的续期、宽限或停止续期。
 CREATE TABLE billing_subscriptions (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -688,6 +784,8 @@ CREATE TABLE billing_subscriptions (
 CREATE INDEX idx_billing_subscriptions_status_period
     ON billing_subscriptions(account_id, status, current_period_end);
 
+-- 用途：保存退款、拒付、撤销等支付调整事实及需要人工处理的决定。
+-- 机制：外部 Adjustment ID 保证幂等；Provider 原始动作和状态原样保留，自动影响与人工 review/resolution 分开，只有明确条件满足时才关联并暂停 License。
 CREATE TABLE billing_adjustments (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -762,6 +860,8 @@ CREATE INDEX idx_billing_adjustments_review
 CREATE INDEX idx_billing_adjustments_transaction
     ON billing_adjustments(account_id, billing_provider_id, external_transaction_id, updated_at DESC);
 
+-- 用途：保存每个已验签支付入站事件及其处理状态，是 Webhook 幂等和故障恢复的事实入口。
+-- 机制：Provider/外部事件 ID 唯一；加密负载有独立清理期限，Worker 通过状态、重试时间和租约领取任务；`attempt_count` 与 `last_error_*` 只保存当前汇总，V1 不建立 Inbound Attempt 历史表。
 CREATE TABLE inbound_events (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -787,13 +887,16 @@ CREATE TABLE inbound_events (
     result_reference_id TEXT,
     last_error_code TEXT,
     last_error_detail TEXT,
+    blocking_system_issue_id TEXT,
     received_at TEXT NOT NULL,
     processed_at TEXT,
     updated_at TEXT NOT NULL,
     UNIQUE (account_id, id),
     UNIQUE (billing_provider_id, external_event_id),
     FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT
+        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, blocking_system_issue_id)
+        REFERENCES system_issues(account_id, id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_inbound_events_status_schedule
@@ -818,6 +921,36 @@ CREATE INDEX idx_inbound_events_adjustment
     ON inbound_events(account_id, billing_provider_id, external_adjustment_id, received_at DESC)
     WHERE external_adjustment_id IS NOT NULL;
 
+CREATE INDEX idx_inbound_events_blocking_issue
+    ON inbound_events(account_id, blocking_system_issue_id, status, received_at)
+    WHERE blocking_system_issue_id IS NOT NULL;
+
+-- 用途：永久记录一条系统问题曾影响过哪些 Inbound Event，供管理端展示、恢复预览和审计。
+-- 机制：同一 Issue/Event 只保留一行并累加问题观测次数；它不是执行 Attempt 记录，事件解除阻塞或处理完成后仍保留关联。
+CREATE TABLE system_issue_inbound_events (
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    system_issue_id TEXT NOT NULL,
+    inbound_event_id TEXT NOT NULL,
+    occurrence_count INTEGER NOT NULL DEFAULT 1
+        CHECK (occurrence_count >= 1),
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY (system_issue_id, inbound_event_id),
+    CHECK (last_seen_at >= first_seen_at),
+    FOREIGN KEY (account_id, system_issue_id)
+        REFERENCES system_issues(account_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (account_id, inbound_event_id)
+        REFERENCES inbound_events(account_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_system_issue_inbound_events_issue
+    ON system_issue_inbound_events(account_id, system_issue_id, last_seen_at DESC);
+
+CREATE INDEX idx_system_issue_inbound_events_event
+    ON system_issue_inbound_events(account_id, inbound_event_id);
+
+-- 用途：保存 Notification Gateway 或业务事件订阅方的出站目标配置。
+-- 机制：签名 Secret 保存密文，超时和自动尝试上限随端点配置；每个账户最多一个 active Notification Gateway，业务事件订阅端点可有多个。
 CREATE TABLE outbound_endpoints (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -846,6 +979,8 @@ CREATE UNIQUE INDEX uq_outbound_active_notification_gateway
     ON outbound_endpoints(account_id, endpoint_type)
     WHERE endpoint_type = 'notification_gateway' AND status = 'active';
 
+-- 用途：保存一次待发送的通知或业务事件任务，是 D1 中的持久化 Outbox。
+-- 机制：业务幂等键防止重复创建；创建时固化目标和签名配置，敏感负载加密且有期限，Worker 通过状态、调度时间和租约重试，2xx accepted 后清除负载。
 CREATE TABLE outbound_deliveries (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -916,6 +1051,8 @@ CREATE INDEX idx_outbound_deliveries_license
 CREATE INDEX idx_outbound_deliveries_customer
     ON outbound_deliveries(account_id, customer_id, created_at DESC);
 
+-- 用途：保存管理员在 Offer 激活前发起的真实 Sandbox Checkout 闭环验证。
+-- 机制：只保存一次性验证 Token 哈希并绑定 draft Sandbox Offer；已验签交易创建不可激活 License 和真实 Delivery，只有 Delivery accepted 才 completed，身份字段由 Trigger 禁止改绑或延长。
 CREATE TABLE billing_checkout_verifications (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -985,6 +1122,8 @@ CREATE INDEX idx_billing_checkout_verifications_status_expiry
 CREATE INDEX idx_billing_checkout_verifications_offer
     ON billing_checkout_verifications(account_id, billing_offer_id, completed_at DESC);
 
+-- 用途：逐次记录 Outbound Delivery 的实际 HTTP 发送结果，提供可回溯的网络诊断历史。
+-- 机制：同一 Delivery 的 Attempt 序号唯一且递增，区分首次、自动和人工重试；保留 HTTP 状态、脱敏响应或原始传输错误，不用汇总错误覆盖历史。
 CREATE TABLE outbound_attempts (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -1014,6 +1153,8 @@ CREATE TABLE outbound_attempts (
 CREATE INDEX idx_outbound_attempts_delivery
     ON outbound_attempts(account_id, delivery_id, attempt_number);
 
+-- 用途：记录管理员、Customer 和系统对安全或业务状态的关键操作。
+-- 机制：Actor 类型决定必须关联哪一种身份，资源和 request ID 串联调用链；详情只保存经过字段级脱敏的合法 JSON，服务层按只追加日志使用。
 CREATE TABLE audit_logs (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,

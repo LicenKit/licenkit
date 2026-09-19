@@ -68,6 +68,32 @@ Customer Webhook 是正常路径；API 读穿和定期对账是配置 API Key �
 
 若 Customer 事件超过 Paddle 重试窗口仍未到达，管理员有两条受控恢复路径：在 Paddle Notification 日志中重放对应 `customer.created|updated`，或配置只读 API Key 后对该外部 Customer 执行 reconcile。两条路径都进入相同同步服务，再 replay 原购买事件；管理员不能在购买事件上手填邮箱直接放行。
 
+### 1.3 Provider API 认证问题与恢复
+
+购买事件为了补齐 Billing Customer 调用 Paddle Get Customer 时，如果返回 `401/403`，这不是“该交易失败”，而是同一 Provider 的 `customer_read` 共享能力不可用。一次失败在同一 D1 原子批次中写入三层事实：
+
+1. Inbound Event 保持 `pending`，在 `last_error_code` 写入 `BILLING_PROVIDER_API_AUTH_INVALID`，在 `last_error_detail` 保留 `httpStatus`、Provider 原始错误码、request ID 和 message，并设置当前阻塞 System Issue；
+2. `system_issues` 按账户、Provider、`customer_read` 能力和问题代码 upsert；相同问题只更新一行并累加次数；
+3. `system_issue_inbound_events` 幂等关联 Issue 与 Event，供管理端展示全部受影响事件和恢复预览。
+
+`blocking_system_issue_id` 非空的事件不参加 Scheduled Worker 扫描，避免无效凭证持续请求 Paddle；即使 Issue 已被管理员标记 resolved，未选择重试的事件也不会被隐式唤醒。与此同时 Customer Webhook 仍可正常进入：若它已经为某个外部 Customer 建立安全映射，只解除对应事件的当前阻塞并重新排入原状态机，不关闭 Provider 级 Issue，也不删除历史关联。
+
+管理员更新 API Key 或权限后点击“已修复”，服务端先执行只读 `customer_read` 能力验证。能力验证成功只证明当前 Key 在该环境具有 Customer 读权限，不证明它必然属于原事件所在的正确 Paddle 商户；后者必须由重新处理每条事件时对其外部 Customer ID 的结果确认。成功后界面显示“仅标记已修复”和“标记已修复并重新处理 N 条事件”两个结果明确的选择。后者不是直接发码，也不是只重试一次 Get Customer；它只把仍满足条件的原始事件重新排入统一状态机。逐条结果固定如下：
+
+| 当前事实 | 重新处理动作 | 结果边界 |
+| --- | --- | --- |
+| Billing Customer 已由 Webhook 建立且为 `linked` | 跳过 Provider API，重新执行完整事件处理 | 重新校验 Offer、Price、数量、环境与业务唯一键后才允许履约 |
+| 映射仍缺失且 payload 有效 | 先对事件自带的外部 Customer ID 执行 Get Customer；`200 active` 进入统一同步服务，再继续完整事件处理 | Get Customer 成功本身不等于已发码 |
+| Get Customer 返回 `404` 或 Customer 为 archived | 不发码，事件进入 `needs_attention` 并保存新的业务错误 | 认证 Issue 可以保持 resolved，因为失败原因已变成具体 Customer 不可用 |
+| 返回 `429/5xx` 或网络超时 | 事件保持 `pending` 并按退避时间重试 | 不重新打开认证 Issue，保留 Provider 原始错误 |
+| 再次返回 `401/403` | 重新打开同一 System Issue，事件再次阻塞 | 不创建第二条相同 Issue |
+| 邮箱不一致、链接冲突或 Customer 被禁用 | 事件进入 `needs_attention` | 必须人工处理身份问题，不能使用事件里的邮箱旁路 |
+| payload 已清理或过期 | 不自动重放 | 管理端提示从 Paddle 重放原始 Webhook；不能只靠已提取 ID 猜测交易行项目 |
+| License/Subscription/Delivery 已由其他乱序事件完成 | 状态机命中现有业务唯一键并关联既有结果 | 不重复发 License 或 Delivery |
+| 事件已 processed，或当前错误已不是该 Issue | 从恢复候选中跳过 | System Issue 详情仍保留历史关联 |
+
+管理员手动执行 Billing Customer reconcile 时发生的 `401/403` 也 upsert 同一个 `customer_read` System Issue，但不能伪造一条 Inbound Event；修复后的重试对象只是该 reconcile 操作。创建客户门户会话的认证错误使用独立 capability，其修复后由用户重新发起短期门户会话，不自动重放旧的同步 HTTP 请求。这样每个“重试”都对应可验证的原始工作单元。
+
 Paddle Customer 邮箱只作为初次联系和发码地址来源，不宣称已经验证邮箱所有权。Customer Portal 的 Magic Link 消费才证明收件人当前控制该邮箱。
 
 映射建立后以外部 Customer ID 为稳定键。后续 `customer.updated` 若邮箱与 LicenKit Customer 不一致，只更新 Billing Customer 镜像并标记 `email_mismatch`，不自动改绑或修改 Customer 邮箱。该外部 Customer 的新 License 签发进入 `needs_attention`；已有 Billing Subscription 仍续期原 License，不受联系邮箱变化影响。
@@ -377,24 +403,35 @@ V1 采用以下规则：
 sequenceDiagram
     participant Customer as 客户浏览器
     participant Portal as Customer Portal
+    participant Turnstile as Cloudflare Turnstile
     participant DB as D1
     participant Outbox as 出站投递
     participant Receiver as 客户通知 Webhook
 
-    Customer->>Portal: account + email
+    Customer->>Turnstile: 完成 customer_magic_link Challenge
+    Customer->>Portal: account + email + Turnstile Token
+    Portal->>Turnstile: Siteverify + hostname/action
+    Turnstile-->>Portal: 验证成功
     Portal->>DB: 按 account + 规范化 email 查询 active Customer
     alt Customer 存在
-        Portal->>DB: 吊销旧 Challenge，原子创建新 Challenge 与 Delivery
-        Outbox->>Receiver: customer.portal_access_requested
+        Portal->>DB: 条件写入检查最近 Challenge
+        alt 仍在 60 秒冷却期
+            Portal->>Portal: 保留旧 Challenge/Delivery，不新建
+        else 冷却已结束
+            Portal->>DB: 原子创建新 Challenge/Delivery，再吊销旧记录
+            Outbox->>Receiver: customer.portal_access_requested
+        end
     else Customer 不存在
         Portal->>Portal: 不创建 Customer、Challenge 或 Delivery
     end
     Portal-->>Customer: 相同的 accepted 响应
 ```
 
-请求按账户、邮箱和来源 IP 限流。无论 Customer 是否存在，公开响应的状态码、内容、缓存头和最短响应时间策略保持一致，并在两个分支使用相同的小幅随机抖动，降低通过稳定时差枚举购买者邮箱的风险。
+Turnstile 必须在服务端调用 Siteverify；只渲染客户端 Widget 不构成验证。服务端校验 Token 单次使用、`action=customer_magic_link` 和当前实例 hostname，短暂网络重试复用同一个 Siteverify idempotency key；验证失败或无法确认时在查询 Customer 之前 fail-closed。Turnstile Token 不写入数据库或日志。
 
-Magic Link Token 使用高熵随机值。服务端只保存哈希、过期时间、消费时间和吊销时间。同一 Customer 请求新链接时，必须在同一事务中吊销此前所有未消费 Challenge，并停止其关联 Delivery 的后续投递，避免多个有效入口并存。
+已存在 Customer 的重复请求使用 `customer_login_challenges(account_id, customer_id, created_at)` 索引执行默认 60 秒冷却，不增加 KV、Durable Object 或新的限流表。无论 Customer 是否存在或是否命中冷却，公开响应的状态码、内容、缓存头和最短响应时间策略保持一致，并在各分支使用相同的小幅随机抖动，降低通过稳定时差枚举购买者邮箱的风险。
+
+Magic Link Token 使用高熵随机值。服务端只保存哈希、过期时间、消费时间和吊销时间。冷却期内重复请求必须保留旧链接；冷却结束后，必须在同一 D1 原子批次中先确认新 Challenge 与 Delivery 已创建，再吊销此前所有未消费 Challenge，并停止其关联 Delivery 的后续投递，避免失败请求使客户失去最后一条有效入口。
 
 链接使用同源页面的 URL Fragment 携带 Token，例如 `/customer/auth#token=...`；Fragment 不进入首个 HTTP 请求。落地页不得加载第三方脚本、图片或字体，响应设置 `Referrer-Policy: no-referrer`。页面脚本读取 Token 后立即通过 `history.replaceState` 清除地址栏，但 GET 和页面加载本身绝不消费 Challenge；只有用户显式点击“继续登录”后才以 POST 消费，避免邮件安全扫描器或链接预览提前使链接失效。消费时必须在一个事务中完成“确认未过期、未消费且未吊销，只创建一个与 Challenge 唯一绑定的 Customer Session，标记已消费”，并保证并发请求最多只有一个成功。
 

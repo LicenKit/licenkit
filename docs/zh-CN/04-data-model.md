@@ -11,7 +11,7 @@ V1 不迁移旧原型数据，允许重新生成初始迁移。数据模型优�
 - Customer 使用 Magic Link 安全访问且只能操作自己的 License；
 - 多账户关联不能越过 Account 边界，权限不能依赖前端约定；
 - 版本资格只使用服务端受信的 Product Release；
-- 错误与尝试记录可诊断；
+- 单个任务错误与需要管理员处理的共享系统问题分层保存，且能追溯两者关联；
 - 所有检索可以通过数据库条件和索引完成。
 
 目标 DDL 见 [`docs/schemas/schema.sql`](../schemas/schema.sql)。DDL 是领域结构草案，实际 Drizzle Schema 应表达相同约束。
@@ -35,6 +35,7 @@ erDiagram
     licenses ||--o{ activations : activates
 
     accounts ||--o{ billing_providers : configures
+    billing_providers ||--o{ system_issues : reports
     billing_providers ||--o{ billing_customers : mirrors
     customers ||--o{ billing_customers : linked_by
     billing_providers ||--o{ billing_offers : maps
@@ -42,6 +43,8 @@ erDiagram
     billing_offers ||--o{ billing_checkout_verifications : verifies
     users ||--o{ billing_checkout_verifications : requests
     billing_providers ||--o{ inbound_events : receives
+    system_issues ||--o{ system_issue_inbound_events : affects
+    inbound_events ||--o{ system_issue_inbound_events : linked_from
     billing_providers ||--o{ billing_subscriptions : tracks
     licenses ||--o| billing_subscriptions : billed_by
     billing_providers ||--o{ billing_adjustments : records
@@ -98,7 +101,9 @@ Customer ID 是 License 的稳定归属。修改邮箱是显式管理操作，�
 
 明文 Token 只存在于加密 Delivery 负载和客户收到的 URL 中。过期、已消费、已吊销或 Customer 被禁用时不能创建 Session。
 
-为同一 Customer 创建新 Challenge 时，旧的未消费 Challenge 必须吊销，并停止关联 Delivery；这既减少多个活跃链接，也保证用户可以明确知道“最后一次请求的链接有效”。
+Magic Link 请求先完成 Turnstile 服务端 Siteverify，校验成功、`action=customer_magic_link` 且 `hostname` 等于当前实例 `app_url` 的 Host 后，才允许查询 Customer。Turnstile Token 不写入 D1；它只证明本次表单请求通过了自动化挑战，不能替代 Magic Link 对邮箱控制权的验证。
+
+同一 Customer 的重复请求冷却直接查询本表最近一条 `created_at`，默认 60 秒，不新增 KV、Durable Object 或限流表。创建流程使用带 `NOT EXISTS` 冷却条件的 D1 原子批次，而不是先查再写：冷却命中时不创建 Challenge/Delivery，也不吊销仍有效的旧链接；冷却结束后，只有新 Challenge 与 Delivery 已在同一批次成功创建，才吊销此前未消费 Challenge 并停止其 Delivery。这样并发请求最多生成一组新记录，失败也不会先破坏旧链接。
 
 ### 3.7 `customer_sessions`
 
@@ -322,7 +327,9 @@ Billing Customer 只接受两类来源：已验签 `customer.created|updated` pa
 
 Offer 尚未产生任何 Checkout Verification 时可以在 draft 状态修正映射；一旦存在验证尝试，Provider、Price、Product、Plan 和购买类型由 Trigger 锁定，修改销售合同必须归档并新建 Offer。否则历史验证证据可能被错误复用到另一份权益。
 
-从 `draft` 激活前，服务端执行 Checkout Readiness 检查：Product/Plan/Provider 可用、Offer Provider 环境等于 Product `billing_environment`、Client-side Token 环境匹配且当前 Price 可被 PricePreview 读取、当前 Provider 配置更新时间之后已逐项收到最小事件合同中的对应事件并验签成功（通常由官方模拟器触发）、Notification Gateway 已启用并通过 Endpoint Test、调度器健康、`signed` 模式存在 active key，以及同一 Account/Product/Plan/购买类型的真实 Sandbox Checkout 到 accepted Delivery 已验收。首个 Sandbox Offer 通过只对 owner/admin 开放的 draft 验证配置运行同一 Checkout、Webhook、履约和通知模块，避免“未激活不能测试、未测试不能激活”的死锁；Live Offer 复用对应 Sandbox 证据并单独验证 Live Token/Price。检查使用现有 Provider、Inbound Event、Endpoint、Delivery、Attempt 和 Checkout Verification 事实，不把一份容易漂移的 `ready=true` 冗余保存到 Offer。轮换 Webhook Secret、替换 Provider 连接或更新 Endpoint 会自然使旧验证时间早于当前配置而失效。激活后任何关键依赖失效，公开 Checkout API 仍实时返回不可购买；Offer 状态本身不冒充运行健康。
+从 `draft` 激活前，服务端执行 Checkout Readiness 检查：Product/Plan/Provider 可用、Offer Provider 环境等于 Product `billing_environment`、Client-side Token 的环境标识与 Provider 匹配、当前 Provider 配置更新时间之后已逐项收到最小事件合同中的对应事件并验签成功（通常由官方模拟器触发）、Notification Gateway 已启用并通过 Endpoint Test、调度器健康、`signed` 模式存在 active key，以及同一 Account/Product/Plan/购买类型的真实 Sandbox Checkout 到 accepted Delivery 已验收。首个 Sandbox Offer 通过只对 owner/admin 开放的 draft 验证配置运行同一 Checkout、Webhook、履约和通知模块，避免“未激活不能测试、未测试不能激活”的死锁；Live Offer 可以复用对应 Sandbox 闭环证据，不执行真实扣款验证。检查使用现有 Provider、Inbound Event、Endpoint、Delivery、Attempt 和 Checkout Verification 事实，不把一份容易漂移的 `ready=true` 冗余保存到 Offer。轮换 Webhook Secret、替换 Provider 连接或更新 Endpoint 会自然使旧验证时间早于当前配置而失效。激活后任何关键依赖失效，公开 Checkout API 仍实时返回不可购买；Offer 状态本身不冒充运行健康。
+
+PricePreview 不是服务端能够长期保存的 Offer 激活证据：它依赖当前浏览器环境、Client-side Token、Price 和 Paddle.js 的实时响应。公开 Checkout SDK 必须在当前页面对本次 `load()` 返回的配置调用 PricePreview；只有成功后才可启用购买并执行 `open()`。Preview 失败只阻断当前页面的购买流程并保留原始错误，不回写 Offer 状态，也不把一次成功结果保存成长期 Readiness 事实。服务端最终授权仍只依据已验签 Webhook，以及 Offer、Price、数量、环境和 Customer 合同的精确匹配。
 
 ### 5.4 `billing_checkout_verifications`
 
@@ -390,6 +397,33 @@ V1 的 Paddle 免费订阅试用只接受 `trial_type=free_payment_method_requir
 Paddle 订阅创建流程使用这两个外部 ID 关联乱序到达的 `subscription.created` 与 `transaction.completed`。前者包含创建 Transaction ID 和完整 Subscription，后者包含 Transaction ID 与 Subscription ID；事实暂不完整时事件继续保持 `pending` 并重试，而不是创建缺字段的 Subscription。两个部分索引分别支持按 Transaction 和 Subscription 查找关联事件，原始负载清理后仍保留关联链路。
 
 外部 Customer ID 用于关联 Billing Customer。购买事件处理时若映射不存在，事件以 `BILLING_CUSTOMER_PENDING` 保持可重试并等待 Customer Webhook；Provider 配置了 API Key 时可以调用 Paddle Get Customer API 加速，成功响应仍与 Customer Webhook 进入同一 upsert/link 路径，失败则保存 Paddle request ID、HTTP 状态和原始错误并重试。
+
+`401/403` 表示已启用的 Provider API 能力存在凭证或权限问题。来源 Inbound Event 保持 `pending`，把 `BILLING_PROVIDER_API_AUTH_INVALID` 写入 `last_error_code`，并在 `last_error_detail` 保留字段级脱敏后的 `httpStatus`、Provider 原始错误码、request ID 和 message；同时写入 `blocking_system_issue_id`。Scheduler 不领取该字段非空的事件，因此不会用无效 API Key 持续请求 Provider；仅把 System Issue 标为 resolved 也不会隐式唤醒事件。修复系统问题不能覆盖或清空这里的事件错误；只有显式解除阻塞并重新处理后，结果才更新该事件自己的状态和错误。
+
+V1 不建立 `inbound_event_attempts` 或其他逐次 Inbound Attempt 表。`attempt_count` 只记录执行次数，`last_error_code + last_error_detail` 只保存该事件当前最后一次错误的完整诊断字段。这与出站 Delivery 需要逐次 HTTP 结果的 `outbound_attempts` 是两个不同的边界。
+
+### 5.8 `system_issues`
+
+保存需要管理员处理的共享运行问题。V1 首个问题类型是 Billing Provider API 的认证或权限错误；它和 Inbound Event 错误的职责不同：
+
+- Inbound Event 回答“某一条支付事件为什么没有继续”；
+- System Issue 回答“哪个 Provider 的哪项能力当前整体不可用”；
+- `capability` 区分 `customer_read` 与 `customer_portal_session`，避免一项权限不足错误地关闭另一项能力；
+- `last_error_detail_json` 保存最近一次字段级脱敏诊断，事件自身仍保存自己的错误快照；
+- `occurrence_count`、`first_seen_at`、`last_seen_at` 记录重复发生，不为相同问题创建多行。
+
+去重身份固定为 `account_id + billing_provider_id + capability + issue_code`。首次发生时插入 `open`；重复发生时原子增加次数并更新最近错误；已 `resolved` 后再次出现时重新打开同一行并清空旧解决字段。Provider request ID 和 message 不参与去重，否则每次请求都会制造一个新问题。
+
+管理员点击“已修复”时，服务端先使用当前 Provider 配置执行对应能力的只读验证。`customer_read` 使用 Paddle 的 Customer 列表读取接口验证 API Key、环境与 `customer.read` 权限；仍返回 `401/403` 时 Issue 保持 open，`429/5xx` 或网络失败表示尚不能确认修复，也不能关闭。验证成功后才写入解决人、时间和说明。关闭 Issue 本身不修改任何 Inbound Event。
+
+### 5.9 `system_issue_inbound_events`
+
+永久记录 System Issue 与受影响 Inbound Event 的多对多关系。同一 Issue/Event 只保存一行，重复观测到同一问题只增加次数并更新时间，不保存每次执行快照。`inbound_events.blocking_system_issue_id` 表示当前是否仍被该问题阻塞；本表表示历史上是否受过影响。两者分开有两个原因：
+
+1. Customer Webhook 可能先补齐某一事件所需映射，此时只解除该事件的当前阻塞并继续履约，Provider 级 Issue 仍然 open；
+2. 事件处理成功后仍要能从 System Issue 页面找到它，不能因为清空当前阻塞引用而失去问题链路。
+
+“已修复并重试”只选择同时满足以下条件的事件：仍由该 Issue 阻塞、状态为 `pending`、最近错误仍是该 Issue 的错误码、加密 payload 尚未到期且尚未产生不可逆的冲突结果。选择必须通过带索引的数据库关联查询完成，不能加载全部事件后在内存筛选。符合条件的事件只被重新排入原 Inbound Event 状态机，不直接调用“发码”或只把 Get Customer 成功当作完成；业务唯一键继续防止重复 License 与 Delivery。
 
 ## 6. 出站投递
 
@@ -482,6 +516,8 @@ Scheduled Worker 只通过状态、`next_attempt_at` 和 `locked_until` 索引�
 | `licenses(account_id, source_billing_provider_id, source_external_transaction_id)` 部分唯一 | 不同支付事件对同一交易重复发 License |
 | `activations(license_id, fingerprint_hash) WHERE status='active'` 唯一 | 同设备重复占座 |
 | `billing_providers(account_id, provider, environment)` 唯一 | 配置歧义 |
+| `system_issues(account_id, billing_provider_id, capability, issue_code)` 唯一 | 同一共享配置错误为每次失败重复创建告警 |
+| `system_issue_inbound_events(system_issue_id, inbound_event_id)` 主键 | 同一个问题重复关联同一事件 |
 | `billing_customers(billing_provider_id, external_customer_id)` 唯一 | 同一 Provider 连接下的外部 Customer 映射成多个本地 Billing Customer |
 | `billing_offers(billing_provider_id, external_price_id)` 唯一 | 一个价格映射多个方案 |
 | `billing_checkout_verifications(token_hash)` 唯一 | 一个管理员验证令牌授权多次测试履约 |

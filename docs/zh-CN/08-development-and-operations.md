@@ -32,6 +32,7 @@ pnpm build
 | --- | --- |
 | `STORAGE_ENCRYPTION_KEY` | 加密签名私钥、支付 Webhook Secret、支付平台服务端 API 凭证、出站 Secret 和敏感 Delivery 负载 |
 | `INITIAL_SETUP_TOKEN` | 独立部署首次 Setup 使用的一次性高熵 Secret；初始化完成后可以移除 |
+| `TURNSTILE_SECRET_KEY` | Worker 调用 Turnstile Siteverify 的服务端 Secret；不返回浏览器 |
 
 Secret 不进入代码、普通环境变量文件、日志、审计详情或 API 响应。
 
@@ -41,7 +42,9 @@ Secret 不进入代码、普通环境变量文件、日志、审计详情或 API
 
 | 名称 | 作用 |
 | --- | --- |
+| `TURNSTILE_SITE_KEY` | Magic Link 请求页渲染 Turnstile Widget 的公开 Sitekey |
 | `CUSTOMER_MAGIC_LINK_TTL_SECONDS` | Magic Link 最长有效时间；默认 `900`（15 分钟） |
+| `CUSTOMER_MAGIC_LINK_COOLDOWN_SECONDS` | 同一 Customer 重复请求新 Magic Link 的 D1 冷却时间；默认 `60` |
 | `CUSTOMER_SESSION_TTL_SECONDS` | Customer Session 服务端最长有效时间；默认 `604800`（7 天） |
 | `CUSTOMER_RECENT_AUTH_SECONDS` | 敏感操作最近认证窗口；默认 `900`（15 分钟） |
 | `SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS` | 未成功敏感 Delivery 负载的最长保留时间；推荐默认 `86400`（24 小时） |
@@ -134,7 +137,10 @@ LicenKit Cloud 不属于 V1。代码只保留内部 Account Provisioning 接口�
 27. 验证 Billing Adjustment 外部 ID 唯一、review/resolution 字段组合约束和跨账户外键；
 28. 验证 Admin/Customer CSRF Token Hash 各自唯一并绑定对应 Session；缺少或不匹配精确 Origin、CSRF Header、CSRF Cookie、Session Hash 任一条件时，Cookie 鉴权写操作均被拒绝；
 29. 验证 Checkout Verification 创建后不能改绑 Account、Offer、发起人或 Token，也不能延长过期时间；
-30. 在 migration 发布前冻结并评审。
+30. 验证 `system_issues` 对同一账户、Provider、capability 和错误码只保留一行，重复发生增加次数，resolved 后再次发生重新打开同一行；
+31. 验证 `system_issue_inbound_events` 不重复关联同一 Event，并且跨账户 Issue/Event 外键被拒绝；
+32. 验证非空 `blocking_system_issue_id` 阻止 Scheduler 领取 Event；仅解决 Issue 不会隐式唤醒 Event，而解除当前阻塞不删除永久 Issue/Event 关联；
+33. 在 migration 发布前冻结并评审。
 
 不得先生成迁移再反向修改文档来迎合偶然的表结构。
 
@@ -196,10 +202,14 @@ V1 首个且必须完成的支付闭环是 Paddle。Paddle Adapter 使用官方 
 21. 分别让新 Customer 的 `customer.created` 先到、购买事件先到，并让已有 Paddle Customer 再次购买；购买先到时以 `BILLING_CUSTOMER_PENDING` 等待 Customer Webhook，三条路径最终只履约一次；
 22. 另外配置只具备 `customer.read` 的 API Key，验证购买先到时 Get Customer 可以加速同一同步路径；Sandbox Key 只能调用 Sandbox base URL、Live Key 只能调用 Live base URL；
 23. 模拟 Customer Webhook 延迟、API 暂时失败和等待超时，验证事件保留 Paddle request ID、HTTP 状态与原始错误，并只在超过上限或确认不可恢复时进入 `needs_attention`；分别用 Paddle Notification 重放 Customer 事件、配置只读 API Key 后 reconcile 两条路径恢复，再 replay 原购买事件；
-24. 发送较旧的 Customer/Subscription/Adjustment 状态事件，验证不会覆盖较新的镜像和状态；
-25. 修改 Paddle Customer 邮箱，验证不会自动改绑或修改 LicenKit Customer，新签发进入 `email_mismatch` 人工处理，已有订阅仍续期原 License；
-26. 为 API Key 增加 `customer_portal_session.write` 后创建真实 Sandbox 客户门户会话；移除该能力只禁用门户，不影响购买；
-27. 在 Paddle 取消自动续费，并验证本地状态只通过后续 Webhook 更新。
+24. 让 Customer 读穿分别返回 `401` 和 `403`，验证 Event 保持 pending 并保存 HTTP 状态、Provider 原始 code、request ID 与 message；相同 Provider/capability 只产生一条 open System Issue，多条 Event 均可追溯；
+25. 更新 API Key 后执行“已修复但不重试”，验证 Issue resolved 而 Event 错误不变；再次触发相同错误时重开同一 Issue；
+26. 执行“已修复并重新处理”，分别覆盖 Customer Webhook 已补齐、Get Customer 200、404/archived、429/5xx、再次 401/403、邮箱冲突、payload 过期和业务结果已存在，验证只对符合条件的 Event 运行完整状态机且不会重复发码；
+27. 手动 reconcile 的 `401/403` 只 upsert System Issue 而不伪造 Event；客户门户 capability 独立去重，修复后不自动重放旧门户请求；
+28. 发送较旧的 Customer/Subscription/Adjustment 状态事件，验证不会覆盖较新的镜像和状态；
+29. 修改 Paddle Customer 邮箱，验证不会自动改绑或修改 LicenKit Customer，新签发进入 `email_mismatch` 人工处理，已有订阅仍续期原 License；
+30. 为 API Key 增加 `customer_portal_session.write` 后创建真实 Sandbox 客户门户会话；移除该能力只禁用门户，不影响购买；
+31. 在 Paddle 取消自动续费，并验证本地状态只通过后续 Webhook 更新。
 
 Mock 数据可以用于单元测试，但必须通过与正式相同的 Adapter 接口进入系统。
 
@@ -207,23 +217,25 @@ Mock 数据可以用于单元测试，但必须通过与正式相同的 Adapter 
 
 Customer Portal 至少验证：
 
-1. 有效邮箱请求创建 Login Challenge 和 Notification Delivery；
-2. 存在和不存在两类请求具有相同状态、响应体、缓存头和最短响应时间策略；
-3. Magic Link Token 只保存哈希且只能消费一次；
-4. 请求新链接会吊销旧 Challenge、停止旧 Delivery，旧链接无法登录；
-5. 落地页的 CSP 阻止第三方资源，Token 不进入首个 HTTP 请求、Referer、浏览器历史或应用日志；GET、预取和链接扫描不消费 Challenge，只有显式用户动作后的 POST 才消费；
-6. 过期、已消费、已吊销 Token 和 disabled Customer 不能创建 Session；
-7. Customer Session 退出、过期和管理员吊销后立即失效；
-8. 最近认证过期后，设备释放、找回、安全重置和支付门户创建都要求重新 Magic Link 验证；
-9. Customer 只能查询自己名下的 License、Subscription 和 Activation；
-10. 账户 A 的 Session 不能访问账户 B 的任何 Customer 资源，越权 ID 不泄露资源是否存在；
-11. 释放设备写入 `deactivated` 和 Customer 审计，不删除 Activation；
-12. 普通找回保留激活，安全重置吊销全部激活；
-13. 找回和安全重置成功页只展示一次新注册码，同时创建通知 Delivery，不写入缓存、本地存储、日志或分析事件；
-14. Customer Portal 没有邮箱修改入口，Customer API 也不接受该操作；
-15. Magic Link 15 分钟、Session 7 天、最近认证 15 分钟的默认边界值和显式配置覆盖均有测试；
-16. Customer 写操作拒绝跨站请求；
-17. 登录、找回、设备释放和门户会话创建均受限流保护。
+1. Magic Link 请求必须通过 Turnstile 服务端 Siteverify，并校验固定 action 与实例 hostname；无效、过期、重复或 hostname/action 不匹配时在 Customer 查询前拒绝；
+2. 使用 Cloudflare 官方测试 Sitekey/Secret 覆盖成功、失败和重复 Token，测试与正式环境走同一 Widget、请求字段和 Siteverify Adapter；
+3. 有效邮箱首次请求创建 Login Challenge 和 Notification Delivery；
+4. 默认 60 秒内重复请求命中 D1 Challenge 冷却，不创建新 Challenge/Delivery，也不吊销旧链接；冷却结束后的并发请求最多创建一组新记录；
+5. Customer 不存在、命中冷却和成功创建具有相同状态、响应体、缓存头和最短响应时间策略；
+6. Magic Link Token 只保存哈希且只能消费一次；
+7. 冷却结束后成功创建新链接才吊销旧 Challenge、停止旧 Delivery，旧链接无法登录；新建失败时旧链接保持有效；
+8. Magic Link 请求页 CSP 只增加 Turnstile 所需官方来源；Token 落地页仍阻止所有第三方资源，Token 不进入首个 HTTP 请求、Referer、浏览器历史或应用日志；GET、预取和链接扫描不消费 Challenge，只有显式用户动作后的 POST 才消费；
+9. 过期、已消费、已吊销 Token 和 disabled Customer 不能创建 Session；
+10. Customer Session 退出、过期和管理员吊销后立即失效；
+11. 最近认证过期后，设备释放、找回、安全重置和支付门户创建都要求重新 Magic Link 验证；
+12. Customer 只能查询自己名下的 License、Subscription 和 Activation；
+13. 账户 A 的 Session 不能访问账户 B 的任何 Customer 资源，越权 ID 不泄露资源是否存在；
+14. 释放设备写入 `deactivated` 和 Customer 审计，不删除 Activation；
+15. 普通找回保留激活，安全重置吊销全部激活；
+16. 找回和安全重置成功页只展示一次新注册码，同时创建通知 Delivery，不写入缓存、本地存储、日志或分析事件；
+17. Customer Portal 没有邮箱修改入口，Customer API 也不接受该操作；
+18. Magic Link 15 分钟、请求冷却 60 秒、Session 7 天、最近认证 15 分钟的默认边界值和显式配置覆盖均有测试；
+19. Customer 写操作拒绝跨站请求。
 
 ## 8. 无需支付方式的 Product/设备试用联调
 
@@ -275,6 +287,8 @@ Customer Portal 至少验证：
 - 部署 Customer Portal 时 Magic Link TTL、Session TTL、最近认证窗口和 Notification Gateway 是否有效；
 - 敏感 Delivery 负载 TTL 是否有效，以及最老未清理敏感负载的年龄；
 - 启用支付平台客户门户时，对应 Billing Provider 服务端 API 凭证是否可解密；
+- Turnstile Sitekey/Secret、Siteverify 连通性、固定 action 和实例 hostname 是否匹配；
+- open System Issue 数量、最早发生时间、最近 Provider request ID 和仍受阻的 Inbound Event 数量；
 - pending/failed Inbound Event 数量；
 - open Billing Adjustment 数量、最老等待时间及自动暂停 License 数量；
 - pending/failed Delivery 数量；

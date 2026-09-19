@@ -104,10 +104,13 @@
 
 - [ ] Billing Provider 配置：环境匹配的公开 Client-side Token、加密 Webhook Secret，以及按能力选配的 Paddle API Key；
 - [ ] API Key 缺失时基础购买/发码仍通过 Customer Webhook 闭环；启用 Customer 读穿/对账或托管客户门户时分别校验最小权限；
+- [ ] Customer API 返回 `401/403` 时同时保存 Inbound Event 原始错误、去重 upsert Provider capability System Issue，并停止重复调用无效配置；
+- [ ] System Issue 管理界面展示关联事件和恢复预览；“已修复”先验证 capability，再由管理员明确选择是否把仍可重放的 Event 交回完整状态机；
 - [ ] Product `slug`、唯一 `billing_environment`、默认 draft Offer Mapping、Checkout Readiness 和显式激活；
 - [ ] Public Checkout API、无界面 Web Checkout SDK 和可修改参考产品页；
 - [ ] 参考模板说明 Sandbox/Live Default Payment Link、Live Website Approval 与 CSP 前提；实际 Live Origin 完成一次不付款的 Checkout 打开测试，SDK 保留 Origin/初始化原始错误；
-- [ ] owner/admin 通过 POST draft Sandbox Offer 验证配置创建短期一次性验证令牌，并用同一 SDK 运行真实 Checkout；验证 License 固定不可激活，accepted Delivery 成功后才能形成完成证据，Live Offer 复用同产品/方案/购买类型的证据并验证 Live PricePreview；
+- [ ] owner/admin 通过 POST draft Sandbox Offer 验证配置创建短期一次性验证令牌，并用同一 SDK 运行真实 Checkout；验证 License 固定不可激活，accepted Delivery 成功后才能形成完成证据，Live Offer 可复用同产品/方案/购买类型的 Sandbox 闭环证据，不把 PricePreview 保存为激活证据；
+- [ ] 公开 SDK 使用本次加载的 Client-side Token 和 Price 实时执行 PricePreview；只有成功后才启用购买和允许 `open()`，失败时保留 Paddle 原始错误并阻断当前页面 Checkout；
 - [ ] SDK 只能按返回的 `offerId` 打开一个 Price、数量 1，不接受调用方传入任意 Price ID 或数量；
 - [ ] 原始请求签名验证；
 - [ ] 入站事件数据库幂等；
@@ -137,7 +140,9 @@
 
 目标：购买者不依赖管理员即可管理自己的授权和设备，并能进入支付平台管理订阅。
 
-- [ ] Magic Link 请求的统一公开响应、限流和防枚举；
+- [ ] Magic Link 请求页集成 Turnstile，Worker 强制执行 Siteverify、action 与 hostname 校验；测试使用官方测试 Sitekey/Secret，但接口和校验流程不变；
+- [ ] 使用现有 Login Challenge 的 `created_at` 执行默认 60 秒 D1 冷却；命中冷却不创建新 Delivery、不吊销旧链接，不引入 KV、Durable Object 或限流表；
+- [ ] Customer 不存在、命中冷却和成功创建三条路径保持统一公开响应和时间策略；
 - [ ] Magic Link 默认 15 分钟、Customer Session 默认 7 天、最近认证默认 15 分钟；
 - [ ] 新请求吊销旧 Challenge，Magic Link 使用 Fragment、无第三方资源落地页和地址清理；
 - [ ] Login Challenge 哈希存储、短期有效、唯一 Session 绑定和 D1 原子单次消费；
@@ -172,9 +177,10 @@
 - [ ] 管理控制台使用新命名和新 API；
 - [ ] 客户授权中心页面与 Customer API 对齐；
 - [ ] 配置健康检查；
+- [ ] System Issue 列表、详情、去重重开、修复验证、关联 Event 恢复预览和审计；
 - [ ] 失败事件重放和 Delivery retry；
 - [ ] 操作审计和敏感字段脱敏；
-- [ ] 限流、CORS、Secret 和权限复核；
+- [ ] Turnstile、D1 冷却、CORS、Secret 和权限复核；
 - [ ] owner/admin/member/viewer 权限矩阵逐路由正向与负向验证；
 - [ ] 正式环境使用与测试环境相同流程验收；
 - [ ] 部署工件、迁移和线上 readback 验证。

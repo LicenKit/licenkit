@@ -195,6 +195,8 @@ Customer Portal（客户授权中心）是购买者查看和管理自己授权�
 
 V1 不提供 Customer 自主注册、密码登录和找回密码。没有匹配 Customer 的邮箱请求不会创建空 Customer，也不会创建登录通知，但接口对外返回与有效邮箱相同的接受响应，避免泄露客户是否存在。
 
+请求 Magic Link 必须先通过 Cloudflare Turnstile 的服务端验证。通过后，已存在 Customer 的重复请求使用最近一条 Login Challenge 的创建时间执行 D1 冷却；默认 60 秒内不创建新 Challenge 或 Delivery，也不使上一条仍有效链接失效。不存在的邮箱不为了冷却而保存邮箱或哈希记录，自动化批量请求由 Turnstile 提高成本；Customer 存在性仍靠统一响应和相同时间策略保护。该流程只需要 Turnstile 与 D1，不依赖 KV 或 Durable Object。
+
 客户可以释放自己 License 下的某个 Activation。该动作记录为 `deactivated` 并保留历史，不等同于管理员因违规或风控执行的 `revoked`。客户不能自行暂停、吊销 License 或修改 License Terms。
 
 V1 不开放 Customer 自助修改登录邮箱，由管理员执行并吊销旧 Challenge 与 Session。Customer Portal 不展示或调用邮箱修改入口。
@@ -247,6 +249,12 @@ V1 对每个账户只允许一个启用中的 `notification_gateway`，避免一
 
 一条 Delivery 默认最多执行 4 次 HTTP Attempt：首次请求加 3 次自动重试。2xx 表示接收方已可靠接管任务，此时立即清除敏感负载；未成功的敏感负载最长保留 24 小时，Magic Link 还受其更短的 Challenge 有效期限制。
 
+### 2.17 System Issue（系统问题）
+
+System Issue 表示需要管理员处理、并可能同时影响多条任务的共享能力故障，例如某个 Billing Provider 的 `customer_read` API Key 无效或缺少权限。它不是异常日志，也不替代 Inbound Event：事件仍保存自己的状态、原始错误和业务结果，System Issue 只提供去重后的当前告警、受影响事件集合和修复入口。
+
+同一账户、Billing Provider、能力和问题代码只存在一条 System Issue。重复 `401/403` 增加发生次数并更新最近诊断；管理员修复后标记 resolved；之后再次出现则重新打开同一行。管理员关闭 System Issue 不会删除或清空既有事件错误，是否重新处理受影响事件是独立、显式的选择。
+
 ## 3. 领域不变量
 
 以下约束不能由界面或调用方自行解释：
@@ -288,6 +296,10 @@ V1 对每个账户只允许一个启用中的 `notification_gateway`，避免一
 35. Offer 激活是收款门禁：Notification Gateway、最小 Paddle 事件合同、调度器、需要的签名密钥和真实 Sandbox 端到端验收未通过时不能激活；运行期关键依赖失效时公开 Checkout 配置立即变为不可购买。
 36. Product 只有一个公开收款环境。普通支付的 Provider 环境必须与 Product 一致且命中 active Offer；唯一例外是持有未过期、未消费管理员验证令牌的 draft Sandbox Offer，且该路径只能生成永久不可激活的验证 License。
 37. `is_checkout_verification=1` 的 License 不能激活、恢复或转为普通 License；后续订阅事件也不能把它变为 active。测试证据不能成为客户权益，测试卡不能产生正式可用授权。
+38. Magic Link 请求必须先完成 Turnstile 服务端校验；客户端 Widget 成功不能单独放行请求。
+39. Magic Link 冷却命中时不得创建新 Challenge/Delivery，也不得吊销上一条仍有效链接；冷却判断和创建必须通过 D1 条件写入原子完成。
+40. Inbound Event 的错误和 System Issue 是两层事实；解决共享问题不得覆盖、删除或伪造单个事件的处理结果。
+41. “自动重试受影响事件”只能把仍可重放的原始 Inbound Event 重新交给完整状态机；不能直接发码，也不能把单次 Provider API 读取成功当作履约完成。
 
 ## 4. 状态所有权
 

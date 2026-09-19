@@ -117,7 +117,7 @@ Paddle.Checkout.open({
 });
 ```
 
-`previewPrices()` 使用同一份公开配置调用 Paddle.js PricePreview，返回本地化金额、币种、税费展示字段和 Offer ID；页面负责渲染，不自行拼接金额。`successUrl` 只能是当前页面同源 HTTPS URL；sandbox 本地开发允许显式的 localhost。SDK 把 `sandbox` 映射到 Paddle.js sandbox 环境，把 `live` 映射到生产环境，调用方不能覆盖。
+`previewPrices()` 使用本次 `load()` 返回的同一份公开配置调用 Paddle.js PricePreview，返回本地化金额、币种、税费展示字段和 Offer ID；页面负责渲染，不自行拼接金额。SDK 只在当前配置的 Preview 成功后才允许页面启用购买，`open()` 也必须校验这份配置已有成功的 Preview；配置刷新或 Offer 变化后必须重新 Preview。Preview 失败时保留 Paddle 原始错误并阻断当前页面 Checkout，不能退回硬编码价格或沿用旧结果。`successUrl` 只能是当前页面同源 HTTPS URL；sandbox 本地开发允许显式的 localhost。SDK 把 `sandbox` 映射到 Paddle.js sandbox 环境，把 `live` 映射到生产环境，调用方不能覆盖。
 
 SDK 只在通过公开响应校验后，使用 Paddle 官方加载方式初始化 Paddle.js。推荐参考模板依赖官方 `@paddle/paddle-js` 包并锁定 npm lockfile；若页面直接引入脚本，只能使用 Paddle 文档给出的官方 CDN 地址，不能复制或自托管脚本。Paddle CDN 是明确的第三方供应链边界：依赖升级必须经过 Checkout 回归，模板不得为了“让它能跑”而关闭 CSP 或加入宽泛的通配来源。
 
@@ -215,7 +215,9 @@ Offer 默认 `draft`。激活时需要同时通过：
 - `signed` 凭证模式存在 active signing key；
 - 真实 Sandbox Checkout 已完成 Transaction -> License -> Delivery accepted 的端到端验收。
 
-首个 Sandbox Offer 尚未 active 时，owner/admin 从管理控制台 POST draft `verification-config`，取得短期一次性令牌后由同一个 SDK 内部入口打开真实 Sandbox Checkout；此后 Checkout、Webhook、履约、发码和 Notification Gateway 均使用正式模块。验证 License 永久不可激活；只有 Delivery accepted 后 Checkout Verification 才 completed。Live Offer 不执行真实扣款验证，而是要求同一 Account/Product/Plan/购买类型已有成功 Sandbox 证据，并用 Live Client-side Token 对当前 Live Price 执行 PricePreview。这样验证入口只改变“谁能发现 draft Sandbox Offer”和“签发的测试 License 永远不可用”，不产生第二套支付或发码流程。
+首个 Sandbox Offer 尚未 active 时，owner/admin 从管理控制台 POST draft `verification-config`，取得短期一次性令牌后由同一个 SDK 内部入口打开真实 Sandbox Checkout；此后 Checkout、Webhook、履约、发码和 Notification Gateway 均使用正式模块。验证 License 永久不可激活；只有 Delivery accepted 后 Checkout Verification 才 completed。Live Offer 不执行真实扣款验证，可以复用同一 Account/Product/Plan/购买类型已有的成功 Sandbox 闭环证据。这样验证入口只改变“谁能发现 draft Sandbox Offer”和“签发的测试 License 永远不可用”，不产生第二套支付或发码流程。
+
+PricePreview 是浏览器运行期检查，不是上述服务端激活证据。SDK 必须使用本次 `load()` 返回的 Live Client-side Token 和当前 Live Price 实时 Preview；只有成功后才启用购买并允许 `open()`。Preview 失败只阻断当前页面，不改变 active Offer，也不把一次成功结果持久化为 `ready=true`。服务端最终是否履约仍由已验签 Webhook 和 Offer、Price、数量、环境、Customer 合同决定。
 
 管理端在 Provider 和 Offer 页面显示每一项的 `ready|not_ready|stale`、最近成功时间和修复入口。公开 API 只合并为 `available` 与安全原因码。Offer 激活后如果 Provider、Gateway、事件合同、密钥或调度健康失效，公开 API 立即返回 unavailable，SDK 不打开新的 Checkout。
 
@@ -250,7 +252,7 @@ SDK 不把所有错误归一化成“支付失败”，也不把 Paddle 原始�
 4. Product 未选择收款环境，或 Product、Offer、Gateway、事件合同、调度器、Provider 环境或签名密钥任一不就绪时按钮不可购买；
 5. 一个页面可展示多个 Offer，但每次 `open()` 只提交一个 Price、数量 1；
 6. 调用方传入未知 Offer、跨 Product Offer、任意 Price 或数量均失败；
-7. PricePreview 与 Checkout 使用同一 Offer 配置；
+7. PricePreview 与 Checkout 使用同一次 `load()` 的同一 Offer 配置；未 Preview、Preview 失败、配置刷新或 Offer 变化后未重新 Preview 时，`open()` 必须失败；
 8. Checkout 完成回调不产生数据库授权记录；
 9. 只有已验签 Webhook 创建 License 和 Delivery；
 10. 绕过 SDK 的多行、多数量、环境不一致和 draft Price 交易进入 `needs_attention`；

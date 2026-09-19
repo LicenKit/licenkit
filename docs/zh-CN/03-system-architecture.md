@@ -2,7 +2,7 @@
 
 ## 1. 架构结论
 
-V1 使用 Cloudflare Workers、D1、Scheduled Triggers、Hono、Drizzle、React 和 Swift。V1 不使用 Cloudflare Queues，也不实现 LicenKit Cloud 控制面；需要重构的是领域边界、数据模型和可靠投递流程，不是更换主要技术栈。
+V1 使用 Cloudflare Workers、D1、Scheduled Triggers、Turnstile、Hono、Drizzle、React 和 Swift。自部署版本不使用 Cloudflare KV、Durable Objects 或 Queues，也不实现 LicenKit Cloud 控制面；需要重构的是领域边界、数据模型和可靠投递流程，不是更换主要技术栈。
 
 系统按职责分为十个模块。模块之间通过明确接口和持久化事实协作，支付、授权、客户访问和通知不共享隐式状态。
 
@@ -88,6 +88,7 @@ Trial Claim 不复用 License 或 Activation 状态机。它只表示无需支�
 - Adjustment 状态映射、自动暂停和管理员处置；
 - Paddle 要求支付方式的免费订阅试用，以及 `trialing` 到 `active`/`past_due` 的转换；
 - 为已授权 Customer 创建支付平台托管的客户门户会话；
+- 把 Provider 共享能力故障去重为 System Issue，并保持与单个 Inbound Event 错误的关联；
 - 失败重放和乱序事件保护。
 
 每个支付平台使用 Adapter 将原始事件转换为内部语义。Adapter 不直接写 License，统一 Fulfillment Service 执行领域动作。
@@ -95,6 +96,8 @@ Trial Claim 不复用 License 或 Activation 状态机。它只表示无需支�
 Customer Webhook 和 Paddle Get Customer API 必须进入同一个 `BillingCustomerSyncService.upsertAndLink(...)` 领域入口。该服务只接受已验签事件数据或服务器端认证 API 响应，拒绝 `custom_data.email` 等客户端自定义字段。首次链接时可以按规范化邮箱查找或创建 Customer；一旦外部 Customer ID 已链接，后续同步只能更新 provider 镜像和一致性状态，不能静默改绑内部 Customer。
 
 `BillingCustomerSyncService` 是跨 Adapter 的领域服务，不是 Paddle 专用表访问层。Adapter 必须传入当前 Account、已解析的 Billing Provider 连接、外部 Customer ID 和受信 Customer 快照；服务只用 `account_id + billing_provider_id + external_customer_id` 查询映射。Provider ID 同时隔离平台、环境和账户，因此 Paddle、未来 Stripe 及 sandbox/live 的外部 ID 不会互相碰撞。领域服务不得从所有 Billing Customer 载入内存后按 ID 或邮箱扫描。
+
+Provider API 的 `401/403` 同时产生事件级错误和 Provider 能力级 System Issue。事件保存本次 HTTP 状态、Provider 原始错误码、request ID 与 message；System Issue 以账户、Provider、能力和问题代码去重。Scheduler 跳过 `blocking_system_issue_id` 非空的事件；管理员验证配置修复后，可以选择是否解除这些事件的阻塞并把仍可重放的记录重新排入完整状态机。仅解决 Issue 不能隐式唤醒事件、清空事件错误或调用发码服务。
 
 Paddle Provider 必须保存与环境匹配的 Client-side Token 和加密 Webhook Secret。Client-side Token 是 Paddle.js 的公开受限凭证，可以由公开 Checkout API 返回；Webhook Secret 只能在服务端验签。Paddle API Key 是可选的服务端凭证，加密保存在 `billing_providers.api_secret_ciphertext`：启用 Get Customer/对账需要 `customer.read`，启用托管客户门户需要 `customer_portal_session.write`。它不能发送到浏览器、SDK 或通知接收方。未配置 API Key 时，购买事件等待 Customer Webhook 后重试；配置后的 API 读穿发生在 Webhook 已持久化并返回 2xx 之后，超时或限流只让 Inbound Event 保持 `pending`。
 
@@ -121,6 +124,8 @@ LicenKit 不包含 Resend、SMTP 或特定邮件服务商客户端。Magic Link 
 负责 Customer、Magic Link、Customer Session 和 Customer Portal API：
 
 - 支付履约或人工签发时创建或匹配 Customer；
+- 在 Magic Link 请求查询 Customer 前完成 Turnstile 服务端验证；
+- 使用现有 Login Challenge 的创建时间在 D1 中执行重复请求冷却；
 - 创建一次性登录 Challenge 和通知 Delivery；
 - 原子消费 Magic Link 并创建可吊销会话；
 - 按当前 Customer 限定 License、Subscription 和 Activation 查询；
@@ -200,15 +205,15 @@ Paddle 的订阅创建相关事件可能乱序到达。Fulfillment 使用 Inboun
 
 ### 3.4 Magic Link 与 Customer Session
 
-请求 Magic Link 时，只有在 active Customer 存在的情况下才在一个事务中创建：
+请求 Magic Link 时先验证 Turnstile Token、固定 action 和实例 hostname。验证失败时在 Customer 查询之前拒绝；验证成功后，只有在 active Customer 存在且最近一条 Challenge 已超过默认 60 秒冷却期时，才在一个 D1 原子批次中创建：
 
 - 只保存 Token 哈希的 Login Challenge；
 - 包含一次性访问 URL 密文的 Notification Delivery；
-- 必要的审计和限流事实。
+- 必要的审计事实。
 
 公开接口无论 Customer 是否存在都返回相同的接受语义。不存在的邮箱不能隐式注册 Customer。
 
-创建新 Magic Link 时先吊销同一 Customer 仍未消费的旧 Challenge，并停止旧 Delivery 重试。消费 Magic Link 时使用条件写入保证 Challenge 未过期、未消费、未吊销且 Customer 仍为 active；Customer Session 通过唯一 `login_challenge_id` 与 Challenge 绑定，并与 `consumed_at` 在同一个原子批次中提交，因此并发消费只能有一个请求成功。每次使用 Customer Session 仍要验证 Session 未过期、未吊销且 Customer 为 active，不能只在登录时检查一次。
+冷却判断不能采用批次外先查再写。批次先通过 `INSERT ... SELECT ... WHERE NOT EXISTS` 对最近 Challenge 作条件写入；只有新 Challenge 与 Delivery 确实创建，后续语句才吊销同一 Customer 仍未消费的旧 Challenge，并停止旧 Delivery 重试。冷却命中时不创建记录，也不破坏旧链接。消费 Magic Link 时使用条件写入保证 Challenge 未过期、未消费、未吊销且 Customer 仍为 active；Customer Session 通过唯一 `login_challenge_id` 与 Challenge 绑定，并与 `consumed_at` 在同一个原子批次中提交，因此并发消费只能有一个请求成功。每次使用 Customer Session 仍要验证 Session 未过期、未吊销且 Customer 为 active，不能只在登录时检查一次。
 
 客户释放 Activation、找回注册码、安全重置和创建支付门户 Session 都必须在持久层查询中带上当前 `account_id + customer_id`，验证最近认证窗口，并记录 `actor_type=customer` 的审计。不能只依赖前端隐藏按钮或应用层事后比对归属。
 
@@ -305,7 +310,10 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - 对外响应可以脱敏，但内部事件保留可回溯的原始错误；
 - 支付平台错误、HTTP 状态、数据库错误和业务拒绝不能被统一压缩成一个错误码；
 - 敏感字段按字段过滤，不隐藏整个原始包体；
-- 所有异步失败都必须能从控制台查询并执行受控重试。
+- Inbound Event 错误描述单个事件，System Issue 描述多个任务共享的配置或外部能力故障；两者都必须保留，不能互相覆盖；
+- 同一 System Issue 按账户、资源、能力和错误代码去重，request ID 与 message 只作为最近诊断，不参与去重；
+- 关闭 System Issue 不自动修改关联任务；管理端必须明确展示是否重新处理、可处理数量和跳过原因；
+- 所有异步失败都必须能从控制台查询，并只对仍满足前置条件的原始工作单元执行受控重试。
 
 ## 7. 配置模型
 
@@ -313,7 +321,9 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 
 - `STORAGE_ENCRYPTION_KEY`：保护支付 Secret、出站 HMAC Secret、签名私钥和敏感 Delivery 负载；
 - `INITIAL_SETUP_TOKEN`：独立部署首次初始化的高熵一次性 Secret；完成 Setup 后不再读取；
-- Cloudflare 资源绑定：D1，以及确有用途的缓存或限流资源；
+- `TURNSTILE_SITE_KEY`：Customer Portal Magic Link 请求页使用的公开 Widget Sitekey；
+- `TURNSTILE_SECRET_KEY`：Worker 调用 Siteverify 的服务端 Secret，不进入浏览器、日志或数据库；
+- Cloudflare 资源绑定：自部署 V1 只要求 D1，不要求 KV、Durable Object 或 Queue；
 - Scheduled Trigger：负责入站事件履约、出站投递重试和过期租约恢复。
 
 ### 7.2 数据库配置
@@ -358,6 +368,8 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - 注册码和机器令牌只保存哈希；
 - Trial Token 只保存哈希，并同时绑定 Account、Product 与设备指纹；重复领取不能返回旧 Token 或延长试用；
 - Magic Link Token 和 Customer Session Token 只保存哈希，完整值不得进入日志或普通审计；
+- Magic Link 请求页必须使用 Turnstile，并由 Worker 调用 Siteverify 校验成功、单次 Token、固定 action 和 `system_settings.app_url` hostname；Widget 成功回调本身不是安全边界；
+- 已存在 Customer 的重复 Magic Link 请求使用 D1 Login Challenge 执行冷却；冷却命中时返回统一 accepted，不创建新通知、不吊销旧链接；
 - Magic Link 默认 15 分钟有效且只能消费一次；公开请求不得泄露 Customer 是否存在；
 - Magic Link 落地页不得加载第三方资源，使用 URL Fragment 传 Token、`Referrer-Policy: no-referrer`，立即清理浏览器地址；GET 不消费 Token，必须由用户显式动作触发 POST，避免邮件扫描器提前消费；
 - Admin 与 Customer Session 必须使用 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie；另发与 Session 绑定的 Secure、SameSite=Lax、host-only CSRF Cookie。所有 Cookie 鉴权写操作同时验证精确 Origin、`X-CSRF-Token` Header 与 CSRF Cookie 常量时间相等，并校验 Token Hash 属于当前 Session；SameSite 不能单独替代 CSRF 校验；
@@ -388,6 +400,8 @@ Readiness 至少覆盖：
 - 部署 Customer Portal 时存在有效 Notification Gateway；
 - active Paddle Provider 的 Client-side Token、Webhook Secret 和环境匹配，最小事件合同完整；
 - 启用了 Customer API 读穿、定期对账或托管客户门户时，对应 Paddle API Key 可解密、环境和最小权限匹配；
+- Turnstile Sitekey/Secret 已配置，Siteverify 可用且 Widget hostname 与实例 `app_url` 一致；
+- open System Issue 数量、最早发生时间、受影响且仍阻塞的 Inbound Event 数量；
 - 每个 active Offer 的 Provider/Product 环境一致性、Notification Gateway 最近测试、真实 Sandbox 端到端验收和公开 Checkout 状态；
 - 待处理或失败事件没有超过告警阈值。
 
