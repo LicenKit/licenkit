@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, rmdirSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
@@ -7,7 +7,32 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const customConfig = join(repoRoot, "custom", "wrangler.jsonc");
 const templateConfig = join(repoRoot, "custom_template", "wrangler.jsonc");
 const config = existsSync(customConfig) ? customConfig : templateConfig;
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+
+function normalizeRootRelativePaths(args) {
+  const normalized = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--outdir" && args[index + 1]) {
+      normalized.push(argument, resolve(repoRoot, args[index + 1]));
+      index += 1;
+    } else if (argument.startsWith("--outdir=")) {
+      normalized.push(`--outdir=${resolve(repoRoot, argument.slice("--outdir=".length))}`);
+    } else {
+      normalized.push(argument);
+    }
+  }
+  return normalized;
+}
+
+function removeEmptyWranglerDirectories() {
+  const wranglerDirectory = join(dirname(config), ".wrangler");
+  for (const directory of [join(wranglerDirectory, "tmp"), wranglerDirectory]) {
+    try { rmdirSync(directory); } catch { /* Keep non-empty Wrangler state. */ }
+  }
+}
+
+const args = normalizeRootRelativePaths(rawArgs);
 
 if (args.length === 0) {
   console.error("Usage: node scripts/run-wrangler.mjs <wrangler arguments...>");
@@ -29,6 +54,7 @@ child.on("error", (error) => {
   process.exit(1);
 });
 child.on("exit", (code, signal) => {
+  removeEmptyWranglerDirectories();
   if (signal) process.kill(process.pid, signal);
   else process.exit(code ?? 1);
 });
