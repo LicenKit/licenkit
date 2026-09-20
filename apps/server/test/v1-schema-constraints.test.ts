@@ -6,16 +6,20 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const drizzleDir = path.resolve(__dirname, "../drizzle");
 const now = "2026-09-19T00:00:00Z";
 
-function applyV1Migration(db: Database.Database): void {
-  db.pragma("foreign_keys = ON");
+function readV1MigrationStatements(): string[] {
   const migrations = fs.readdirSync(drizzleDir).filter((file) => file.endsWith(".sql")).sort();
   expect(migrations).toEqual(["0000_v1_initial.sql"]);
 
   const sql = fs.readFileSync(path.join(drizzleDir, migrations[0]), "utf8");
-  for (const statement of sql
+  return sql
     .split("--> statement-breakpoint")
     .map((part) => part.trim())
-    .filter(Boolean)) {
+    .filter(Boolean);
+}
+
+function applyV1Migration(db: Database.Database): void {
+  db.pragma("foreign_keys = ON");
+  for (const statement of readV1MigrationStatements()) {
     db.exec(statement);
   }
 }
@@ -209,6 +213,15 @@ describe("V1 initial database schema", () => {
       .prepare("SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger'")
       .get() as { count: number };
     expect(triggerCount.count).toBe(15);
+  });
+
+  it("parenthesizes trigger CASE expressions for Cloudflare D1 remote migrations", () => {
+    const unparenthesizedCaseTriggers = readV1MigrationStatements()
+      .filter((statement) => /^CREATE TRIGGER\b/i.test(statement))
+      .filter((statement) => /\bSELECT\s+CASE\b/i.test(statement))
+      .map((statement) => statement.match(/^CREATE TRIGGER\s+([^\s]+)/i)?.[1]);
+
+    expect(unparenthesizedCaseTriggers).toEqual([]);
   });
 
   it("defines tenant child references as account-scoped composite foreign keys", () => {

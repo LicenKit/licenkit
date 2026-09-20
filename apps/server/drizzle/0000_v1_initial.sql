@@ -878,7 +878,7 @@ CREATE TRIGGER trg_activations_enforce_limit_on_insert
 BEFORE INSERT ON activations
 WHEN NEW.status = 'active'
 BEGIN
-    SELECT CASE
+    SELECT (CASE
         WHEN (
             SELECT COUNT(*)
             FROM activations
@@ -892,14 +892,14 @@ BEGIN
               AND id = NEW.license_id
         )
         THEN RAISE(ABORT, 'LICENSE_ACTIVATION_LIMIT_REACHED')
-    END;
+    END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_activations_enforce_limit_on_reactivate
 BEFORE UPDATE OF status ON activations
 WHEN OLD.status <> 'active' AND NEW.status = 'active'
 BEGIN
-    SELECT CASE
+    SELECT (CASE
         WHEN (
             SELECT COUNT(*)
             FROM activations
@@ -913,7 +913,7 @@ BEGIN
               AND id = NEW.license_id
         )
         THEN RAISE(ABORT, 'LICENSE_ACTIVATION_LIMIT_REACHED')
-    END;
+    END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_billing_providers_immutable_identity
@@ -929,7 +929,7 @@ CREATE TRIGGER trg_products_guard_billing_environment_change
 BEFORE UPDATE OF billing_environment ON products
 WHEN NEW.billing_environment IS NOT OLD.billing_environment
 BEGIN
-    SELECT CASE
+    SELECT (CASE
         WHEN EXISTS (
             SELECT 1
             FROM billing_offers AS offer
@@ -946,14 +946,14 @@ BEGIN
               AND license.is_checkout_verification = 0
         )
         THEN RAISE(ABORT, 'product_billing_environment_locked')
-    END;
+    END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_billing_offers_active_environment_on_insert
 BEFORE INSERT ON billing_offers
 WHEN NEW.status = 'active'
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
+    SELECT (CASE WHEN NOT EXISTS (
         SELECT 1
         FROM products AS product
         JOIN billing_providers AS provider
@@ -963,14 +963,14 @@ BEGIN
           AND product.id = NEW.product_id
           AND product.billing_environment IS NOT NULL
           AND product.billing_environment = provider.environment
-    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END;
+    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_billing_offers_active_environment_on_update
 BEFORE UPDATE OF status, billing_provider_id, product_id, account_id ON billing_offers
 WHEN NEW.status = 'active'
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
+    SELECT (CASE WHEN NOT EXISTS (
         SELECT 1
         FROM products AS product
         JOIN billing_providers AS provider
@@ -980,7 +980,7 @@ BEGIN
           AND product.id = NEW.product_id
           AND product.billing_environment IS NOT NULL
           AND product.billing_environment = provider.environment
-    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END;
+    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_billing_offers_lock_verified_mapping
@@ -1000,7 +1000,7 @@ CREATE TRIGGER trg_licenses_payment_environment_on_insert
 BEFORE INSERT ON licenses
 WHEN NEW.source = 'payment' AND NEW.is_checkout_verification = 0
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
+    SELECT (CASE WHEN NOT EXISTS (
         SELECT 1
         FROM products AS product
         JOIN billing_providers AS provider
@@ -1010,20 +1010,20 @@ BEGIN
           AND product.id = NEW.product_id
           AND product.billing_environment IS NOT NULL
           AND product.billing_environment = provider.environment
-    ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END;
+    ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_licenses_verification_environment_on_insert
 BEFORE INSERT ON licenses
 WHEN NEW.is_checkout_verification = 1
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
+    SELECT (CASE WHEN NOT EXISTS (
         SELECT 1
         FROM billing_providers AS provider
         WHERE provider.account_id = NEW.account_id
           AND provider.id = NEW.source_billing_provider_id
           AND provider.environment = 'sandbox'
-    ) THEN RAISE(ABORT, 'checkout_verification_requires_sandbox') END;
+    ) THEN RAISE(ABORT, 'checkout_verification_requires_sandbox') END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_licenses_verification_flag_immutable
@@ -1036,7 +1036,7 @@ END;
 CREATE TRIGGER trg_checkout_verifications_require_draft_sandbox
 BEFORE INSERT ON billing_checkout_verifications
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
+    SELECT (CASE WHEN NOT EXISTS (
         SELECT 1
         FROM billing_offers AS offer
         JOIN billing_providers AS provider
@@ -1046,7 +1046,7 @@ BEGIN
           AND offer.id = NEW.billing_offer_id
           AND offer.status = 'draft'
           AND provider.environment = 'sandbox'
-    ) THEN RAISE(ABORT, 'checkout_verification_requires_draft_sandbox_offer') END;
+    ) THEN RAISE(ABORT, 'checkout_verification_requires_draft_sandbox_offer') END);
 END;
 --> statement-breakpoint
 CREATE TRIGGER trg_checkout_verifications_immutable_identity
