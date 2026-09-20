@@ -187,7 +187,7 @@ License 签发时把相对窗口解析为绝对的 `updates_until`：
 
 ### 2.13 Customer Portal、Magic Link 与 Customer Session
 
-Customer Portal（客户授权中心）是购买者查看和管理自己授权的页面，不是管理控制台，也不是通用社区账号系统。
+Customer Portal（客户授权中心）是使用方站点中供购买者查看和管理自己授权的页面，不是 LicenKit 管理控制台，也不是通用社区账号系统。LicenKit 只提供它所需的 Customer API、Magic Link 和 Session，不提供页面实现。
 
 - **Magic Link**：发送到 Customer 当前邮箱的一次性短期登录凭证；服务端只保存 Token 哈希；
 - **Customer Session**：Magic Link 消费成功后建立的客户会话；服务端只保存会话 Token 与 CSRF Token 哈希，可过期和主动吊销；

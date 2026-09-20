@@ -1,12 +1,10 @@
-import { existsSync, rmdirSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { rmdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const customConfig = join(repoRoot, "custom", "wrangler.jsonc");
-const templateConfig = join(repoRoot, "custom_template", "wrangler.jsonc");
-const config = existsSync(customConfig) ? customConfig : templateConfig;
+const config = join(repoRoot, "wrangler.jsonc");
 const rawArgs = process.argv.slice(2);
 
 function normalizeRootRelativePaths(args) {
@@ -39,7 +37,7 @@ if (args.length === 0) {
   process.exit(2);
 }
 
-console.log(`[LicenKit] Wrangler config: ${relative(repoRoot, config)}`);
+console.log("[LicenKit] Wrangler config: wrangler.jsonc");
 const child = spawn("pnpm", ["--dir", join(repoRoot, "apps", "server"), "exec", "wrangler", ...args, "--config", config], {
   cwd: repoRoot,
   env: {

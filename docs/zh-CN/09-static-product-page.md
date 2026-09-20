@@ -15,7 +15,7 @@ Paddle -> 已验签 Webhook -> LicenKit Offer -> Product + License Plan -> Licen
 
 ## 2. 静态产品页配置
 
-参考实现位于 `examples/customer-site`，不参与 LicenKit 的生产构建或部署。使用者复制到自己的站点仓库后，在 `src/product-catalog.ts` 中维护：
+LicenKit 不提供产品页示例源码。使用方在自己的站点项目中静态维护：
 
 - 产品 ID、名称和说明；
 - 页面内方案 ID、名称和说明；
@@ -31,7 +31,7 @@ VITE_PADDLE_ENVIRONMENT=live
 VITE_PADDLE_CLIENT_SIDE_TOKEN=live_...
 ```
 
-`accountSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中显式填写的 `siteUrl` 用于生成邮件 Magic Link；当前参考实现要求它与 LicenKit `appUrl` 同源，并通过相对路径 `/api/v1` 使用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Notification Gateway Secret 和验证令牌不能进入源码、静态构建产物、日志或分析事件。
+`accountSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中显式填写的 `siteUrl` 用于生成邮件 Magic Link；当前要求它与 LicenKit `appUrl` 同源，站点通过相对路径 `/api/v1` 使用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Notification Gateway Secret 和验证令牌不能进入源码、静态构建产物、日志或分析事件。
 
 同一个 Paddle Price ID 必须在 LicenKit Admin 中创建 Billing Offer，关联唯一 Billing Provider、Product、License Plan 和购买类型。前端不需要 LicenKit Offer ID、Product ID 或 License Plan ID；后端从已验签 Webhook 中取得 Price ID 后执行关联。
 
@@ -51,7 +51,7 @@ Paddle.Checkout.open({
 });
 ```
 
-参考模板固定每次只打开一个 Price、数量 1，并把成功 URL 限制为当前页面同源 HTTPS；Sandbox 本地开发可以使用 localhost。页面可选择直接展示静态价格，也可以直接调用 Paddle PricePreview 获取本地化展示，但 PricePreview 不是 LicenKit Readiness 或履约证据。
+使用方页面每次只应打开一个 Price、数量 1，并把成功 URL 限制为当前页面同源 HTTPS；Sandbox 本地开发可以使用 localhost。页面可选择直接展示静态价格，也可以直接调用 Paddle PricePreview 获取本地化展示，但 PricePreview 不是 LicenKit Readiness 或履约证据。
 
 Sandbox 与 Live 必须分别设置 Paddle Default Payment Link。Live 产品页的真实 Origin 必须完成 Website Approval，并在上线前执行一次不付款的 Checkout 打开测试。页面 CSP 只放行 Paddle 官方脚本、连接和 Checkout Frame 所需来源。
 

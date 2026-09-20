@@ -19,12 +19,12 @@
 | Scheduled Worker | 当前 Cron 每日运行且只清理未使用的过期 License | 改为每分钟运行统一调度入口，并把清理保留为独立作业 |
 | 支付配置 | 多渠道配置混在账户 JSON 字段 | 拆成 Billing Provider 表 |
 | 价格映射 | 放在 Policy metadata，找不到时存在回退 | 拆成 Offer Mapping，缺失时失败 |
-| 产品购买页 | 需要静态产品/方案配置、Paddle.js 入口和安全响应头 | 提供可修改参考模板，直接用 Price ID 连接 Paddle |
+| 产品购买页 | 需要静态产品/方案配置、Paddle.js 入口和安全响应头 | 文档明确接入合同，由使用方站点直接用 Price ID 连接 Paddle |
 | 订阅 | 事件处理不完整，续费可能进入新 License 签发路径 | 重新实现 Subscription 状态模型 |
 | 入站幂等 | 代码有查询检查，当前运行 Schema 与文档约束不完全一致 | 新 Schema 使用数据库唯一约束 |
 | 邮件发码 | 只有通用业务事件广播概念，没有完成可验证的客户邮件闭环 | 新建 Notification Gateway 和 Delivery 流程 |
 | 再次发送 | 没有对 Retry、找回和安全重置作语义区分 | 按三种动作重新实现 |
-| 客户自助 | 没有 Customer、Magic Link、Customer Session 或 Customer API | 新建 Customer Portal，不引入密码注册体系 |
+| 客户自助 | 没有 Customer、Magic Link、Customer Session 或 Customer API | 新建 Customer API，不引入密码注册体系或 Portal 前端 |
 | 免费试用 | 只有未闭环的领取概念 | V1 同时实现独立 Product/设备 Trial Claim，以及要求支付方式的 Paddle 免费订阅试用；两套状态不能混用 |
 | 文档状态 | 旧计划把支付和出站模块标为已完成 | 旧完成度声明作废 |
 
@@ -108,7 +108,7 @@
 - [ ] System Issue 管理界面展示关联事件和恢复预览；“已修复”先验证 capability，再由管理员明确选择是否把仍可重放的 Event 交回完整状态机；
 - [ ] Product `slug`、唯一 `billing_environment`、默认 draft Offer Mapping、Checkout Readiness 和显式激活；
 - [ ] 可修改参考产品页静态维护产品、方案、展示价格和 Paddle Price ID，并直接调用 Paddle.js；
-- [ ] 参考模板说明 Sandbox/Live Default Payment Link、Live Website Approval 与 CSP 前提；实际 Live Origin 完成一次不付款的 Checkout 打开测试并保留 Paddle Origin/初始化错误；
+- [ ] 接入文档说明 Sandbox/Live Default Payment Link、Live Website Approval 与 CSP 前提；实际 Live Origin 完成一次不付款的 Checkout 打开测试并保留 Paddle Origin/初始化错误；
 - [ ] owner/admin 通过 POST draft Sandbox Offer 验证配置创建短期一次性验证令牌，并由 Admin 内部 Paddle.js 调用运行真实 Checkout；验证 License 固定不可激活，accepted Delivery 成功后才能形成完成证据，Live Offer 可复用同产品/方案/购买类型的 Sandbox 闭环证据；
 - [ ] 参考产品页和 Admin 验证都只打开一个 Price、数量 1；服务端仍以已验签 Webhook 独立校验，不信任前端参数；
 - [ ] 原始请求签名验证；
@@ -174,7 +174,7 @@
 ### Phase 6：管理体验与发布准备
 
 - [ ] 管理控制台使用新命名和新 API；
-- [ ] 客户授权中心页面与 Customer API 对齐；
+- [ ] Customer Site 接入文档与 Customer API 对齐；
 - [ ] 配置健康检查；
 - [ ] System Issue 列表、详情、去重重开、修复验证、关联 Event 恢复预览和审计；
 - [ ] 失败事件重放和 Delivery retry；

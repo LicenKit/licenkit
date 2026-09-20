@@ -32,7 +32,7 @@
 11. 自动重试复用同一个投递消息；人工“再次发送注册码”执行注册码轮换并创建新的投递消息。
 12. V1 不使用 Cloudflare Queues。D1 中的入站事件和 Delivery 是任务事实来源，Scheduled Worker 负责重试和崩溃恢复。
 13. V1 允许重新设计数据表和迁移，不承担旧原型数据兼容。
-14. V1 提供 Customer Portal（客户授权中心），购买者使用 Magic Link 登录，不提供自主注册、密码和找回密码流程。
+14. V1 提供 Customer Portal 所需的 Customer API，购买者使用 Magic Link 建立 Session；LicenKit 不提供 Portal 前端，也不提供自主注册、密码和找回密码流程。
 15. Customer 由支付履约或人工签发自动创建；管理员 User 与 Customer 是两套独立身份。
 16. 客户可以查看自己的 License、释放设备席位、找回注册码和执行安全重置，但不能自行暂停、吊销或修改 License Terms。
 17. 支付方式、自动续费和取消由支付平台托管页面处理；LicenKit 只创建跳转会话，并以支付 Webhook 作为订阅状态的最终来源。
@@ -73,7 +73,7 @@
 | [07-delivery-plan.md](./zh-CN/07-delivery-plan.md) | 当前已知差距、开发顺序和完成条件 |
 | [08-development-and-operations.md](./zh-CN/08-development-and-operations.md) | 本地开发、配置和运行检查 |
 | [09-static-product-page.md](./zh-CN/09-static-product-page.md) | 静态产品页如何直接使用 Paddle.js，并由 LicenKit Webhook 完成可信履约 |
-| [10-reference-customer-site.md](./zh-CN/10-reference-customer-site.md) | 如何复制参考 Site，并与 LicenKit 保持同源但独立部署 |
+| [10-customer-site-integration.md](./zh-CN/10-customer-site-integration.md) | 使用方站点需要实现哪些页面，以及可调用哪些 Customer API |
 
 ## 推荐的 V1 运行默认值
 

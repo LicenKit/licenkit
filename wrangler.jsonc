@@ -1,7 +1,7 @@
 {
-  "$schema": "../apps/server/node_modules/wrangler/config-schema.json",
+  "$schema": "./apps/server/node_modules/wrangler/config-schema.json",
   "name": "licenkit-server",
-  "main": "../apps/server/src/index.ts",
+  "main": "./apps/server/src/index.ts",
   "compatibility_date": "2024-11-01",
   "compatibility_flags": [
     "nodejs_compat"
@@ -11,7 +11,7 @@
       "binding": "DB",
       "database_name": "licenkit-db",
       "database_id": "licenkit-d1-placeholder",
-      "migrations_dir": "../apps/server/drizzle"
+      "migrations_dir": "./apps/server/drizzle"
     }
   ],
   "vars": {
@@ -24,7 +24,7 @@
     "crons": ["* * * * *"]
   },
   "assets": {
-    "directory": "../dist",
+    "directory": "./dist",
     "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "none"

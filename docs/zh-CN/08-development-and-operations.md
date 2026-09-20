@@ -7,10 +7,7 @@ licenkit/
 ├── apps/server             # Hono + Cloudflare Workers + D1 + Drizzle
 ├── apps/admin              # React + Vite 管理控制台
 ├── apps/cli                # 命令行客户端
-├── examples/customer-site  # 产品购买、Magic Link 与客户自助管理参考实现
-├── custom_template/
-│   └── wrangler.jsonc      # 完整的默认 Worker 配置
-├── custom                  # 使用者自有 Worker 配置；上游保持为空
+├── wrangler.jsonc          # 当前实例的 Cloudflare Worker 配置
 ├── dist/admin              # LicenKit Admin 部署产物
 └── docs                    # V1 设计合同
 ```
@@ -27,24 +24,13 @@ pnpm test
 pnpm build
 ```
 
-`pnpm dev` 只启动 Server 与 Admin；`build`、`typecheck`、`test` 和 `deploy` 也不包含参考站点。参考实现使用独立命令：
-
-```bash
-pnpm example:site:dev
-pnpm example:site:typecheck
-pnpm example:site:test
-pnpm example:site:build
-```
+`pnpm dev` 只启动 Server 与 Admin；`build`、`typecheck`、`test` 和 `deploy` 不包含产品官网、Magic Link 页面或 Customer Portal。仓库不保存这些页面的示例前端源码。
 
 具体脚本以根目录 `package.json` 为准。重新生成 V1 migration 前，不对旧原型数据库执行兼容迁移。
 
-Wrangler 配置使用完整文件二选一，不执行自动合并：
+根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源。使用者 fork 仓库后直接修改数据库 ID、变量、环境与触发器；开发、迁移、构建和部署都读取同一文件，不选择或合并模板与覆盖配置。Secrets 仍通过 Wrangler Secret 管理，不写入该文件。
 
-1. `custom/wrangler.jsonc` 存在时，Worker 开发、迁移、构建和部署使用该文件；否则使用 `custom_template/wrangler.jsonc`。
-2. 每条 Wrangler 命令都会输出最终选择路径。`custom` 由使用者维护，LicenKit 上游只更新 `custom_template`。
-3. `custom_template/wrangler.jsonc` 是完整可复制配置，不是待合并片段。复制到 `custom/wrangler.jsonc` 后，使用者负责数据库 ID、变量、环境和后续模板差异。
-
-Admin 固定构建到 `dist/admin`，Worker 只在 `/admin` 路径读取静态资产；其他非 API、非 Admin 路径返回 404，根路径重定向到 `/admin/`。`examples/customer-site` 构建到自身 `dist`，不会写入 LicenKit 的生产 `dist`。
+Admin 固定构建到 `dist/admin`，Worker 只在 `/admin` 路径读取静态资产；其他非 API、非 Admin 路径返回 404，根路径重定向到 `/admin/`。
 
 Setup 时必须显式填写产品站与 Customer Portal 的 `siteUrl`，服务端用它生成邮件中的 Magic Link。当前 `siteUrl` 与 `appUrl` 必须同源；产品页只连接 Paddle，Magic Link 与 Customer Portal 通过同源 `/api/v1` 调用 LicenKit。LicenKit 不负责部署这些页面。
 

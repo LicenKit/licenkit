@@ -130,7 +130,7 @@ LicenKit 不包含 Resend、SMTP 或特定邮件服务商客户端。Magic Link 
 
 该模块不提供自主注册、密码登录或管理员能力。它调用 License、Activation 和 Billing 模块完成领域动作，不直接跨表拼装新的状态机。
 
-Customer Portal 属于使用方 Site。LicenKit 只在 `examples/customer-site` 保存参考实现，不把它加入生产构建或 Worker 静态资产；管理控制台位于 `apps/admin`，并由 LicenKit Worker 的 `/admin` 路径发布。Setup 显式保存 `siteUrl`，用于生成邮件中的 Magic Link；当前 `siteUrl` 与 `appUrl` 必须同源。Customer 页面通过同源 `/api/v1` 使用 Customer Session 和 API，不增加第二套服务端状态机。
+Customer Portal 属于使用方 Site。LicenKit 不提供 Portal、Magic Link 或产品官网的前端实现，也不把这些页面加入生产构建或 Worker 静态资产；管理控制台位于 `apps/admin`，并由 LicenKit Worker 的 `/admin` 路径发布。Setup 显式保存 `siteUrl`，用于生成邮件中的 Magic Link；当前 `siteUrl` 与 `appUrl` 必须同源。使用方页面通过同源 `/api/v1` 使用 Customer Session 和 API，不增加第二套服务端状态机。
 
 ### M08 管理控制台
 
