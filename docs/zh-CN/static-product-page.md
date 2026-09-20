@@ -1,4 +1,4 @@
-# 静态产品页与 Paddle Checkout 合同
+# 静态产品页与 Paddle Checkout
 
 ## 1. 目标与边界
 

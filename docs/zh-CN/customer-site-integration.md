@@ -103,4 +103,4 @@ Cookie 鉴权写操作必须把 CSRF Cookie 原值放入 `X-CSRF-Token` Header�
 
 LicenKit 不提供 Public Checkout API 或 Web Checkout SDK。产品页静态维护 Paddle Client-side Token、环境和 Price ID，直接调用 Paddle.js。Client-side Token 和 Price ID 可以公开；Paddle API Key、Webhook Secret、Notification Gateway Secret 和验证令牌不能进入前端。
 
-浏览器 Checkout 完成事件只用于页面反馈。只有 Paddle 已验签并持久化的 Webhook 可以创建或更新 Customer、License、Subscription 和通知 Delivery。详细合同见[静态产品页与 Paddle Checkout 合同](./09-static-product-page.md)。
+浏览器 Checkout 完成事件只用于页面反馈。只有 Paddle 已验签并持久化的 Webhook 可以创建或更新 Customer、License、Subscription 和通知 Delivery。详细规则见[静态产品页与 Paddle Checkout](./static-product-page.md)。

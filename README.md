@@ -39,7 +39,7 @@ apps/server             Hono + Cloudflare Workers API
 apps/admin              React 管理控制台
 apps/cli                命令行客户端
 wrangler.jsonc          当前实例的 Cloudflare Worker 配置
-docs                    产品、架构、数据模型和接口文档
+docs                    使用者文档、维护者参考与过程记录
 ```
 
 Swift SDK 位于同级独立仓库 `licenkit-sdk-swift`。
@@ -74,13 +74,13 @@ Setup 要求显式填写 `siteUrl`，用于生成邮件中的 Magic Link；当�
 
 根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源。fork 仓库后直接修改数据库 ID、变量和环境配置；开发、迁移、构建与部署不会再从其他目录选择或合并配置。
 
-`dist` 只包含 LicenKit Admin 的部署资产。使用方需要实现的页面、Customer API 和安全合同见[Customer Site 接入清单](./docs/zh-CN/10-customer-site-integration.md)。
+`dist` 只包含 LicenKit Admin 的部署资产。使用方需要实现的页面、Customer API 和安全合同见[Customer Site 接入清单](./docs/zh-CN/customer-site-integration.md)。
 
 测试与正式环境使用相同模块和调用流程，只替换资源地址、Secret 和支付平台环境等配置。
 
 ## 文档
 
-从 [文档入口](./docs/README.md) 开始阅读。目标数据结构见 [schema.sql](./docs/schemas/schema.sql)。
+从 [文档入口](./docs/README.md) 开始阅读。
 
 ## 当前状态
 

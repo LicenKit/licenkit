@@ -14,7 +14,7 @@ V1 不迁移旧原型数据，允许重新生成初始迁移。数据模型优�
 - 单个任务错误与需要管理员处理的共享系统问题分层保存，且能追溯两者关联；
 - 所有检索可以通过数据库条件和索引完成。
 
-目标 DDL 见 [`docs/schemas/schema.sql`](../schemas/schema.sql)。DDL 是领域结构草案，实际 Drizzle Schema 应表达相同约束。
+目标 DDL 见 [`schema.sql`](../schema.sql)。DDL 是领域结构草案，实际 Drizzle Schema 应表达相同约束。
 
 ## 2. 关系总览
 

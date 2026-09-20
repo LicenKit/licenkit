@@ -1,4 +1,4 @@
-# 开发、配置与运行
+# 实现验证与发布检查
 
 ## 1. 当前工程
 
@@ -123,7 +123,7 @@ LicenKit Cloud 不属于 V1。代码只保留内部 Account Provisioning 接口�
 由于 V1 没有旧数据兼容要求：
 
 1. 先完成 `schema.ts`；
-2. 对照 [`04-data-model.md`](./04-data-model.md) 和 [`schema.sql`](../schemas/schema.sql) 复核；
+2. 对照[数据模型](./data-model.md)和 [`schema.sql`](../schema.sql) 复核；
 3. 删除旧原型 migration；
 4. 生成一个新的 V1 初始 migration；
 5. 在全新本地 D1 执行 migration；

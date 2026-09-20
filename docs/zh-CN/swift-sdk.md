@@ -1,4 +1,4 @@
-# Swift SDK 合同
+# Swift SDK 集成
 
 ## 1. 目标
 
@@ -6,7 +6,7 @@ Swift SDK 为 macOS App 提供统一的在线激活和在线校验接口，同�
 
 SDK 不决定商业权益，不自行延长 License，也不把网络失败转换成服务端确认有效。
 
-本文只定义安装到被授权 App 内的 License SDK。产品网站直接使用 Paddle.js，不提供 LicenKit Web Checkout SDK；静态产品页边界见 [`09-static-product-page.md`](./09-static-product-page.md)。浏览器 Checkout 回调不能替代 License API 或支付 Webhook。
+本文只定义安装到被授权 App 内的 License SDK。产品网站直接使用 Paddle.js，不提供 LicenKit Web Checkout SDK；静态产品页边界见[静态产品页与 Paddle Checkout](./static-product-page.md)。浏览器 Checkout 回调不能替代 License API 或支付 Webhook。
 
 ## 2. 配置
 
@@ -241,7 +241,7 @@ Token 使用紧凑 JWS，Header 必须同时满足 `alg=EdDSA`、专用 `typ=lic
 
 密钥标记为 revoked 只能阻止服务端继续签发和在线刷新。已完全离线的客户端无法即时获知撤销，仍可能在旧 Token 的 `exp` 前接受旧签名；缩短该风险窗口依赖合理 Token TTL，或随可信 App 更新发布撤销后的信任根。文档和 UI 不能宣称服务端撤销会瞬间影响离线设备。
 
-## 12. 完成条件
+## 12. 集成验收
 
 SDK 对齐完成需要同时证明：
 
