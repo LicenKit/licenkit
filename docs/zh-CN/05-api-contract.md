@@ -4,14 +4,13 @@
 
 本文档定义接口边界和关键语义，不冻结所有字段。开发阶段可以补充分页和展示字段，但不得改变领域不变量。
 
-接口分为七组：
+接口分为六组：
 
 | 接口 | 调用方 | 鉴权 |
 | --- | --- | --- |
 | Initial Setup API | 独立部署首次安装 | `INITIAL_SETUP_TOKEN`，且数据库必须未初始化 |
 | Admin API | 管理控制台和自动化工具 | 管理员 Session |
 | Customer Portal API | 客户授权中心 | Magic Link 与 Customer Session |
-| Public Checkout API | 参考产品页和用户自定义产品页 | 无鉴权，只返回公开且经过就绪过滤的配置 |
 | Client API | 集成 LicenKit SDK 的 App | 注册码或机器令牌 |
 | Payment Inbound Webhook | 支付平台 | 渠道原始请求签名 |
 | Outbound Webhook | LicenKit 主动调用客户系统 | LicenKit HMAC 签名 |
@@ -62,6 +61,7 @@ Setup 页面至少包含实例/初始 Account 名称，以及管理员姓名、�
 {
   "setupToken": "one-time-secret-from-deployment",
   "instanceName": "Example Studio Licensing",
+  "siteUrl": "https://licenses.example.com",
   "accountSlug": "example-studio",
   "owner": {
     "name": "Alex",
@@ -71,7 +71,7 @@ Setup 页面至少包含实例/初始 Account 名称，以及管理员姓名、�
 }
 ```
 
-`setupToken` 与部署 Secret `INITIAL_SETUP_TOKEN` 常量时间比较，不进入 URL、日志、审计详情或错误回显。管理员密码执行与正常登录一致的长度校验和密码 KDF，只保存 Hash。接口验证精确同源；来源流量限制由部署时配置的 Cloudflare Zone 级 WAF Rate Limiting Rule 承担，应用不保存通用限流计数。服务端只有在 `system_settings`、Account 和 User 均为空时，才通过一个 D1 原子批次创建 `system_settings(id='current')`、首个 Account、首位 `owner` User 和管理员 Session。
+`setupToken` 与部署 Secret `INITIAL_SETUP_TOKEN` 常量时间比较，不进入 URL、日志、审计详情或错误回显。管理员密码执行与正常登录一致的长度校验和密码 KDF，只保存 Hash。`appUrl` 取当前 Setup 请求的 Origin；`siteUrl` 由部署者显式填写，供邮件 Magic Link 和 Turnstile hostname 使用，当前必须与 `appUrl` 同源，且不能包含 credentials、query 或 fragment。Admin 地址固定由 `appUrl + /admin/` 派生，API 地址固定由 `appUrl + /api/v1` 派生，均不接受独立配置。接口验证精确同源；来源流量限制由部署时配置的 Cloudflare Zone 级 WAF Rate Limiting Rule 承担，应用不保存通用限流计数。服务端只有在 `system_settings`、Account 和 User 均为空时，才通过一个 D1 原子批次创建 `system_settings(id='current')`、首个 Account、首位 `owner` User 和管理员 Session。
 
 并发请求只能有一个成功；唯一约束失败不得留下半初始化数据。成功响应设置管理员 Session Cookie。初始化完成后，GET 返回 `initialized=true`，POST 固定返回 `SETUP_ALREADY_COMPLETED`，即使环境中仍保留 Setup Secret 也不能再次初始化。V1 不暴露创建第二个 Account 的公开或管理 API；未来 Cloud 只复用内部 Account Provisioning 边界。
 
@@ -147,7 +147,7 @@ Product 可以配置一组 V1 无需支付方式的设备试用规则：
 }
 ```
 
-`slug` 在当前 Account 内唯一，只接受规范化的小写 URL-safe 值，用于公开 Checkout URL。`billingEnvironment` 可为 `sandbox|live|null`：`null` 表示不开放公开支付销售；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。启用试用时 `durationSeconds` 必须显式提供正整数；V1 不使用隐式全局试用天数。修改 Product 的试用时长或功能只影响之后领取的 Trial Claim。
+`slug` 在当前 Account 内唯一，只接受规范化的小写 URL-safe 值，用于管理端识别和自定义页面路由。`billingEnvironment` 可为 `sandbox|live|null`：`null` 表示普通支付事件不能签发正式 License；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。启用试用时 `durationSeconds` 必须显式提供正整数；V1 不使用隐式全局试用天数。修改 Product 的试用时长或功能只影响之后领取的 Trial Claim。
 
 Trial Claim 查询和吊销只允许 owner/admin，并在持久层同时限定当前 `account_id + product_id + trial_id`。吊销请求必须提交非空 `reason`；操作幂等地写入 `revoked_at`、原因和管理员审计，不删除领取历史，也不允许通过“编辑到期时间”重置试用。Product 归档只阻止新领取，不隐式吊销已有 Claim。
 
@@ -389,25 +389,32 @@ POST   /api/v1/admin/billing/offers/:offerId/archive
 }
 ```
 
-创建响应的 `status` 固定为 `draft`。Offer 只有在 Billing Provider 环境等于 Product `billingEnvironment` 时才允许激活；不同环境的 draft Sandbox Offer 仍可用于管理员闭环验证，但不能进入公开 Checkout。
+创建响应的 `status` 固定为 `draft`。Offer 只有在 Billing Provider 环境等于 Product `billingEnvironment` 时才允许激活；不同环境的 draft Sandbox Offer 仍可用于管理员闭环验证，但不能签发正式 License。
 
 PATCH 只允许修改尚无 Checkout Verification 的 draft Offer。只要存在任一验证尝试，Provider、Price、Product、Plan 和 `purchaseType` 即被锁定；需要改变映射时归档旧 Offer 并创建新 Offer，不能让旧验证证据跟随到新权益。
 
-`verification-config` 使用 POST，因为每次调用都会创建一条短期、一次性的 Checkout Verification。它只允许 owner/admin 针对 draft Sandbox Offer 调用，响应设置 `Cache-Control: no-store`，返回与公开 Checkout 相同的 Product/Offer/Provider 配置，并额外包含：
+`verification-config` 使用 POST，因为每次调用都会创建一条短期、一次性的 Checkout Verification。它只允许 owner/admin 针对 draft Sandbox Offer 调用，响应设置 `Cache-Control: no-store`，并只返回打开这一次 Sandbox Checkout 所需的配置：
 
 ```json
 {
   "verificationMode": true,
   "verificationToken": "vfy_一次性高熵随机值",
-  "expiresAt": "2026-09-19T10:15:00Z"
+  "expiresAt": "2026-09-19T10:15:00Z",
+  "checkout": {
+    "provider": "paddle",
+    "environment": "sandbox",
+    "clientSideToken": "test_...",
+    "priceId": "pri_01...",
+    "quantity": 1
+  }
 }
 ```
 
-服务端只保存 `verificationToken` 哈希；管理控制台不得写入日志、localStorage、分析事件或 URL。该 POST 还必须通过管理员 Session 权限、精确 Origin 和双提交 CSRF 校验。Web Checkout SDK 的受限验证入口把令牌附加为 `custom_data.licenkit_checkout_verification`，调用方不能另行传入任意 custom data。该接口不允许 Live Offer、不公开到无鉴权路由，也不绕过一个 Price、数量 1、Webhook、Customer 解析、Fulfillment 或 Notification Gateway。令牌的权限只是在完全匹配的 Sandbox 交易中生成一条永久不可激活的验证 License，不授予正式权益。
+服务端只保存 `verificationToken` 哈希；管理控制台不得写入日志、localStorage、分析事件或 URL。该 POST 还必须通过管理员 Session 权限、精确 Origin 和双提交 CSRF 校验。Admin 内部 Paddle.js 调用把令牌附加为 `custom_data.licenkit_checkout_verification`，调用方不能另行传入任意 custom data。该接口不允许 Live Offer、不公开到无鉴权路由，也不绕过一个 Price、数量 1、Webhook、Customer 解析、Fulfillment 或 Notification Gateway。令牌的权限只是在完全匹配的 Sandbox 交易中生成一条永久不可激活的验证 License，不授予正式权益。
 
 `activate` 不接受调用方传入 `ready=true`；服务端实时执行 Checkout Readiness 检查并返回每项状态。至少包括 Product/Plan/Provider、Provider 环境等于 Product `billingEnvironment`、Client-side Token 的环境标识与 Provider 匹配、当前 Provider 配置更新时间之后最小 Paddle 事件合同中每一种事件的成功验签证据（通常由官方模拟器触发）、Notification Gateway 的 active 状态和当前配置之后的 accepted Endpoint Test、D1 `system_settings` 中未超过阈值的 Scheduled Worker 最近成功事实、`signed` 模式密钥，以及同一 Account、Product、License Plan 与 `purchaseType` 的 `billing_checkout_verifications.status=completed` 真实 Sandbox 证据。Sandbox Offer 通过 `verification-config` 产生该证据；Live Offer 可以复用对应 Sandbox 闭环证据，不执行真实扣款验证。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和管理端可见的具体检查项，不改变 Offer 状态。
 
-PricePreview 不属于服务端 Offer 激活门禁，也不保存为 Readiness 证据。它由公开 Checkout SDK 使用本次配置中的 Client-side Token 和 Price 在当前页面实时执行；成功后才允许启用购买和调用 `open()`，失败时保留 Paddle 原始错误并阻断当前购买。一次 Preview 成功不能证明未来页面、Origin 或 Paddle 状态仍然可用。服务端支付履约继续只信任已验签 Webhook，并精确校验 Offer、Price、数量、环境和 Customer 合同。
+PricePreview 不属于服务端 Offer 激活门禁，也不保存为 Readiness 证据。静态产品页可以直接显示源码中的价格，也可以自行调用 Paddle PricePreview；一次 Preview 成功不能证明未来页面、Origin 或 Paddle 状态仍然可用。服务端支付履约继续只信任已验签 Webhook，并精确校验 Offer、Price、数量、环境和 Customer 合同。
 
 若 Paddle recurring price 配置了免费试用，V1 只支持要求 Checkout 预先收集支付方式的免费试用。试用天数和下一扣款时间以已验签 Paddle Subscription 为准，不复制到 Offer 或 Product Trial 配置；Offer 仍只负责把外部 Price 映射到 `subscription` License Plan。
 
@@ -549,7 +556,7 @@ POST /api/v1/customer/auth/magic-link
 }
 ```
 
-`turnstileToken` 最长 2048 字符。Worker 必须调用 Cloudflare Siteverify，并校验 `success=true`、`action=customer_magic_link`、返回 hostname 与 `system_settings.app_url` 的 hostname 一致。Turnstile Token 五分钟过期且只能验证一次；服务端对同一次 Siteverify 的短暂重试使用相同 idempotency key。缺失、无效、重复、过期、action/hostname 不匹配或无法确认时，在查询 Customer 前 fail-closed；Token、Secret 和完整 Siteverify 响应不进入日志、审计或 D1。
+`turnstileToken` 最长 2048 字符。Worker 必须调用 Cloudflare Siteverify，并校验 `success=true`、`action=customer_magic_link`、返回 hostname 与 `system_settings.site_url` 的 hostname 一致。Turnstile Token 五分钟过期且只能验证一次；服务端对同一次 Siteverify 的短暂重试使用相同 idempotency key。缺失、无效、重复、过期、action/hostname 不匹配或无法确认时，在查询 Customer 前 fail-closed；Token、Secret 和完整 Siteverify 响应不进入日志、审计或 D1。
 
 Siteverify 通过后、查询邮箱前，服务端先解析 Magic Link TTL/冷却配置，并对当前 Account 已通过 Endpoint Test 的 Notification Gateway 解密检查其签名 Secret。共享配置错误因此不会只在“邮箱存在”分支暴露；同一 Account 下已知和未知邮箱得到相同的失败边界。未配置或尚未通过测试的 Gateway 不是公开错误，后续只会为真实 Customer 创建 `blocked_configuration` Delivery。
 
@@ -655,70 +662,13 @@ POST /api/v1/customer/licenses/:licenseId/subscription/portal-session
 
 该接口只适用于 `renewal_mode=billing`。手动订阅返回 `BILLING_SUBSCRIPTION_NOT_MANAGED`；永久或固定期限 License 返回资源不支持该操作。缺少服务端 API 凭证、外部 Customer ID 或 provider 不支持客户门户时返回明确配置错误，例如 `BILLING_CUSTOMER_PORTAL_NOT_CONFIGURED` 或 `BILLING_CUSTOMER_PORTAL_UNSUPPORTED`，并在内部保留 provider 原始错误。
 
-## 6. Public Checkout API
+## 6. 静态产品页不属于 LicenKit API
 
-```text
-GET /api/v1/public/accounts/:accountSlug/products/:productSlug/checkout
-```
+LicenKit 不提供 Public Checkout API。参考产品页和用户自定义产品页静态维护产品、方案、展示价格、Paddle 环境、Client-side Token 与 Price ID，并直接调用 Paddle.js。Price ID 同时写入 Admin 的 Offer Mapping，服务端在已验签 Webhook 中以 `account_id + billing_provider_id + external_price_id` 关联 Product 与 License Plan。
 
-该接口无鉴权、无 Cookie，供任意来源的参考产品页或用户自定义产品页读取。响应允许 `Access-Control-Allow-Origin: *`，禁止 credentials，并设置 `Cache-Control: no-store`，避免关键依赖失效后浏览器继续使用旧的可购买配置。
+浏览器成功回调和成功 URL 都不能触发履约。静态页面可能在 LicenKit 暂时不可用、Offer 已归档或通知链路故障时继续打开 Paddle Checkout；因此入站事件必须先持久化，映射或依赖不满足时保留原始事实并进入 `pending`、`blocked_configuration` 或 `needs_attention`，不得吞掉付款或猜测授权。
 
-可购买响应示例：
-
-```json
-{
-  "success": true,
-  "data": {
-    "product": {
-      "slug": "example-app",
-      "name": "Example App",
-      "description": "A focused desktop tool"
-    },
-    "checkout": {
-      "available": true,
-      "provider": "paddle",
-      "environment": "sandbox",
-      "clientSideToken": "test_..."
-    },
-    "offers": [
-      {
-        "id": "off_01...",
-        "name": "Pro Annual",
-        "purchaseType": "subscription",
-        "priceId": "pri_01...",
-        "quantity": 1
-      }
-    ]
-  }
-}
-```
-
-公开字段只有 Product 展示信息、Product `billingEnvironment` 对应的 active Offer 展示信息、Provider 类型与环境、Client-side Token、Price ID 和固定数量。服务端不得混合返回 Sandbox 与 Live Offer。API Key、Webhook Secret、Provider 内部 ID、Notification Gateway URL/Secret、内部事件、邮箱、验证令牌、测试证据和详细错误不得进入响应。`offerId` 是 SDK 接受的购买选择器；SDK 不接受调用方直接传入 `priceId` 或 `quantity`。
-
-服务端每次读取当前状态并执行 Checkout Readiness。不可购买仍返回成功的配置查询，但不返回 Client-side Token 或 Price ID：
-
-```json
-{
-  "success": true,
-  "data": {
-    "product": {
-      "slug": "example-app",
-      "name": "Example App"
-    },
-    "checkout": {
-      "available": false,
-      "reasonCodes": ["CHECKOUT_NOTIFICATION_UNAVAILABLE"]
-    },
-    "offers": []
-  }
-}
-```
-
-公开原因码只表达调用方可采取的安全动作，例如 `PRODUCT_UNAVAILABLE`、`PRODUCT_BILLING_ENVIRONMENT_NOT_CONFIGURED`、`NO_ACTIVE_OFFER`、`CHECKOUT_PROVIDER_UNAVAILABLE`、`CHECKOUT_NOTIFICATION_UNAVAILABLE`、`CHECKOUT_PROCESSING_UNAVAILABLE` 或 `CHECKOUT_CONFIGURATION_PENDING`。完整失败项只在 Admin API 中返回。Product 不存在仍使用普通 404，不能通过 unavailable 响应泄露其他账户资源。
-
-公开 API 只决定“官方页面现在是否允许打开 Checkout”，不是支付结果查询。浏览器成功回调、成功 URL 或公开 API 响应都不能触发履约；发码只由第 8 节的已验签事件推进。
-
-`available=true` 只证明 LicenKit 共享依赖与所选 Provider/Offer 就绪，不证明调用该 API 的任意外部页面 Origin 已通过 Paddle Website Approval。Sandbox 与 Live 必须分别设置 Default Payment Link，Live 自定义产品页必须在实际 Origin 运行 Paddle.js 打开测试；Origin/Default Payment Link 错误由 SDK 保留 Paddle 原始错误并 fail-fast，不得误报为服务端支付失败。
+Paddle Client-side Token 与 Price ID 可以进入前端；API Key、Webhook Secret、Notification Gateway Secret、验证令牌和内部诊断不得进入静态页面。Sandbox 与 Live 必须分别设置 Default Payment Link，Live 产品页必须为实际 Origin 完成 Website Approval 和打开测试。
 
 ## 7. Client API
 

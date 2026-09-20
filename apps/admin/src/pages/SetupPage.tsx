@@ -6,6 +6,7 @@ import { Button, ErrorPanel, Field, Input, Notice } from "../components/ui";
 export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminSession) => void }) {
   const [setupToken, setSetupToken] = useState("");
   const [instanceName, setInstanceName] = useState("");
+  const [siteUrl, setSiteUrl] = useState(() => window.location.origin);
   const [accountSlug, setAccountSlug] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
@@ -21,6 +22,7 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
       const result = await api.setup.complete({
         setupToken,
         instanceName: instanceName.trim(),
+        siteUrl: siteUrl.trim(),
         accountSlug: accountSlug.trim(),
         owner: { name: ownerName.trim(), email: ownerEmail.trim(), password },
       });
@@ -57,6 +59,7 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
             <Field label="实例名称"><Input value={instanceName} onChange={(event) => setInstanceName(event.target.value)} placeholder="Example Studio Licensing" required /></Field>
             <Field label="账户 slug" hint="小写 URL-safe，例如 example-studio"><Input value={accountSlug} onChange={(event) => setAccountSlug(event.target.value.toLowerCase())} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="example-studio" required /></Field>
           </div>
+          <Field label="Site URL" hint="产品站与 Customer Portal 的基础地址；当前必须与本页面同源"><Input type="url" value={siteUrl} onChange={(event) => setSiteUrl(event.target.value)} placeholder="https://licenses.example.com" required /></Field>
         </div>
         <div className="form-section">
           <div className="form-section-title"><UserRound className="size-5" /><div><h2>首位 Owner</h2><p>Owner 可管理账户、团队和全部业务资源。</p></div></div>

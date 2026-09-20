@@ -6,7 +6,6 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const commands = [
   ["pnpm", ["--filter", "@licenkit/server", "run", "dev"]],
   ["pnpm", ["--filter", "@licenkit/admin", "run", "dev"]],
-  [process.execPath, ["scripts/run-site.mjs", "dev"]],
 ];
 const children = commands.map(([command, args]) => spawn(command, args, {
   cwd: repoRoot,

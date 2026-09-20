@@ -36,9 +36,9 @@ Customer 与管理员 User 是两套独立身份：Customer 不能登录管理�
 
 ### 2.3 Product（产品）
 
-被授权的软件。产品拥有账户内唯一、可公开的 `slug`，用于稳定定位公开 Checkout 配置；同时拥有客户端标识和签名密钥，但不直接定义售卖权益。修改产品名称不改变 `slug`，修改 `slug` 属于会使既有产品页 URL 失效的显式操作。
+被授权的软件。产品拥有账户内唯一的 `slug`，用于管理端识别和自定义页面路由；同时拥有客户端标识和签名密钥，但不直接定义售卖权益。修改产品名称不改变 `slug`。
 
-Product 的 `billing_environment` 选择唯一的公开收款环境：`sandbox`、`live` 或未配置。未配置时只能人工/API 签发，公开 Checkout 不可用；已配置时，公开配置只返回相同环境的 active Offer，普通支付也只能从相同环境签发可用 License。若已经存在 active Offer 或非验证用途的支付 License，V1 不允许切换该字段，避免测试和正式授权在同一个 Product 中失去边界。
+Product 的 `billing_environment` 选择唯一的正式支付履约环境：`sandbox`、`live` 或未配置。未配置时只能人工/API 签发；已配置时，普通支付只有命中相同环境的 active Offer 才能签发可用 License。若已经存在 active Offer 或非验证用途的支付 License，V1 不允许切换该字段，避免测试和正式授权在同一个 Product 中失去边界。
 
 ### 2.4 Product Release（产品发布记录）
 
@@ -214,7 +214,7 @@ V1 不开放 Customer 自助修改登录邮箱，由管理员执行并吊销旧 
 
 支付方式、自动续费、取消和账单资料由支付平台托管页面负责。LicenKit 可以通过支付 Adapter 创建短期客户门户会话，但不能通过修改本地 Subscription 字段冒充支付平台操作成功；最终状态仍以支付 Webhook 为准。
 
-Paddle 是 V1 首个且必须完成真实 Sandbox 联调的 Billing Adapter。Paddle Provider 的基础购买闭环必须配置 Client-side Token 和 Webhook Secret：前者是 Paddle 明确设计为公开给 Paddle.js 的受限凭证，后者只用于验证 Paddle 发来的入站请求。Paddle API Key 是可选的服务端 Secret；启用 Customer 读穿或定期对账时需要 `customer.read`，启用托管客户门户时需要 `customer_portal_session.write`。API Key 不能进入公开 Checkout API、浏览器 SDK 或通知接收方。没有 API Key 时，正常购买履约依靠 Customer 与购买 Webhook 收敛，不得退回使用前端邮箱。其他支付平台仍复用相同领域边界，但不属于首发完成条件；V1 API 不接受尚未实现的 provider 值。
+Paddle 是 V1 首个且必须完成真实 Sandbox 联调的 Billing Adapter。Paddle Provider 的基础购买闭环必须配置 Client-side Token 和 Webhook Secret：前者是 Paddle 明确设计为公开给 Paddle.js 的受限凭证，后者只用于验证 Paddle 发来的入站请求。Paddle API Key 是可选的服务端 Secret；启用 Customer 读穿或定期对账时需要 `customer.read`，启用托管客户门户时需要 `customer_portal_session.write`。API Key 不能进入产品页或通知接收方。没有 API Key 时，正常购买履约依靠 Customer 与购买 Webhook 收敛，不得退回使用前端邮箱。其他支付平台仍复用相同领域边界，但不属于首发完成条件；V1 API 不接受尚未实现的 provider 值。
 
 V1 允许同一 Account 配置不同支付平台，并把 sandbox/live 视为独立 Provider 连接；但同一 `account + provider + environment` 只允许一条连接。Provider 的平台和环境创建后不可修改，因为原有 Customer、Transaction、Subscription 和事件 ID 都属于这条连接；切换环境必须创建另一条 Provider。也就是说，未来可以同时配置 Paddle Live 和 Stripe Live，但 V1 不支持同一 Account 同时连接两个 Paddle Live 商户。若以后出现该需求，应给 Billing Provider 增加明确的连接标识，而不是改变 Billing Customer 的映射语义。
 
@@ -290,10 +290,10 @@ System Issue 表示需要管理员处理、并可能同时影响多条任务的�
 29. Paddle 免费订阅试用使用正常 Billing Subscription 与 License；Trial Claim 只表示无需支付方式的 Product/设备级试用，两者的 Token、期限和状态不能互换。
 30. 支付签发必须先通过 `billing_provider_id + external_customer_id` 解析到同账户 LicenKit Customer；不得使用 Transaction `custom_data.email`、占位邮箱或未经支付平台 Customer 实体确认的客户端字段创建 Customer。
 31. Billing Customer 一旦链接到 LicenKit Customer，后续 provider 邮箱变化不能自动改绑或自动修改 Customer 邮箱；不一致时阻塞新签发并要求管理员确认，但不阻断既有订阅对原 License 的续期。
-32. 普通 Checkout 只能提交一个 active Offer 的 Price，数量固定为 1；验签事件中的交易项目不满足该结构时进入 `needs_attention`，不得选择第一项或按总金额猜测授权。draft Sandbox Offer 只允许第 36 条定义的管理员验证例外。
-33. Web Checkout SDK、参考产品页和用户自定义产品页使用同一个公开配置合同；公开响应只能包含 Product/Offer 展示信息、环境、Client-side Token、Price ID 和安全状态码，不能包含 Webhook Secret、API Key、通知地址或内部错误细节。
+32. 普通支付履约只接受一个 active Offer 的 Price，数量固定为 1；验签事件中的交易项目不满足该结构时进入 `needs_attention`，不得选择第一项或按总金额猜测授权。draft Sandbox Offer 只允许第 36 条定义的管理员验证例外。
+33. 参考产品页和用户自定义产品页静态维护展示内容、Client-side Token 与 Price ID，并直接调用 Paddle.js；Webhook Secret、API Key、通知地址和内部错误细节不能进入前端。
 34. 浏览器的 Checkout 完成事件和成功跳转只表示界面流程完成，不能作为创建 Customer、License、Subscription 或 Delivery 的事实来源；只有已验签并持久化的支付事件可以履约。
-35. Offer 激活是收款门禁：Notification Gateway、最小 Paddle 事件合同、调度器、需要的签名密钥和真实 Sandbox 端到端验收未通过时不能激活；运行期关键依赖失效时公开 Checkout 配置立即变为不可购买。
+35. Offer 激活是 LicenKit 自动履约门禁：Notification Gateway、最小 Paddle 事件合同、调度器、需要的签名密钥和真实 Sandbox 端到端验收未通过时不能激活；静态产品页不读取运行期门禁，异常付款必须进入可诊断、可恢复状态。
 36. Product 只有一个公开收款环境。普通支付的 Provider 环境必须与 Product 一致且命中 active Offer；唯一例外是持有未过期、未消费管理员验证令牌的 draft Sandbox Offer，且该路径只能生成永久不可激活的验证 License。
 37. `is_checkout_verification=1` 的 License 不能激活、恢复或转为普通 License；后续订阅事件也不能把它变为 active。测试证据不能成为客户权益，测试卡不能产生正式可用授权。
 38. Magic Link 请求必须先完成 Turnstile 服务端校验；客户端 Widget 成功不能单独放行请求。

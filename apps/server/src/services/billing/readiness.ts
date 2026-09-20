@@ -214,19 +214,6 @@ export async function evaluateBillingOfferReadiness(
   const verificationReady = await checkoutVerificationReady(db, row);
   checks.push(check("sandbox_end_to_end_verification", verificationReady, "CHECKOUT_CONFIGURATION_PENDING"));
 
-  // The public Client-side Token is intentionally not used as a server API key.
-  // Until a management-SDK PricePreview result has a documented persistence
-  // field, Live activation remains fail-closed rather than inventing evidence.
-  const livePricePreviewReady = row.provider_environment === "sandbox";
-  checks.push(check(
-    "live_price_preview",
-    livePricePreviewReady,
-    "CHECKOUT_CONFIGURATION_PENDING",
-    row.provider_environment === "live"
-      ? { evidence: "not_recorded", verificationPath: "management_checkout_sdk" }
-      : { required: false },
-  ));
-
   if (!options.activation) {
     checks.push(check("offer_status", row.offer_status === "active", "NO_ACTIVE_OFFER"));
   }

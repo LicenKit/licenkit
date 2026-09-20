@@ -67,6 +67,7 @@ describe("V1 identity and sessions", () => {
         body: JSON.stringify({
           setupToken: "wrong-token",
           instanceName: "Example Studio",
+          siteUrl: "https://license.example.test",
           accountSlug: "example-studio",
           owner: { name: "Owner", email: "owner@example.test", password: "strong-password-123" },
         }),
@@ -79,6 +80,29 @@ describe("V1 identity and sessions", () => {
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 0 });
   });
 
+  it("requires the configured Site URL to share the LicenKit app Origin", async () => {
+    const app = identityApp();
+    const response = await app.request(
+      "https://license.example.test/api/v1/setup",
+      {
+        method: "POST",
+        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          setupToken: "initial-setup-token-with-enough-entropy",
+          instanceName: "Example Studio",
+          siteUrl: "https://www.example.test",
+          accountSlug: "example-studio",
+          owner: { name: "Owner", email: "owner@example.test", password: "strong-password-123" },
+        }),
+      },
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json() as any).error.code).toBe("SETUP_SITE_URL_ORIGIN_MISMATCH");
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM system_settings").get()).toEqual({ count: 0 });
+  });
+
   it("allows exactly one concurrent Setup request to initialize the database", async () => {
     const app = identityApp();
     const request = (suffix: string) => app.request(
@@ -89,6 +113,7 @@ describe("V1 identity and sessions", () => {
         body: JSON.stringify({
           setupToken: "initial-setup-token-with-enough-entropy",
           instanceName: `Concurrent ${suffix}`,
+          siteUrl: "https://license.example.test",
           accountSlug: `concurrent-${suffix}`,
           owner: {
             name: `Owner ${suffix}`,
@@ -121,6 +146,7 @@ describe("V1 identity and sessions", () => {
         body: JSON.stringify({
           setupToken: "initial-setup-token-with-enough-entropy",
           instanceName: "Example Studio",
+          siteUrl: "https://license.example.test/site/",
           accountSlug: "example-studio",
           owner: { name: "Owner", email: "OWNER@example.test", password: "strong-password-123" },
         }),
@@ -129,7 +155,10 @@ describe("V1 identity and sessions", () => {
     );
     expect(setup.status).toBe(201);
     expect(setup.headers.get("set-cookie")).toContain(ADMIN_SESSION_COOKIE);
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM system_settings").get()).toEqual({ count: 1 });
+    expect(testEnv.sqliteDb.prepare("SELECT app_url, site_url FROM system_settings").get()).toEqual({
+      app_url: "https://license.example.test",
+      site_url: "https://license.example.test/site",
+    });
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM accounts").get()).toEqual({ count: 1 });
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 1 });
 
@@ -141,6 +170,7 @@ describe("V1 identity and sessions", () => {
         body: JSON.stringify({
           setupToken: "initial-setup-token-with-enough-entropy",
           instanceName: "Other",
+          siteUrl: "https://license.example.test",
           accountSlug: "other",
           owner: { name: "Other", email: "other@example.test", password: "strong-password-456" },
         }),
@@ -213,8 +243,8 @@ describe("V1 identity and sessions", () => {
       field: "signing_secret_ciphertext",
     });
     testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, api_base_url, initialized_at, updated_at)
-       VALUES ('current', 'Identity', 'https://license.example.test', 'https://license.example.test/api/v1', ?, ?)`
+      `INSERT INTO system_settings (id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at)
+       VALUES ('current', 'Identity', 'https://license.example.test', 'https://license.example.test/site', 'https://license.example.test/api/v1', ?, ?)`
     ).run(now, now);
     testEnv.sqliteDb.prepare(
       `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
@@ -329,7 +359,9 @@ describe("V1 identity and sessions", () => {
       rowId: challenge.delivery_id,
       field: "payload_ciphertext",
     }));
-    const token = new URL(payload.data.access_url).hash.slice("#token=".length);
+    const accessUrl = new URL(payload.data.access_url);
+    expect(accessUrl.pathname).toBe("/site/customer/identity/auth");
+    const token = accessUrl.hash.slice("#token=".length);
 
     const consume = await app.request(
       "https://license.example.test/api/v1/customer/auth/magic-link/consume",

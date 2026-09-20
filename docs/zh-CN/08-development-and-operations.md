@@ -7,13 +7,11 @@ licenkit/
 ├── apps/server             # Hono + Cloudflare Workers + D1 + Drizzle
 ├── apps/admin              # React + Vite 管理控制台
 ├── apps/cli                # 命令行客户端
-├── packages/checkout-sdk   # 网站使用的无界面 Checkout SDK
+├── examples/customer-site  # 产品购买、Magic Link 与客户自助管理参考实现
 ├── custom_template/
-│   ├── site                # 产品购买、Magic Link 与客户自助管理模板
 │   └── wrangler.jsonc      # 完整的默认 Worker 配置
-├── custom/
-│   └── site                # 使用者自有区域；上游保持为空
-├── dist                    # Site 与 Admin 的生成产物
+├── custom                  # 使用者自有 Worker 配置；上游保持为空
+├── dist/admin              # LicenKit Admin 部署产物
 └── docs                    # V1 设计合同
 ```
 
@@ -29,16 +27,26 @@ pnpm test
 pnpm build
 ```
 
+`pnpm dev` 只启动 Server 与 Admin；`build`、`typecheck`、`test` 和 `deploy` 也不包含参考站点。参考实现使用独立命令：
+
+```bash
+pnpm example:site:dev
+pnpm example:site:typecheck
+pnpm example:site:test
+pnpm example:site:build
+```
+
 具体脚本以根目录 `package.json` 为准。重新生成 V1 migration 前，不对旧原型数据库执行兼容迁移。
 
-Site 与 Wrangler 配置都使用完整文件二选一，不执行自动合并：
+Wrangler 配置使用完整文件二选一，不执行自动合并：
 
-1. `custom/site/package.json` 存在时，`dev:site`、`build`、`typecheck` 和 `test` 使用 `custom/site`；否则使用 `custom_template/site`。
-2. `custom/wrangler.jsonc` 存在时，Worker 开发、迁移、构建和部署使用该文件；否则使用 `custom_template/wrangler.jsonc`。
-3. 每条命令都会输出最终选择路径。`custom` 由使用者维护，LicenKit 上游只更新 `custom_template`。
-4. `custom_template/wrangler.jsonc` 是完整可复制配置，不是待合并片段。复制到 `custom/wrangler.jsonc` 后，使用者负责数据库 ID、变量、环境和后续模板差异。
+1. `custom/wrangler.jsonc` 存在时，Worker 开发、迁移、构建和部署使用该文件；否则使用 `custom_template/wrangler.jsonc`。
+2. 每条 Wrangler 命令都会输出最终选择路径。`custom` 由使用者维护，LicenKit 上游只更新 `custom_template`。
+3. `custom_template/wrangler.jsonc` 是完整可复制配置，不是待合并片段。复制到 `custom/wrangler.jsonc` 后，使用者负责数据库 ID、变量、环境和后续模板差异。
 
-Admin 固定构建到 `dist/admin`；所选 Site 构建到 `dist` 根目录，并包含购买页、Magic Link 页面与 Customer Portal。`packages/checkout-sdk` 保持独立，由 Site 调用，不被复制进 Admin 或服务端业务逻辑。
+Admin 固定构建到 `dist/admin`，Worker 只在 `/admin` 路径读取静态资产；其他非 API、非 Admin 路径返回 404，根路径重定向到 `/admin/`。`examples/customer-site` 构建到自身 `dist`，不会写入 LicenKit 的生产 `dist`。
+
+Setup 时必须显式填写产品站与 Customer Portal 的 `siteUrl`，服务端用它生成邮件中的 Magic Link。当前 `siteUrl` 与 `appUrl` 必须同源；产品页只连接 Paddle，Magic Link 与 Customer Portal 通过同源 `/api/v1` 调用 LicenKit。LicenKit 不负责部署这些页面。
 
 ## 3. 环境配置
 
@@ -203,11 +211,11 @@ V1 首个且必须完成的支付闭环是 Paddle。Paddle Adapter 使用官方 
 2. 创建 Product `slug`、选择唯一 `billingEnvironment` 并创建 draft Offer，确认不同环境 Offer、缺少 Notification Gateway、事件合同或验收证据时无法激活，管理端展示具体检查项；
 3. 订阅最小合同 `customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created`、`adjustment.updated`，逐项发送官方模拟事件并验证能够验签、持久化和被 Readiness 识别；轮换 Webhook Secret 后旧证据必须失效；
 4. 配置并测试 Notification Gateway，确认 `endpoint.test` 为 accepted 后联通状态更新；
-5. owner/admin 通过 POST draft Sandbox Offer 的 `verification-config` 创建短期一次性令牌，并用同一个 Web Checkout SDK 完成首个真实 Sandbox Checkout；验证 SDK 只打开一个 Price、数量 1，令牌不进入日志、URL、localStorage 或分析事件；
-6. 在 Paddle Sandbox 与 Live 分别设置 Default Payment Link；为实际 Live 产品页完成 Website Approval，并在该 Origin 运行一次不付款的 Checkout 打开测试；未批准 Origin 或缺少 Default Payment Link 时 SDK 保留 Paddle 原始错误并 fail-fast；
+5. owner/admin 通过 POST draft Sandbox Offer 的 `verification-config` 创建短期一次性令牌，并由 Admin 内部 Paddle.js 调用完成首个真实 Sandbox Checkout；只打开一个 Price、数量 1，令牌不进入日志、URL、localStorage 或分析事件；
+6. 在 Paddle Sandbox 与 Live 分别设置 Default Payment Link；为实际 Live 产品页完成 Website Approval，并在该 Origin 运行一次不付款的 Checkout 打开测试；未批准 Origin 或缺少 Default Payment Link 时保留 Paddle 原始错误并 fail-fast；
 7. 验证外部 Customer ID 映射到唯一 LicenKit Customer，首次发码只使用 Paddle Customer 实体中的邮箱，不读取 `custom_data.email` 或 Checkout 自定义邮箱；
 8. 验证 Sandbox 闭环只创建一组标记为 Checkout Verification 的 suspended License/Subscription（如有）/Delivery，注册码通过 Notification Gateway 发出但激活、恢复和迁移均被拒绝；Delivery accepted 后 verification 才 completed，Offer 才可通过后续激活检查；
-9. 激活与 Product 环境一致的 Offer 后，确认公开 Checkout API 只返回该环境 Offer；绕过 SDK 构造多 Price、数量大于 1、未知 Price、draft Offer、Provider/Product 环境不一致、过期或重复验证令牌交易，分别进入 `needs_attention` 且不发正式 License；
+9. 激活与 Product 环境一致的 Offer 后，从静态产品页用对应 Price ID 打开 Checkout；直接构造多 Price、数量大于 1、未知 Price、draft Offer、Provider/Product 环境不一致、过期或重复验证令牌交易，分别进入 `needs_attention` 且不发正式 License；
 10. 使用配置免费试用期的 recurring price 完成要求预先绑定支付方式的真实 Sandbox Checkout；
 11. 验证已验签事件创建 `trialing` Billing Subscription、普通 License 和首次发码 Delivery，且不创建 Trial Claim；
 12. 触发试用结束后的真实扣款或官方时间模拟，验证同一 License 从试用周期转入付费周期；
@@ -237,7 +245,7 @@ Mock 数据可以用于单元测试，但必须通过与正式相同的 Adapter 
 
 Customer Portal 至少验证：
 
-1. Magic Link 请求必须通过 Turnstile 服务端 Siteverify，并校验固定 action 与实例 hostname；无效、过期、重复或 hostname/action 不匹配时在 Customer 查询前拒绝；
+1. Magic Link 请求必须通过 Turnstile 服务端 Siteverify，并校验固定 action 与 `site_url` hostname；无效、过期、重复或 hostname/action 不匹配时在 Customer 查询前拒绝；
 2. 使用 Cloudflare 官方测试 Sitekey/Secret 覆盖成功、失败和重复 Token，测试与正式环境走同一 Widget、请求字段和 Siteverify Adapter；
 3. 有效邮箱首次请求创建 Login Challenge 和 Notification Delivery；
 4. 默认 60 秒内重复请求命中 D1 Challenge 冷却，不创建新 Challenge/Delivery，也不吊销旧链接；冷却结束后的并发请求最多创建一组新记录；
@@ -302,13 +310,13 @@ Customer Portal 至少验证：
 - `pending`、`email_mismatch` 和 `needs_attention` Billing Customer 数量与最老等待时间；
 - active Notification Gateway 是否存在；
 - active Notification Gateway 最近一次 Endpoint Test 是否 accepted，以及当前配置是否晚于该测试；
-- 每个 active Offer 的 Checkout Readiness、真实 Sandbox 端到端验收和公开 API `available` 状态；
+- 每个 active Offer 的 Checkout Readiness、真实 Sandbox 端到端验收和当前就绪状态；
 - Product `billing_environment`、active Offer Provider 环境和非验证支付 License 来源环境是否一致；
 - pending/needs_attention Checkout Verification 数量、最老等待时间，以及验证 License 被异常激活或改为 active 的约束检查；
 - 部署 Customer Portal 时 Magic Link TTL、Session TTL、最近认证窗口和 Notification Gateway 是否有效；
 - 敏感 Delivery 负载 TTL 是否有效，以及最老未清理敏感负载的年龄；
 - 启用支付平台客户门户时，对应 Billing Provider 服务端 API 凭证是否可解密；
-- Turnstile Sitekey/Secret、Siteverify 连通性、固定 action 和实例 hostname 是否匹配；
+- Turnstile Sitekey/Secret、Siteverify 连通性、固定 action 和 `site_url` hostname 是否匹配；
 - open System Issue 数量、最早发生时间、最近 Provider request ID 和仍受阻的 Inbound Event 数量；
 - pending/failed Inbound Event 数量；
 - open Billing Adjustment 数量、最老等待时间及自动暂停 License 数量；

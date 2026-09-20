@@ -9,8 +9,8 @@ describe("V1 Scheduled Worker health evidence", () => {
   async function initializeSettings(env: ReturnType<typeof createTestEnv>["env"]) {
     await env.DB.prepare(
       `INSERT INTO system_settings (
-         id, instance_name, app_url, api_base_url, initialized_at, updated_at
-       ) VALUES ('current', 'LicenKit', 'https://license.example', NULL, ?1, ?1)`,
+         id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at
+       ) VALUES ('current', 'LicenKit', 'https://license.example', 'https://license.example', NULL, ?1, ?1)`,
     ).bind("2026-09-19T11:00:00.000Z").run();
   }
 

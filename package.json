@@ -15,12 +15,15 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:server": "pnpm --filter @licenkit/server run dev",
-    "dev:site": "node scripts/run-site.mjs dev",
     "dev:admin": "pnpm --filter @licenkit/admin run dev",
     "dev:cli": "pnpm --filter @licenkit/cli run dev",
-    "build": "pnpm --filter @licenkit/checkout run build && pnpm --filter @licenkit/cli run build && node scripts/run-site.mjs build && pnpm --filter @licenkit/admin run build && pnpm --filter @licenkit/server run build",
-    "typecheck": "pnpm --filter @licenkit/checkout run typecheck && pnpm --filter @licenkit/cli run typecheck && node scripts/run-site.mjs typecheck && pnpm --filter @licenkit/admin run typecheck && pnpm --filter @licenkit/server run typecheck",
-    "test": "pnpm --filter @licenkit/server run test && pnpm --filter @licenkit/cli run test && pnpm --filter @licenkit/checkout run test && node scripts/run-site.mjs test && pnpm --filter @licenkit/admin run test",
+    "example:site:dev": "pnpm --filter @licenkit/example-customer-site run dev",
+    "example:site:build": "pnpm --filter @licenkit/example-customer-site run build",
+    "example:site:typecheck": "pnpm --filter @licenkit/example-customer-site run typecheck",
+    "example:site:test": "pnpm --filter @licenkit/example-customer-site run test",
+    "build": "node scripts/clean-dist.mjs && pnpm --filter @licenkit/cli run build && pnpm --filter @licenkit/admin run build && pnpm --filter @licenkit/server run build",
+    "typecheck": "pnpm --filter @licenkit/cli run typecheck && pnpm --filter @licenkit/admin run typecheck && pnpm --filter @licenkit/server run typecheck",
+    "test": "pnpm --filter @licenkit/server run test && pnpm --filter @licenkit/cli run test && pnpm --filter @licenkit/admin run test",
     "deploy": "pnpm run build && pnpm --filter @licenkit/server run deploy"
   },
   "packageManager": "pnpm@10.32.1"

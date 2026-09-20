@@ -791,6 +791,7 @@ CREATE TABLE `system_settings` (
 	`id` text PRIMARY KEY NOT NULL,
 	`instance_name` text NOT NULL,
 	`app_url` text NOT NULL,
+	`site_url` text NOT NULL,
 	`api_base_url` text,
 	`scheduler_last_success_at` text,
 	`scheduler_last_duration_ms` integer,

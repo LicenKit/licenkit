@@ -27,8 +27,8 @@ describe("V1 Customer Magic Link request contract", () => {
     } as any);
     const now = new Date().toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, api_base_url, initialized_at, updated_at)
-       VALUES ('current', 'Magic Link', 'https://license.example.test',
+      `INSERT INTO system_settings (id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at)
+       VALUES ('current', 'Magic Link', 'https://license.example.test', 'https://license.example.test',
                'https://license.example.test/api/v1', ?, ?)`
     ).run(now, now);
     testEnv.sqliteDb.prepare(

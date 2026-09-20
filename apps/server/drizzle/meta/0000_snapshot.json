@@ -5174,6 +5174,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "site_url": {
+          "name": "site_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "api_base_url": {
           "name": "api_base_url",
           "type": "text",

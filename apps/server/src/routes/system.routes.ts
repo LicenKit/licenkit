@@ -8,12 +8,13 @@ export const systemRouter = new Hono<AppContext>();
 systemRouter.get("/status", async (c) => {
   const result = await c.env.DB
     .prepare(
-      `SELECT instance_name, app_url, api_base_url, initialized_at
+      `SELECT instance_name, app_url, site_url, api_base_url, initialized_at
        FROM system_settings WHERE id = 'current' LIMIT 1`,
     )
     .all<{
       instance_name: string;
       app_url: string;
+      site_url: string;
       api_base_url: string | null;
       initialized_at: string;
     }>();
@@ -26,6 +27,7 @@ systemRouter.get("/status", async (c) => {
           initialized: true,
           instanceName: settings.instance_name,
           appUrl: settings.app_url,
+          siteUrl: settings.site_url,
           apiBaseUrl: settings.api_base_url ?? settings.app_url,
           initializedAt: settings.initialized_at,
           version: c.env.APP_VERSION || "1.0.0",

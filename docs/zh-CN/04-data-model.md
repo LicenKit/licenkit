@@ -64,6 +64,10 @@ erDiagram
 
 实例级单例状态，保存实例名称、外部 URL、初始化结果，以及 Scheduled Worker 最近一次完整成功的时间和运行耗时。Secret 不进入此表；调度器健康字段只记录已经完成的运行事实，不保存可由调用方写入的 `ready=true`。
 
+- `app_url`：Setup 请求所在的 LicenKit Origin。API 固定派生为 `/api/v1`，Admin 固定派生为 `/admin/`，不分别保存可配置 URL；
+- `site_url`：Setup 显式填写的产品站与 Customer Portal 基础地址，用于生成邮件中的 Magic Link；当前必须与 `app_url` 具有相同 Origin，可以包含站点路径前缀；
+- `api_base_url`：由 `app_url + /api/v1` 派生并保存的接口基址，不接受独立输入。
+
 不存在 `id='current'` 行且 Account、User 同时为空，表示独立部署尚未初始化。Setup 在同一个 D1 原子批次中插入该固定行、首个 Account、首位 Owner、管理员 Session 和 Setup 审计。固定行是一次性初始化闩锁，数据库 Trigger 禁止删除；需要重新初始化测试实例时应重建空数据库，不能删除该行重新开放 Setup。
 
 `scheduler_last_success_at` 与 `scheduler_last_duration_ms` 必须同时为空或同时存在。每分钟 Scheduled Worker 只有在统一调度入口的全部作业成功后才更新这两个字段；Readiness 直接读取 D1 中的持久事实并按时间阈值判断，不依赖 KV、进程内状态或调用方自报健康。
@@ -103,7 +107,7 @@ Customer ID 是 License 的稳定归属。修改邮箱是显式管理操作，�
 
 明文 Token 只存在于加密 Delivery 负载和客户收到的 URL 中。过期、已消费、已吊销或 Customer 被禁用时不能创建 Session。
 
-Magic Link 请求先完成 Turnstile 服务端 Siteverify，校验成功、`action=customer_magic_link` 且 `hostname` 等于当前实例 `app_url` 的 Host 后，才允许查询 Customer。Turnstile Token 不写入 D1；它只证明本次表单请求通过了自动化挑战，不能替代 Magic Link 对邮箱控制权的验证。
+Magic Link 请求先完成 Turnstile 服务端 Siteverify，校验成功、`action=customer_magic_link` 且 `hostname` 等于 `site_url` 的 Host 后，才允许查询 Customer。Turnstile Token 不写入 D1；它只证明本次表单请求通过了自动化挑战，不能替代 Magic Link 对邮箱控制权的验证。
 
 同一 Customer 的重复请求冷却直接查询本表最近一条 `created_at`，默认 60 秒，不新增 KV、Durable Object 或限流表。创建流程使用带 `NOT EXISTS` 冷却条件的 D1 原子批次，而不是先查再写：冷却命中时不创建 Challenge/Delivery，也不吊销仍有效的旧链接；冷却结束后，只有新 Challenge 与 Delivery 已在同一批次成功创建，才吊销此前未消费 Challenge 并停止其 Delivery。这样并发请求最多生成一组新记录，失败也不会先破坏旧链接。
 
@@ -122,9 +126,9 @@ Session 必须同时携带 `account_id` 和 `customer_id`。Cookie 中的账户�
 
 ### 3.8 `products`
 
-保存产品身份、显示信息和状态。`slug` 在 Account 内唯一，作为公开 Checkout URL 的稳定选择器；应用层只接受规范化的小写 URL-safe 值。`archived` 表示不再创建新方案、License、Checkout 或 Trial Claim，不直接吊销现有 License 或已有 Trial Claim。
+保存产品身份、显示信息和状态。`slug` 在 Account 内唯一，作为管理端与自定义页面可复用的稳定标识；应用层只接受规范化的小写 URL-safe 值。`archived` 表示不再创建新方案、License 或 Trial Claim，不直接吊销现有 License 或已有 Trial Claim。
 
-`billing_environment` 可空，值为 `sandbox|live`。空值表示没有公开支付销售；非空值同时限定公开 Checkout 返回的 Offer 环境，以及普通支付 License 的来源环境。设置或切换前必须确认当前 Product 没有 active Offer，也没有 `is_checkout_verification=0` 的支付 License；一旦已有真实支付权益就拒绝切换，避免已有授权的环境语义被改写。管理员 Sandbox Verification 不受该字段限制，因为其 License 被单独标记且永远不可激活。
+`billing_environment` 可空，值为 `sandbox|live`。空值表示普通支付事件不能签发正式 License；非空值限定普通支付 License 的来源环境。设置或切换前必须确认当前 Product 没有 active Offer，也没有 `is_checkout_verification=0` 的支付 License；一旦已有真实支付权益就拒绝切换，避免已有授权的环境语义被改写。管理员 Sandbox Verification 不受该字段限制，因为其 License 被单独标记且永远不可激活。
 
 无需支付方式的 Product/设备试用使用三个 Product 配置字段：
 
@@ -282,7 +286,7 @@ V1 实现和真实 Sandbox 验收只开放 `provider=paddle`。Schema 保持字�
 
 `account_id + provider + environment` 是不可变连接身份。PATCH 只允许轮换凭证、启停能力或更新同一连接配置；环境切换必须创建新 Provider，避免把既有 sandbox 外部 ID 重新解释成 live 身份。DDL Trigger 对身份字段更新 fail-closed。
 
-Webhook Secret 和 API Key 使用 `STORAGE_ENCRYPTION_KEY` 加密，不返回明文。Client-side Token 按 Paddle 的前端凭证语义以明文保存并由公开 Checkout API 返回；它不能与 API Key 共用字段，也不能被管理端误标为 Secret。
+Webhook Secret 和 API Key 使用 `STORAGE_ENCRYPTION_KEY` 加密，不返回明文。Client-side Token 按 Paddle 的前端凭证语义以明文保存；静态产品页单独配置同一个公开值。它不能与 API Key 共用字段，也不能被管理端误标为 Secret。
 
 创建客户门户会话不改变本地 Subscription。客户在支付平台完成操作后，仍由已验签 Webhook 更新本地状态。
 
@@ -329,9 +333,9 @@ Billing Customer 只接受两类来源：已验签 `customer.created|updated` pa
 
 Offer 尚未产生任何 Checkout Verification 时可以在 draft 状态修正映射；一旦存在验证尝试，Provider、Price、Product、Plan 和购买类型由 Trigger 锁定，修改销售合同必须归档并新建 Offer。否则历史验证证据可能被错误复用到另一份权益。
 
-从 `draft` 激活前，服务端执行 Checkout Readiness 检查：Product/Plan/Provider 可用、Offer Provider 环境等于 Product `billing_environment`、Client-side Token 的环境标识与 Provider 匹配、当前 Provider 配置更新时间之后已逐项收到最小事件合同中的对应事件并验签成功（通常由官方模拟器触发）、Notification Gateway 已启用并通过 Endpoint Test、调度器健康、`signed` 模式存在 active key，以及同一 Account/Product/Plan/购买类型的真实 Sandbox Checkout 到 accepted Delivery 已验收。首个 Sandbox Offer 通过只对 owner/admin 开放的 draft 验证配置运行同一 Checkout、Webhook、履约和通知模块，避免“未激活不能测试、未测试不能激活”的死锁；Live Offer 可以复用对应 Sandbox 闭环证据，不执行真实扣款验证。检查使用现有 Provider、Inbound Event、Endpoint、Delivery、Attempt 和 Checkout Verification 事实，不把一份容易漂移的 `ready=true` 冗余保存到 Offer。轮换 Webhook Secret、替换 Provider 连接或更新 Endpoint 会自然使旧验证时间早于当前配置而失效。激活后任何关键依赖失效，公开 Checkout API 仍实时返回不可购买；Offer 状态本身不冒充运行健康。
+从 `draft` 激活前，服务端执行 Checkout Readiness 检查：Product/Plan/Provider 可用、Offer Provider 环境等于 Product `billing_environment`、Client-side Token 的环境标识与 Provider 匹配、当前 Provider 配置更新时间之后已逐项收到最小事件合同中的对应事件并验签成功（通常由官方模拟器触发）、Notification Gateway 已启用并通过 Endpoint Test、调度器健康、`signed` 模式存在 active key，以及同一 Account/Product/Plan/购买类型的真实 Sandbox Checkout 到 accepted Delivery 已验收。首个 Sandbox Offer 通过只对 owner/admin 开放的 draft 验证配置运行同一 Checkout、Webhook、履约和通知模块，避免“未激活不能测试、未测试不能激活”的死锁；Live Offer 可以复用对应 Sandbox 闭环证据，不执行真实扣款验证。检查使用现有 Provider、Inbound Event、Endpoint、Delivery、Attempt 和 Checkout Verification 事实，不把一份容易漂移的 `ready=true` 冗余保存到 Offer。轮换 Webhook Secret、替换 Provider 连接或更新 Endpoint 会自然使旧验证时间早于当前配置而失效。激活后关键依赖失效会由管理端状态、告警和入站事件暴露；静态产品页不会实时读取这项状态。
 
-PricePreview 不是服务端能够长期保存的 Offer 激活证据：它依赖当前浏览器环境、Client-side Token、Price 和 Paddle.js 的实时响应。公开 Checkout SDK 必须在当前页面对本次 `load()` 返回的配置调用 PricePreview；只有成功后才可启用购买并执行 `open()`。Preview 失败只阻断当前页面的购买流程并保留原始错误，不回写 Offer 状态，也不把一次成功结果保存成长期 Readiness 事实。服务端最终授权仍只依据已验签 Webhook，以及 Offer、Price、数量、环境和 Customer 合同的精确匹配。
+PricePreview 不是服务端能够长期保存的 Offer 激活证据。静态产品页可以选择直接显示维护在源码中的价格，也可以直接调用 Paddle PricePreview 获取本地化展示；两者都不改变 Offer 状态或服务端履约合同。服务端最终授权仍只依据已验签 Webhook，以及 Offer、Price、数量、环境和 Customer 合同的精确匹配。
 
 ### 5.4 `billing_checkout_verifications`
 
@@ -514,7 +518,7 @@ Scheduled Worker 只通过状态、`next_attempt_at` 和 `locked_until` 索引�
 | `customer_sessions(session_token_hash)` 唯一 | 一个会话 Token 对应多个 Customer Session |
 | `admin_sessions(csrf_token_hash)`、`customer_sessions(csrf_token_hash)` 各自唯一 | 一个 CSRF Token 绑定多条同类 Session |
 | `customer_sessions(login_challenge_id)` 唯一 | 同一个 Magic Link 建立多个 Session |
-| `products(account_id, slug)` 唯一 | 同一账户公开产品页选择器歧义 |
+| `products(account_id, slug)` 唯一 | 同一账户产品稳定标识歧义 |
 | `product_releases(account_id, product_id, version, platform)` 唯一 | 同一版本和平台出现冲突的受信发布时间或 Hash |
 | `licenses(account_id, key_hash)` 唯一 | 注册码冲突 |
 | `licenses(account_id, source_billing_provider_id, source_external_transaction_id)` 部分唯一 | 不同支付事件对同一交易重复发 License |

@@ -1,4 +1,4 @@
-const API_BASE = `${(import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "")}/api/v1`;
+const API_BASE = "/api/v1";
 
 export type Identifier = string;
 export type IsoDateTime = string;
@@ -148,7 +148,7 @@ function queryString(params: Record<string, string | number | boolean | null | u
 
 export interface Pagination { page: number; limit: number; total: number; totalPages: number }
 export interface ListResponse<T> { items: T[]; pagination?: Pagination }
-export interface SetupStatus { initialized: boolean; instanceName?: string; version?: string }
+export interface SetupStatus { initialized: boolean }
 export interface AdminUser { id: Identifier; name: string; email: string; role: Role; status?: "active" | "disabled"; createdAt?: IsoDateTime }
 export interface Account { id: Identifier; slug: string; name: string; defaultSubscriptionPaymentGraceSeconds?: number; createdAt?: IsoDateTime }
 export interface AdminSession { user: AdminUser; account: Account; expiresAt?: IsoDateTime }
@@ -216,9 +216,13 @@ export interface BillingVerificationConfig {
   verificationMode: true;
   verificationToken: string;
   expiresAt: IsoDateTime;
-  product: { slug: string; name: string; description?: string };
-  checkout: { available: true; provider: "paddle"; environment: "sandbox"; clientSideToken: string };
-  offers: Array<{ id: string; name: string; purchaseType: "one_time" | "subscription"; priceId: string; quantity: 1 }>;
+  checkout: {
+    provider: "paddle";
+    environment: "sandbox";
+    clientSideToken: string;
+    priceId: string;
+    quantity: 1;
+  };
 }
 export interface BillingSubscription {
   id: Identifier; provider: "paddle"; environment: BillingEnvironment; externalSubscriptionId: string; licenseId: Identifier;
@@ -360,7 +364,7 @@ function normalizeDelivery(delivery: OutboundDeliveryTransport, attempts?: Deliv
 export const api = {
   setup: {
     status: () => request<SetupStatus>("/setup/status", { scope: "public" }),
-    complete: (body: { setupToken: string; instanceName: string; accountSlug: string; owner: { name: string; email: string; password: string } }) => request<SetupResult>("/setup", { method: "POST", body, scope: "admin" }),
+    complete: (body: { setupToken: string; instanceName: string; siteUrl: string; accountSlug: string; owner: { name: string; email: string; password: string } }) => request<SetupResult>("/setup", { method: "POST", body, scope: "admin" }),
   },
   admin: {
     auth: {

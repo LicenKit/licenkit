@@ -38,9 +38,9 @@ LicenKit 将数据库中的入站事件和 Delivery 作为异步任务的事实�
 apps/server             Hono + Cloudflare Workers API
 apps/admin              React 管理控制台
 apps/cli                命令行客户端
-packages/checkout-sdk   网站调用的无界面 Checkout SDK
-custom_template/site    LicenKit 维护的完整用户 Site 模板
-custom                  使用者自有的 Site 与 Wrangler 配置；上游保持为空
+examples/customer-site  产品页、Magic Link 与 Customer Portal 参考实现
+custom_template         LicenKit Worker 部署配置模板
+custom                  使用者自有的 Worker 配置；上游保持为空
 docs                    产品、架构、数据模型和接口文档
 ```
 
@@ -68,22 +68,28 @@ pnpm test
 pnpm build
 ```
 
-## 自定义与上游升级
+参考站点使用独立命令，不参与 LicenKit 的默认开发、构建或部署：
 
-LicenKit 只在 `custom_template` 维护默认实现，不写入 `custom`。使用者需要定制官网时，将 `custom_template/site` 复制到 `custom/site` 后自行修改；这个 Site 包含产品列表与购买、邮箱 Magic Link，以及 License、设备和订阅管理，不包含 Admin。
+```bash
+pnpm example:site:dev
+pnpm example:site:test
+```
 
-选择规则只有两条：
+## 部署与参考站点
 
-- `custom/site/package.json` 存在时，使用完整的 `custom/site`；否则使用完整的 `custom_template/site`。两者不逐文件合并。
-- `custom/wrangler.jsonc` 存在时，Wrangler 命令使用它；否则使用 `custom_template/wrangler.jsonc`。配置字段不自动合并。
+LicenKit 的生产部署只包含 Worker API、Scheduled Worker 和 `/admin` 管理控制台。根路径重定向到 `/admin/`；产品官网、Magic Link 页面和 Customer Portal 不进入 LicenKit 部署产物。
 
-构建与部署命令会打印实际选择的路径。首次定制 Wrangler 配置时，可以复制模板后完整修改：
+`examples/customer-site` 是可运行、可测试的参考实现。使用者可以把它复制到自己的站点仓库后独立维护，也可以完全使用自己的页面。Setup 要求显式填写 `siteUrl`，用于生成邮件中的 Magic Link；当前合同要求它与 LicenKit `appUrl` 同源。浏览器通过同源 `/api/v1` 访问 Customer API，Admin 入口由 `appUrl + /admin/` 派生，不需要单独的 Admin URL 配置。
+
+Worker 配置仍使用完整文件二选一：`custom/wrangler.jsonc` 存在时使用该文件，否则使用 `custom_template/wrangler.jsonc`。配置字段不自动合并。
+
+首次定制 Worker 配置时，可以复制模板后完整修改：
 
 ```bash
 cp custom_template/wrangler.jsonc custom/wrangler.jsonc
 ```
 
-因此上游升级只更新 LicenKit 代码和 `custom_template`；使用者仓库中的 `custom` 仍由使用者负责比较和调整。`dist` 是按所选 Site 与独立 Admin 生成的部署产物，不是配置来源。
+`dist` 只包含 LicenKit Admin 的部署资产。参考站点的复制、同源路由和升级边界见[参考 Customer Site 说明](./docs/zh-CN/10-reference-customer-site.md)。
 
 测试与正式环境使用相同模块和调用流程，只替换资源地址、Secret 和支付平台环境等配置。
 

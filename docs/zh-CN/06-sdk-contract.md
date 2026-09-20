@@ -6,7 +6,7 @@ Swift SDK 为 macOS App 提供统一的在线激活和在线校验接口，同�
 
 SDK 不决定商业权益，不自行延长 License，也不把网络失败转换成服务端确认有效。
 
-本文只定义安装到被授权 App 内的 License SDK。产品网站使用的 JavaScript/TypeScript Web Checkout SDK 见 [`09-web-checkout-sdk-contract.md`](./09-web-checkout-sdk-contract.md)；两者不共享 Secret，也不允许浏览器 Checkout 回调替代 License API 或支付 Webhook。
+本文只定义安装到被授权 App 内的 License SDK。产品网站直接使用 Paddle.js，不提供 LicenKit Web Checkout SDK；静态产品页边界见 [`09-static-product-page.md`](./09-static-product-page.md)。浏览器 Checkout 回调不能替代 License API 或支付 Webhook。
 
 ## 2. 配置
 

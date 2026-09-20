@@ -15,7 +15,6 @@ import { adminAuthRouter } from "./routes/auth.routes";
 import { clientRouter } from "./routes/client.routes";
 import { customerAuthRouter } from "./routes/customer-auth.routes";
 import { customerRouter } from "./routes/customer.routes";
-import { publicCheckoutRouter } from "./routes/public-checkout.routes";
 import { adminAccountRouter } from "./routes/admin/settings.routes";
 import { adminUsersRouter } from "./routes/admin/users.routes";
 import { adminProductsRouter } from "./routes/admin/products.routes";
@@ -37,22 +36,7 @@ const app = new Hono<AppContext>();
 app.onError(errorHandler);
 app.use("*", requestContext);
 
-app.use(
-  "/api/v1/public/*",
-  cors({
-    origin: "*",
-    allowHeaders: ["Content-Type", "X-Request-Id"],
-    allowMethods: ["GET", "OPTIONS"],
-    exposeHeaders: ["X-Request-Id"],
-    maxAge: 600,
-    credentials: false,
-  }),
-);
 app.use("*", async (c, next) => {
-  if (c.req.path.startsWith("/api/v1/public/")) {
-    await next();
-    return;
-  }
   const middleware = cors({
     origin: (origin) => {
       if (!origin) return "";
@@ -102,7 +86,6 @@ api.route("/admin/auth", adminAuthRouter);
 api.route("/client", clientRouter);
 api.route("/customer/auth", customerAuthRouter);
 api.route("/customer", customerRouter);
-api.route("/public", publicCheckoutRouter);
 api.route("/webhooks", webhookRouter);
 
 const admin = new Hono<AppContext>();
@@ -134,10 +117,13 @@ api.route("/admin", admin);
 
 app.route("/api/v1", api);
 
-app.all("*", async (c) => {
+app.get("/", (c) => c.redirect("/admin/", 302));
+app.all("/admin", (c) => c.redirect("/admin/", 302));
+app.all("/admin/*", async (c) => {
   if (c.env.ASSETS) return c.env.ASSETS.fetch(c.req.raw);
-  return c.text("LicenKit Server is running. Static assets binding not configured.", 404);
+  return c.text("LicenKit Admin assets are not configured.", 404);
 });
+app.all("*", (c) => c.text("Not Found", 404));
 
 export { app };
 export default {

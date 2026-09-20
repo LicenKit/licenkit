@@ -76,7 +76,7 @@ export function BillingView({ canManage }: { canManage: boolean }) {
     setSaving(true); setError(null);
     try {
       let expiresAt = "";
-      await openVerificationCheckout(offer.id, async () => {
+      await openVerificationCheckout(async () => {
         const response = await api.admin.billing.offers.verificationConfig(offer.id);
         expiresAt = response.data.expiresAt;
         return response;
@@ -96,7 +96,7 @@ export function BillingView({ canManage }: { canManage: boolean }) {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Paddle 首发闭环" title="支付连接与 Offer" description="Provider、Offer、Subscription 和 Adjustment 分别显示。active Offer 仍需实时 Checkout Readiness 才能公开收款。" action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>} />
+      <PageHeader eyebrow="Paddle 首发闭环" title="支付连接与 Offer" description="官网直接连接 Paddle；LicenKit 根据已验签 Webhook 中的 Price ID 关联 Offer 并履约。" action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>} />
       <ErrorPanel error={error} />
       <div className="tabs" role="tablist">{(["providers", "offers", "subscriptions", "adjustments"] as Tab[]).map((item) => <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>{item === "providers" ? "Billing Provider" : item === "offers" ? "Offer & Readiness" : item === "subscriptions" ? "Subscription" : "Adjustment"}</button>)}</div>
       {loading && providers.length + offers.length + subscriptions.length + adjustments.length === 0 ? <LoadingState /> : null}
@@ -108,7 +108,7 @@ export function BillingView({ canManage }: { canManage: boolean }) {
 
       {tab === "offers" ? <Card>
         <div className="card-header"><div><p className="eyebrow">Price mapping</p><h2>Offer 与收款就绪</h2><p>Offer 默认 draft；服务端检查通过后才能显式激活。</p></div>{canManage ? <Button onClick={() => setOfferModal(true)}><Plus className="size-4" />创建 Offer</Button> : null}</div>
-        {verificationPending ? <Notice tone="warning"><strong>真实 Sandbox Checkout 已打开，但闭环尚未完成。</strong><p>Offer {verificationPending.offerId} 的本次验证配置有效至 {formatDate(verificationPending.expiresAt)}。一次性令牌已由共享 Checkout SDK 消费并清除；只有已验签 Webhook 完成履约且 Delivery accepted 后，服务端验证状态才会成为 completed。</p></Notice> : null}
+        {verificationPending ? <Notice tone="warning"><strong>真实 Sandbox Checkout 已打开，但闭环尚未完成。</strong><p>Offer {verificationPending.offerId} 的本次验证配置有效至 {formatDate(verificationPending.expiresAt)}。一次性令牌只用于本次 Admin Checkout 且未持久化；只有已验签 Webhook 完成履约且 Delivery accepted 后，服务端验证状态才会成为 completed。</p></Notice> : null}
         {offers.length === 0 ? <EmptyState title="还没有 Offer" description="把一个 Paddle Price 映射到 Product 与授权方案。" /> : <div className="stack-list">{offers.map((offer) => {
           const provider = providers.find((item) => item.id === offer.billingProviderId);
           return <div className="offer-row" key={offer.id}><div className="offer-main"><div><strong>{offer.productName || products.find((item) => item.id === offer.productId)?.name || offer.productId}</strong><span>{offer.licensePlanName || plans.find((item) => item.id === offer.licensePlanId)?.name || offer.licensePlanId}</span></div><code>{offer.externalPriceId}</code></div><div className="offer-meta"><Badge>{offer.purchaseType}</Badge><Badge>{provider?.environment || "unknown"}</Badge><StatusBadge status={offer.status} /><StatusBadge status={offer.readiness?.checkoutAvailable ? "ready" : "not_ready"} /></div>{offer.readiness ? <Readiness report={offer.readiness} /> : null}{canManage ? <div className="button-row wrap">{offer.status === "draft" && provider?.environment === "sandbox" ? <Button variant="secondary" loading={saving} onClick={() => void prepareVerification(offer)}><FlaskConical className="size-4" />打开真实 Sandbox 验证</Button> : null}{offer.status === "draft" ? <Button loading={saving} onClick={() => void activateOffer(offer)}>实时检查并激活</Button> : null}</div> : null}</div>;

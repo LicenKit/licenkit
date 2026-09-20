@@ -4,7 +4,7 @@
 
 V1 使用 Cloudflare Workers、D1、Scheduled Triggers、Turnstile、Hono、Drizzle、React 和 Swift。自部署版本不使用 Cloudflare KV、Durable Objects 或 Queues，也不实现 LicenKit Cloud 控制面；需要重构的是领域边界、数据模型和可靠投递流程，不是更换主要技术栈。
 
-系统按职责分为十个模块。模块之间通过明确接口和持久化事实协作，支付、授权、客户访问和通知不共享隐式状态。
+系统按职责分为九个后端/授权模块，并把产品购买页视为独立静态前端。模块之间通过明确接口和持久化事实协作，支付、授权、客户访问和通知不共享隐式状态。
 
 ```mermaid
 flowchart LR
@@ -16,10 +16,7 @@ flowchart LR
     CustomerAccess --> Activation[激活与验证]
     Payment[支付平台] --> Billing[支付入站与履约]
     CustomerAccess --> Billing
-    ProductPage[用户产品页] --> WebCheckout[Web Checkout SDK]
-    WebCheckout --> PublicCheckout[公开 Checkout API]
-    PublicCheckout --> Billing
-    WebCheckout --> Payment
+    ProductPage[静态产品页] --> Payment
     Billing --> LicenseCore
     SDK[Swift SDK] --> Activation
     Billing --> Outbound[出站投递]
@@ -81,7 +78,7 @@ Trial Claim 不复用 License 或 Activation 状态机。它只表示无需支�
 - Billing Customer 镜像、外部 Customer ID 到 LicenKit Customer 的稳定映射；
 - Customer Webhook 同步，以及配置 API Key 后可选的 Paddle API 读穿与定期对账；
 - 外部价格到授权方案的映射；
-- 公开 Checkout 配置和 Offer 收款就绪判断；
+- Offer 激活前的收款就绪判断；
 - Product 收款环境隔离、管理员一次性 Checkout Verification；
 - Inbound Event 幂等持久化；
 - 买断、固定期限和订阅状态转换；
@@ -99,9 +96,9 @@ Customer Webhook 和 Paddle Get Customer API 必须进入同一个 `BillingCusto
 
 Provider API 的 `401/403` 同时产生事件级错误和 Provider 能力级 System Issue。事件保存本次 HTTP 状态、Provider 原始错误码、request ID 与 message；System Issue 以账户、Provider、能力和问题代码去重。Scheduler 跳过 `blocking_system_issue_id` 非空的事件；管理员验证配置修复后，可以选择是否解除这些事件的阻塞并把仍可重放的记录重新排入完整状态机。仅解决 Issue 不能隐式唤醒事件、清空事件错误或调用发码服务。
 
-Paddle Provider 必须保存与环境匹配的 Client-side Token 和加密 Webhook Secret。Client-side Token 是 Paddle.js 的公开受限凭证，可以由公开 Checkout API 返回；Webhook Secret 只能在服务端验签。Paddle API Key 是可选的服务端凭证，加密保存在 `billing_providers.api_secret_ciphertext`：启用 Get Customer/对账需要 `customer.read`，启用托管客户门户需要 `customer_portal_session.write`。它不能发送到浏览器、SDK 或通知接收方。未配置 API Key 时，购买事件等待 Customer Webhook 后重试；配置后的 API 读穿发生在 Webhook 已持久化并返回 2xx 之后，超时或限流只让 Inbound Event 保持 `pending`。
+Paddle Provider 必须保存与环境匹配的 Client-side Token 和加密 Webhook Secret。Client-side Token 是 Paddle.js 的公开受限凭证，静态产品页可以直接配置同一个值；Webhook Secret 只能在服务端验签。Paddle API Key 是可选的服务端凭证，加密保存在 `billing_providers.api_secret_ciphertext`：启用 Get Customer/对账需要 `customer.read`，启用托管客户门户需要 `customer_portal_session.write`。它不能发送到浏览器或通知接收方。未配置 API Key 时，购买事件等待 Customer Webhook 后重试；配置后的 API 读穿发生在 Webhook 已持久化并返回 2xx 之后，超时或限流只让 Inbound Event 保持 `pending`。
 
-Billing 模块对每个普通购买事件使用已验签 Transaction 行项目执行第二次授权检查：只接受一个 active Offer Price、数量为 1，且 Offer Provider 环境等于 Product 的 `billing_environment`。公开 SDK 的限制只改善正常调用体验，不是安全边界。唯一例外是命中未过期、未消费且绑定当前 draft Sandbox Offer 的 Checkout Verification；该例外仍复用统一 Fulfillment，但强制生成不可激活的验证 License。退款和拒付同样由 Adapter 规范化为 Billing Adjustment；自动动作只包括对已批准全额退款与 `action=chargeback` 暂停 License，其他情况进入人工处理。
+Billing 模块对每个普通购买事件使用已验签 Transaction 行项目执行授权检查：只接受一个 active Offer Price、数量为 1，且 Offer Provider 环境等于 Product 的 `billing_environment`。静态页面参数从来不是安全边界。唯一例外是命中未过期、未消费且绑定当前 draft Sandbox Offer 的 Checkout Verification；该例外仍复用统一 Fulfillment，但强制生成不可激活的验证 License。退款和拒付同样由 Adapter 规范化为 Billing Adjustment；自动动作只包括对已批准全额退款与 `action=chargeback` 暂停 License，其他情况进入人工处理。
 
 Billing 模块只能推进 `renewal_mode=billing` 的 License，并要求存在同账户 Billing Subscription；它不得修改 `renewal_mode=manual` 的到期时间。反过来，License 核心的手动续期操作也不得修改 Billing Subscription 或支付续期 License。
 
@@ -133,7 +130,7 @@ LicenKit 不包含 Resend、SMTP 或特定邮件服务商客户端。Magic Link 
 
 该模块不提供自主注册、密码登录或管理员能力。它调用 License、Activation 和 Billing 模块完成领域动作，不直接跨表拼装新的状态机。
 
-Customer Portal 属于用户 Site，源码位于 `custom_template/site` 或使用者自有的 `custom/site`；管理控制台位于独立的 `apps/admin`。二者使用独立路由、Session Cookie 和 API 权限边界，最终仍可作为同一个 Worker 的静态资源部署，不增加第二套服务端状态机。
+Customer Portal 属于使用方 Site。LicenKit 只在 `examples/customer-site` 保存参考实现，不把它加入生产构建或 Worker 静态资产；管理控制台位于 `apps/admin`，并由 LicenKit Worker 的 `/admin` 路径发布。Setup 显式保存 `siteUrl`，用于生成邮件中的 Magic Link；当前 `siteUrl` 与 `appUrl` 必须同源。Customer 页面通过同源 `/api/v1` 使用 Customer Session 和 API，不增加第二套服务端状态机。
 
 ### M08 管理控制台
 
@@ -143,13 +140,11 @@ Customer Portal 属于用户 Site，源码位于 `custom_template/site` 或使�
 
 负责设备指纹、Machine Token 和 Signed License Token 的本地保存与验证。SDK 不能把网络异常伪装成服务端确认有效，也不能把未签名缓存称为签名授权凭证。
 
-### M10 Web Checkout SDK
+### 静态产品页与 Admin Checkout
 
-负责让参考产品页和用户自定义产品页通过同一公开合同发起 Paddle Checkout。它是无界面的 JavaScript/TypeScript 包，只读取公开 Checkout 配置、初始化 Paddle.js、按 `offerId` 打开一个 Price 且固定 `quantity=1`，并把 Checkout UI 事件转交给页面。
+参考产品页和用户自定义产品页静态维护产品、方案、展示价格、Paddle Client-side Token 和 Price ID，直接调用 Paddle.js。页面不调用 LicenKit Checkout API，也不创建 Customer、License 或 Delivery；`checkout.completed`、重定向和成功页都不是支付事实。
 
-Web Checkout SDK 不包含 Webhook Secret 或 API Key，不接收调用方传入任意 Price ID，不创建 Customer、License 或 Delivery，也不把 `checkout.completed`、重定向或成功页当成支付事实。用户可以完全控制页面的 HTML、框架、样式和文案；参考产品页只是该 SDK 的可修改示例，不是特殊支付路径。
-
-同一个包可以被管理控制台调用受限的验证入口：它只接受服务端 `POST verification-config` 返回的一次性验证配置，并把其中的令牌附加到固定的 Paddle custom data 字段。普通公开构造函数不接受验证令牌或任意 custom data，避免用户页面把验证例外变成通用旁路。
+管理控制台另有一个内部 Sandbox 验证函数。它只接受 `POST verification-config` 返回的一次性验证配置，把令牌附加到固定的 Paddle custom data 字段并打开一个 Price、数量 1。该函数不是公开 SDK，静态产品页不能取得或构造验证令牌。
 
 ## 3. 写入边界与事务
 
@@ -205,7 +200,7 @@ Paddle 的订阅创建相关事件可能乱序到达。Fulfillment 使用 Inboun
 
 ### 3.4 Magic Link 与 Customer Session
 
-请求 Magic Link 时先验证 Turnstile Token、固定 action 和实例 hostname。验证失败时在 Customer 查询之前拒绝；验证成功后，只有在 active Customer 存在且最近一条 Challenge 已超过默认 60 秒冷却期时，才在一个 D1 原子批次中创建：
+请求 Magic Link 时先验证 Turnstile Token、固定 action 和 `site_url` hostname。验证失败时在 Customer 查询之前拒绝；验证成功后，只有在 active Customer 存在且最近一条 Challenge 已超过默认 60 秒冷却期时，才在一个 D1 原子批次中创建：
 
 - 只保存 Token 哈希的 Login Challenge；
 - 包含一次性访问 URL 密文的 Notification Delivery；
@@ -361,14 +356,14 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - `account_id` 是服务端安全上下文：所有 Repository/Service 方法必须显式接收它，所有读取、更新和删除条件都包含它；跨账户外键由数据库复合约束拒绝；
 - 管理员 Session 服务端存储且可吊销；所有管理路由必须声明权限，未声明或未命中角色矩阵时默认拒绝；
 - 支付 Webhook 必须对原始请求体验签；包括 custom provider 在内都不能跳过签名；
-- Paddle Client-side Token 可以公开，但公开 Checkout API 不能返回 API Key、Webhook Secret、通知端点或内部诊断细节；
-- Web Checkout SDK 只允许从公开响应选择 `offerId`，服务端仍对已验签 Transaction 强制校验一个 Price、数量 1、active Offer 和 Provider/Product 环境一致；draft Sandbox Offer 只接受一次性管理员验证例外；
+- Paddle Client-side Token 和 Price ID 可以公开，但 API Key、Webhook Secret、通知端点或内部诊断细节不能进入静态产品页；
+- 服务端对已验签 Transaction 强制校验一个 Price、数量 1、active Offer 和 Provider/Product 环境一致；draft Sandbox Offer 只接受一次性管理员验证例外；
 - 产品私钥、支付 Secret 和出站 HMAC Secret 必须加密持久化；
 - 加密字段使用带版本的 AES-256-GCM 信封，保存 key ID、96-bit 随机 nonce、ciphertext 和 tag，并把 `account_id + table + row_id + field` 作为 AAD；轮换期间保留解密旧 key 的能力；
 - 注册码和机器令牌只保存哈希；
 - Trial Token 只保存哈希，并同时绑定 Account、Product 与设备指纹；重复领取不能返回旧 Token 或延长试用；
 - Magic Link Token 和 Customer Session Token 只保存哈希，完整值不得进入日志或普通审计；
-- Magic Link 请求页必须使用 Turnstile，并由 Worker 调用 Siteverify 校验成功、单次 Token、固定 action 和 `system_settings.app_url` hostname；Widget 成功回调本身不是安全边界；
+- Magic Link 请求页必须使用 Turnstile，并由 Worker 调用 Siteverify 校验成功、单次 Token、固定 action 和 `system_settings.site_url` hostname；Widget 成功回调本身不是安全边界；
 - 已存在 Customer 的重复 Magic Link 请求使用 D1 Login Challenge 执行冷却；冷却命中时返回统一 accepted，不创建新通知、不吊销旧链接；
 - Magic Link 默认 15 分钟有效且只能消费一次；公开请求不得泄露 Customer 是否存在；
 - Magic Link 落地页不得加载第三方资源，使用 URL Fragment 传 Token、`Referrer-Policy: no-referrer`，立即清理浏览器地址；GET 不消费 Token，必须由用户显式动作触发 POST，避免邮件扫描器提前消费；
@@ -400,10 +395,10 @@ Readiness 至少覆盖：
 - 部署 Customer Portal 时存在有效 Notification Gateway；
 - active Paddle Provider 的 Client-side Token、Webhook Secret 和环境匹配，最小事件合同完整；
 - 启用了 Customer API 读穿、定期对账或托管客户门户时，对应 Paddle API Key 可解密、环境和最小权限匹配；
-- Turnstile Sitekey/Secret 已配置，Siteverify 可用且 Widget hostname 与实例 `app_url` 一致；
+- Turnstile Sitekey/Secret 已配置，Siteverify 可用且 Widget hostname 与 `site_url` 一致；
 - 部署检查确认上述 Zone 级 WAF Rate Limiting Rules 已配置；Worker 运行时无法在不引入额外 Cloudflare 管理凭证的情况下自行读取该控制面事实，因此 `/system/readiness` 不伪造这一检查；
 - open System Issue 数量、最早发生时间、受影响且仍阻塞的 Inbound Event 数量；
-- 每个 active Offer 的 Provider/Product 环境一致性、Notification Gateway 最近测试、真实 Sandbox 端到端验收和公开 Checkout 状态；
+- 每个 active Offer 的 Provider/Product 环境一致性、Notification Gateway 最近测试、真实 Sandbox 端到端验收和当前 Checkout Readiness 状态；
 - 待处理或失败事件没有超过告警阈值。
 
 健康检查只报告能力状态，不读取或返回明文 Secret。

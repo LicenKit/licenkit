@@ -1,38 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
-import type { LicenKitCheckout } from "@licenkit/checkout";
-import { openVerificationCheckout } from "./verification-checkout";
+import type { BillingVerificationConfig, SuccessEnvelope } from "./api-client";
+import { openVerificationCheckout, type PaddleRuntime } from "./verification-checkout";
+
+function response(): SuccessEnvelope<BillingVerificationConfig> {
+  return {
+    success: true,
+    data: {
+      verificationMode: true,
+      verificationToken: "vfy_one_time_secret",
+      expiresAt: "2026-09-20T08:00:00.000Z",
+      checkout: {
+        provider: "paddle",
+        environment: "sandbox",
+        clientSideToken: "test_client_token",
+        priceId: "pri_monthly123",
+        quantity: 1,
+      },
+    },
+  };
+}
 
 describe("openVerificationCheckout", () => {
-  it("loads through the authenticated callback, opens the selected Offer, and always destroys the in-memory instance", async () => {
-    const calls: string[] = [];
-    const loadVerificationConfig = vi.fn(async () => ({ success: true, data: {} }));
-    const checkout: LicenKitCheckout = {
-      load: vi.fn(async () => {
-        calls.push("load");
-        await loadVerificationConfig();
-        return { product: { slug: "example", name: "Example" }, available: true, reasonCodes: [], offers: [{ id: "offer_1", name: "Pro", purchaseType: "one_time" as const }] };
-      }),
-      previewPrices: vi.fn(),
-      open: vi.fn(async ({ offerId }) => { calls.push(`open:${offerId}`); }),
-      destroy: vi.fn(() => { calls.push("destroy"); }),
+  it("loads authenticated configuration, opens one Sandbox Price, and clears the token", async () => {
+    const payload = response();
+    const checkoutOpen = vi.fn();
+    const paddle: PaddleRuntime = {
+      Environment: { set: vi.fn() },
+      Setup: vi.fn(),
+      Checkout: { open: checkoutOpen },
     };
 
-    await openVerificationCheckout("offer_1", loadVerificationConfig, () => checkout);
+    await openVerificationCheckout(vi.fn(async () => payload), async () => paddle);
 
-    expect(loadVerificationConfig).toHaveBeenCalledOnce();
-    expect(calls).toEqual(["load", "open:offer_1", "destroy"]);
+    expect(checkoutOpen).toHaveBeenCalledWith({
+      items: [{ priceId: "pri_monthly123", quantity: 1 }],
+      customData: { licenkit_checkout_verification: "vfy_one_time_secret" },
+    });
+    expect(payload.data.verificationToken).toBe("");
   });
 
-  it("destroys the instance when loading or opening fails", async () => {
-    const destroy = vi.fn();
-    const checkout: LicenKitCheckout = {
-      load: vi.fn(async () => { throw new Error("invalid verification response"); }),
-      previewPrices: vi.fn(),
-      open: vi.fn(),
-      destroy,
-    };
-
-    await expect(openVerificationCheckout("offer_1", vi.fn(), () => checkout)).rejects.toThrow("invalid verification response");
-    expect(destroy).toHaveBeenCalledOnce();
+  it("fails before loading Paddle when the authenticated response is invalid", async () => {
+    const loadPaddle = vi.fn();
+    await expect(openVerificationCheckout(
+      vi.fn(async () => ({ success: true, data: {} } as SuccessEnvelope<BillingVerificationConfig>)),
+      loadPaddle,
+    )).rejects.toThrow("PADDLE_VERIFICATION_CONFIG_INVALID");
+    expect(loadPaddle).not.toHaveBeenCalled();
   });
 });

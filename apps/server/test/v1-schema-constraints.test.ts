@@ -278,8 +278,8 @@ describe("V1 initial database schema", () => {
   it("locks setup and immutable Product Release facts", () => {
     db.prepare(
       `INSERT INTO system_settings (
-         id, instance_name, app_url, initialized_at, updated_at
-       ) VALUES ('current', 'LicenKit', 'https://example.com', ?, ?)`,
+         id, instance_name, app_url, site_url, initialized_at, updated_at
+       ) VALUES ('current', 'LicenKit', 'https://example.com', 'https://example.com', ?, ?)`,
     ).run(now, now);
     expect(() => db.prepare("DELETE FROM system_settings").run()).toThrow(
       /SYSTEM_SETUP_STATE_DELETE_FORBIDDEN/,
@@ -306,8 +306,8 @@ describe("V1 initial database schema", () => {
     const setupUpdatedAt = "2026-09-18T00:00:00Z";
     db.prepare(
       `INSERT INTO system_settings (
-         id, instance_name, app_url, initialized_at, updated_at
-       ) VALUES ('current', 'LicenKit', 'https://example.com', ?, ?)`,
+         id, instance_name, app_url, site_url, initialized_at, updated_at
+       ) VALUES ('current', 'LicenKit', 'https://example.com', 'https://example.com', ?, ?)`,
     ).run(now, setupUpdatedAt);
 
     expect(() =>

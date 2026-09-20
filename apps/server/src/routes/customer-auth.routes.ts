@@ -78,16 +78,16 @@ customerAuthRouter.post(
     const email = input.email.trim().toLowerCase();
     const ip = requestIp(c) ?? "unknown";
     const settingsResult = await c.env.DB
-      .prepare(`SELECT app_url FROM system_settings WHERE id = 'current' LIMIT 1`)
-      .all<{ app_url: string }>();
-    const appUrl = settingsResult.results[0]?.app_url;
-    if (!appUrl) {
+      .prepare(`SELECT site_url FROM system_settings WHERE id = 'current' LIMIT 1`)
+      .all<{ site_url: string }>();
+    const siteUrl = settingsResult.results[0]?.site_url;
+    if (!siteUrl) {
       throw new AppError("SETUP_REQUIRED", "LicenKit setup has not completed", 503);
     }
     await verifyCustomerMagicLinkTurnstile({
       env: runtimeEnv(c),
       token: input.turnstileToken,
-      expectedHostname: new URL(appUrl).hostname,
+      expectedHostname: new URL(siteUrl).hostname,
       remoteIp: requestIp(c),
     });
     // Fail for every caller before identity lookup when sensitive payload encryption is unavailable.
@@ -145,7 +145,7 @@ customerAuthRouter.post(
       const challengeId = `clg_${ulid().toLowerCase()}`;
       const token = randomToken("mlk");
       const tokenHash = await sha256Hex(token);
-      const baseUrl = appUrl.replace(/\/+$/, "");
+      const baseUrl = siteUrl.replace(/\/+$/, "");
       const accessUrl = `${baseUrl}/customer/${encodeURIComponent(account.slug)}/auth#token=${encodeURIComponent(token)}`;
       const delivery = await prepareNotificationDelivery({
         db: c.env.DB,

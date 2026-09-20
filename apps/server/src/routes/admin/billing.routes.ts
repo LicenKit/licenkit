@@ -361,13 +361,9 @@ adminBillingRouter.patch("/offers/:offerId", requireRole(["owner", "admin"]), as
 adminBillingRouter.post("/offers/:offerId/verification-config", requireRole(["owner", "admin"]), async (c) => {
   const account = accountId(c);
   const row = await c.env.DB.prepare(
-    `SELECT offer.id, offer.external_price_id, offer.purchase_type,
-            product.slug AS product_slug, product.name AS product_name,
-            product.description AS product_description,
-            plan.name AS offer_name, provider.environment, provider.client_side_token
+    `SELECT offer.id, offer.external_price_id,
+            provider.environment, provider.client_side_token
      FROM billing_offers AS offer
-     JOIN products AS product ON product.account_id = offer.account_id AND product.id = offer.product_id
-     JOIN license_plans AS plan ON plan.account_id = offer.account_id AND plan.id = offer.license_plan_id
      JOIN billing_providers AS provider
        ON provider.account_id = offer.account_id AND provider.id = offer.billing_provider_id
      WHERE offer.account_id = ?1 AND offer.id = ?2
@@ -407,15 +403,13 @@ adminBillingRouter.post("/offers/:offerId/verification-config", requireRole(["ow
       verificationMode: true,
       verificationToken: token,
       expiresAt,
-      product: { slug: row.product_slug, name: row.product_name, description: row.product_description ?? undefined },
-      checkout: { available: true, provider: "paddle", environment: "sandbox", clientSideToken: row.client_side_token },
-      offers: [{
-        id: row.id,
-        name: row.offer_name,
-        purchaseType: row.purchase_type,
+      checkout: {
+        provider: "paddle",
+        environment: "sandbox",
+        clientSideToken: row.client_side_token,
         priceId: row.external_price_id,
         quantity: 1,
-      }],
+      },
     },
   }, 201);
 });

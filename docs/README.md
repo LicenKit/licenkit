@@ -53,12 +53,12 @@
 32. 管理员可以签发永久 License；永久授权使用 `license_model=perpetual`、`renewal_mode=none`、`expires_at=NULL`，不要求 `expiresAt`。V1 不增加语义矛盾的“永久订阅”状态。
 33. Paddle Customer 解析以 `customer.created`/`customer.updated` 为正常路径，使用外部 Customer ID 建立稳定映射。购买事件先到时保持 `pending`，等待关联 Customer 事件后重试；若配置了具备 `customer.read` 权限的 Paddle API Key，可以用服务器端 API 读穿加速恢复，但 API Key 不是基础购买和发码闭环的必需配置。`custom_data.email` 不作为 Customer 身份或发码地址来源。
 34. Paddle Client-side Token 是公开的前端凭证，只用于初始化 Paddle.js、预览价格和打开 Checkout；Webhook Secret 用于验证入站事件；API Key 只允许服务端使用，启用托管客户门户时需要 `customer_portal_session.write`，启用 API 对账/读穿时需要对应只读权限。
-35. 普通 Checkout 只允许选择一个 active Offer 对应的 Price，数量固定为 1。履约事件不满足“一个已映射 Price、数量 1”时进入 `needs_attention`，不猜测发码；draft Sandbox Offer 只允许走第 39 条的一次性管理员验证例外。
-36. Offer 默认处于 `draft`。只有 Client-side Token、Webhook 事件合同、Notification Gateway、调度器、签名密钥（如需要）和真实 Sandbox 购买到通知接管链路均通过检查，才允许显式激活；公开产品页在关键依赖不可用时不返回可购买配置。
-37. V1 提供无界面的 Web Checkout SDK 和公开 Checkout 配置 API。用户拥有并可任意修改自己的产品页；参考产品页只是使用同一 SDK/契约的模板。浏览器 Checkout 回调只用于界面反馈，不能创建 Customer、License 或发码。
+35. 普通支付履约只接受一个 active Offer 对应的 Price，数量固定为 1。已验签事件不满足“一个已映射 Price、数量 1”时进入 `needs_attention`，不猜测发码；draft Sandbox Offer 只允许走第 39 条的一次性管理员验证例外。
+36. Offer 默认处于 `draft`。只有 Client-side Token、Webhook 事件合同、Notification Gateway、调度器、签名密钥（如需要）和真实 Sandbox 购买到通知接管链路均通过检查，才允许显式激活；激活后静态产品页仍直接连接 Paddle，运行期异常由入站事件和告警暴露。
+37. 产品页静态维护产品、方案、展示价格和 Paddle Price ID，直接调用 Paddle.js，不依赖 LicenKit Checkout API 或 Web Checkout SDK。浏览器 Checkout 回调只用于界面反馈，不能创建 Customer、License 或发码。
 38. Paddle Notification Destination 的最小事件合同为 `customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created`、`adjustment.updated`。缺少任一项时 Offer 不能激活；额外事件可以用于更细诊断，但不能替代最小合同。
 39. Product 明确选择唯一的公开收款环境。普通付款只有在 Provider 环境与 Product 一致且 Offer 已激活时才能签发可用 License；管理员的 Sandbox 端到端验证使用短期一次性令牌，生成的验证 License 永久不可激活，测试卡不能兑换正式授权。
-40. 自定义产品页只配置 LicenKit 基础 URL、Account slug 和 Product slug，但商户仍需在 Paddle 的 Sandbox/Live 分别设置 Default Payment Link，并为实际 Live 页面完成 Website Approval；公开 API 的 `available=true` 不冒充任意第三方 Origin 已获 Paddle 批准。
+40. 自定义产品页配置公开的 Paddle 环境、Client-side Token 和 Price ID；同一 Price ID 在 LicenKit Offer 中关联 Product 与 License Plan。商户仍需在 Sandbox/Live 分别设置 Default Payment Link，并为实际 Live 页面完成 Website Approval。
 
 ## 阅读顺序
 
@@ -72,7 +72,8 @@
 | [06-sdk-contract.md](./zh-CN/06-sdk-contract.md) | 不透明凭证与签名凭证在 SDK 中如何表现 |
 | [07-delivery-plan.md](./zh-CN/07-delivery-plan.md) | 当前已知差距、开发顺序和完成条件 |
 | [08-development-and-operations.md](./zh-CN/08-development-and-operations.md) | 本地开发、配置和运行检查 |
-| [09-web-checkout-sdk-contract.md](./zh-CN/09-web-checkout-sdk-contract.md) | 用户自定义产品页如何通过公开配置 API 和 Web Checkout SDK 安全发起购买 |
+| [09-static-product-page.md](./zh-CN/09-static-product-page.md) | 静态产品页如何直接使用 Paddle.js，并由 LicenKit Webhook 完成可信履约 |
+| [10-reference-customer-site.md](./zh-CN/10-reference-customer-site.md) | 如何复制参考 Site，并与 LicenKit 保持同源但独立部署 |
 
 ## 推荐的 V1 运行默认值
 

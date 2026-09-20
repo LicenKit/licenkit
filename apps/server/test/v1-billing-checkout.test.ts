@@ -12,6 +12,7 @@ import {
 } from "../src/services/billing/system-issues";
 import { reconcileBillingCustomer } from "../src/services/billing/customer-sync";
 import { createCustomerPortalSession } from "../src/services/billing/customer-portal";
+import { evaluateBillingOfferReadiness, getBillingOfferReadinessRow } from "../src/services/billing/readiness";
 import { clearExpiredInboundEventPayloads } from "../src/services/runtime/retention";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
@@ -35,7 +36,7 @@ function eventPayload(eventId: string, eventType: string, data: Record<string, u
   return JSON.stringify({ event_id: eventId, event_type: eventType, occurred_at: occurredAt, data });
 }
 
-describe("V1 Paddle billing and public Checkout contracts", () => {
+describe("V1 Paddle billing and fulfillment contracts", () => {
   let testEnv: TestEnvContext;
 
   beforeEach(async () => {
@@ -44,8 +45,8 @@ describe("V1 Paddle billing and public Checkout contracts", () => {
     testEnv.env.DB = testEnv.d1;
     const db = testEnv.sqliteDb;
     db.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, initialized_at, updated_at)
-       VALUES ('current', 'LicenKit', 'https://licenses.example.test', ?, ?)`,
+      `INSERT INTO system_settings (id, instance_name, app_url, site_url, initialized_at, updated_at)
+       VALUES ('current', 'LicenKit', 'https://licenses.example.test', 'https://licenses.example.test', ?, ?)`,
     ).run(nowIso, nowIso);
     db.prepare(
       `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
@@ -359,19 +360,56 @@ describe("V1 Paddle billing and public Checkout contracts", () => {
       .toEqual({ status: "active" });
   });
 
-  it("keeps public checkout fail-closed without complete readiness evidence", async () => {
+  it("does not expose a LicenKit public Checkout configuration endpoint", async () => {
     const response = await app.request(
       "/api/v1/public/accounts/billing-v1/products/one/checkout",
       { method: "GET" },
       testEnv.env,
     );
-    expect(response.status).toBe(200);
-    const body = await response.json() as any;
-    expect(body.success).toBe(true);
-    expect(body.data).not.toHaveProperty("found");
-    expect(body.data.checkout.available).toBe(false);
-    expect(body.data.checkout).not.toHaveProperty("clientSideToken");
-    expect(body.data.offers).toEqual([]);
+
+    expect(response.status).toBe(404);
+  });
+
+  it("does not require removed Checkout SDK PricePreview evidence for a Live Offer", async () => {
+    const liveProviderId = "bpr_live_readiness";
+    const encryptedSecret = await encryptBillingProviderSecret(
+      webhookSecret,
+      testEnv.env,
+      accountId,
+      liveProviderId,
+      "webhook_secret_ciphertext",
+    );
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO billing_providers (
+         id, account_id, provider, environment, client_side_token,
+         webhook_secret_ciphertext, status, created_at, updated_at
+       ) VALUES (?, ?, 'paddle', 'live', 'live_client_token_v1', ?, 'active', ?, ?)`,
+    ).run(liveProviderId, accountId, encryptedSecret, nowIso, nowIso);
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO products (
+         id, account_id, slug, name, billing_environment, status, created_at, updated_at
+       ) VALUES ('prd_live_readiness', ?, 'live-readiness', 'Live Readiness', 'live', 'active', ?, ?)`,
+    ).run(accountId, nowIso, nowIso);
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO license_plans (
+         id, account_id, product_id, name, license_model, credential_mode,
+         payment_grace_seconds, features_json, status, created_at, updated_at
+       ) VALUES ('pln_live_readiness', ?, 'prd_live_readiness', 'Live Readiness', 'perpetual', 'opaque',
+         0, '[]', 'active', ?, ?)`,
+    ).run(accountId, nowIso, nowIso);
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO billing_offers (
+         id, account_id, billing_provider_id, external_price_id, product_id,
+         license_plan_id, purchase_type, status, created_at, updated_at
+       ) VALUES ('off_live_readiness', ?, ?, 'pri_live_readiness', 'prd_live_readiness',
+         'pln_live_readiness', 'one_time', 'draft', ?, ?)`,
+    ).run(accountId, liveProviderId, nowIso, nowIso);
+    const row = await getBillingOfferReadinessRow(testEnv.env.DB, accountId, "off_live_readiness");
+    expect(row).not.toBeNull();
+
+    const readiness = await evaluateBillingOfferReadiness(testEnv.env.DB, row!, { activation: true });
+
+    expect(readiness.checks.map((item) => item.key)).not.toContain("live_price_preview");
   });
 
   it("paginates active Accounts so work after the first page is not starved", async () => {

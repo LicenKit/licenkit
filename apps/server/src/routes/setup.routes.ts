@@ -19,6 +19,7 @@ export const setupRouter = new Hono<AppContext>();
 const SetupSchema = z.object({
   setupToken: z.string().min(1),
   instanceName: z.string().trim().min(1).max(120),
+  siteUrl: z.string().trim().url().max(2048),
   accountSlug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(63),
   owner: z.object({
     name: z.string().trim().min(1).max(120),
@@ -26,6 +27,27 @@ const SetupSchema = z.object({
     password: z.string().min(12).max(256),
   }),
 });
+
+function normalizeSameOriginSiteUrl(value: string, appOrigin: string): string {
+  const url = new URL(value);
+  if (url.origin !== appOrigin) {
+    throw new AppError(
+      "SETUP_SITE_URL_ORIGIN_MISMATCH",
+      "Site URL must use the same Origin as the LicenKit app URL",
+      400,
+      { appOrigin, siteOrigin: url.origin },
+    );
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new AppError(
+      "SETUP_SITE_URL_INVALID",
+      "Site URL cannot contain credentials, query parameters, or a fragment",
+      400,
+    );
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${path === "" || path === "/" ? "" : path}`;
+}
 
 async function setupCounts(db: D1Database) {
   const result = await db
@@ -67,6 +89,7 @@ setupRouter.post(
   const now = new Date();
   const nowIso = now.toISOString();
   const origin = new URL(c.req.url).origin;
+  const siteUrl = normalizeSameOriginSiteUrl(input.siteUrl, origin);
   const accountId = `acc_${ulid().toLowerCase()}`;
   const ownerId = `usr_${ulid().toLowerCase()}`;
   const sessionId = `ase_${ulid().toLowerCase()}`;
@@ -86,10 +109,10 @@ setupRouter.post(
     c.env.DB
       .prepare(
         `INSERT INTO system_settings (
-           id, instance_name, app_url, api_base_url, initialized_at, updated_at
-         ) VALUES ('current', ?1, ?2, ?3, ?4, ?4)`
+           id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at
+         ) VALUES ('current', ?1, ?2, ?3, ?4, ?5, ?5)`
       )
-      .bind(input.instanceName, origin, `${origin}/api/v1`, nowIso),
+      .bind(input.instanceName, origin, siteUrl, `${origin}/api/v1`, nowIso),
     ...prepareAccountWithOwner({
       db: c.env.DB,
       account: { id: accountId, name: input.instanceName, slug: input.accountSlug },
@@ -119,7 +142,7 @@ setupRouter.post(
       action: "setup.completed",
       resourceType: "system_settings",
       resourceId: "current",
-      details: { accountId, ownerId },
+      details: { accountId, ownerId, siteUrl },
       ip: requestIp(c),
       userAgent: c.req.header("user-agent"),
       now: nowIso,

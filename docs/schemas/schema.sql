@@ -10,6 +10,7 @@ CREATE TABLE system_settings (
     id TEXT PRIMARY KEY CHECK (id = 'current'),
     instance_name TEXT NOT NULL,
     app_url TEXT NOT NULL,
+    site_url TEXT NOT NULL,
     api_base_url TEXT,
     scheduler_last_success_at TEXT,
     scheduler_last_duration_ms INTEGER

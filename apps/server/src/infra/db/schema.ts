@@ -25,6 +25,7 @@ export const systemSettings = sqliteTable(
     id: text("id").primaryKey(),
     instanceName: text("instance_name").notNull(),
     appUrl: text("app_url").notNull(),
+    siteUrl: text("site_url").notNull(),
     apiBaseUrl: text("api_base_url"),
     schedulerLastSuccessAt: text("scheduler_last_success_at"),
     schedulerLastDurationMs: integer("scheduler_last_duration_ms"),

@@ -41,16 +41,15 @@ sequenceDiagram
 
 ### 1.1 从自定义产品页到 Checkout
 
-参考产品页和用户自定义产品页使用同一个公开 Checkout 配置 API 与 Web Checkout SDK：
+参考产品页和用户自定义产品页是静态页面，不请求 LicenKit Checkout API：
 
-1. 页面以 `accountSlug + productSlug` 请求公开配置；服务端实时检查 Product、Product 选择的收款环境、Offer、Billing Provider、最小事件合同、Notification Gateway、调度器和签名能力；
-2. 不可收款时返回 `available=false` 和可公开原因码，SDK 不初始化 Paddle Checkout；管理端同时展示更完整的联通状态与修复动作；
-3. 可收款时只返回 Product 所选环境下的公开 Product/Offer 展示字段、Provider 环境、Paddle Client-side Token 和 active Offer 的 Price ID；不同环境的 Offer 即使存在也不会进入响应；
-4. 页面选择一个 Offer，SDK 固定调用一个 Price、`quantity=1`，不能接收调用方传入的任意 Price ID 或数量；
-5. Paddle.js 收集客户和支付信息。Checkout 成功回调只更新页面提示或跳转成功页，不创建授权；
-6. Paddle 发送已签名 Webhook，LicenKit 持久化后再由统一履约流程发码。
+1. 页面在源码中维护产品、方案、展示价格与 Paddle Price ID，在公开环境变量中保存 Paddle 环境和 Client-side Token；
+2. 页面直接初始化 Paddle.js，选择一个 Price 并固定提交 `quantity=1`；
+3. Paddle.js 收集客户和支付信息。Checkout 成功回调只更新页面提示或跳转成功页，不创建授权；
+4. Paddle 发送已签名 Webhook，LicenKit 持久化后，以 `billing_provider_id + external_price_id` 查询 active Offer，并关联 Product 与 License Plan；
+5. 统一履约流程再次校验一个 Price、数量 1、环境、购买类型、Product/Plan 状态和 Customer，再签发 License。
 
-用户可以完全修改页面结构、样式和文案，也可以不使用参考模板；只要使用同一公开契约和 SDK，就不会把支付 Secret 放进前端。恶意调用方即使绕过 SDK 直接构造多商品或多数量 Checkout，服务端仍以已验签 Transaction 的行项目再次校验，失败时进入 `needs_attention` 而不是发码。
+Paddle Client-side Token 与 Price ID 是公开前端配置；Webhook Secret 和 API Key 不能进入产品页。页面代码不能成为安全边界，恶意调用方即使构造多商品、多数量或未知 Price，服务端仍以已验签 Transaction 的行项目判定，失败时进入 `needs_attention` 而不是发码。
 
 ### 1.2 Paddle Customer 解析与回调时序
 
@@ -122,7 +121,7 @@ billing_provider_id + external_price_id
 
 ### 2.1 管理员 Sandbox 闭环验证
 
-Offer 默认是 draft，但真实端到端测试又必须发生在激活前。为避免因此建立第二套履约逻辑，owner/admin 对 draft Sandbox Offer 发起验证时，服务端创建一条短期、一次性的 Checkout Verification，只保存验证令牌哈希，并把明文令牌随 `Cache-Control: no-store` 的验证配置返回一次。管理控制台使用同一个 Web Checkout SDK 打开一个 Price、数量 1 的 Checkout；SDK 只在该受控入口把令牌放入 Paddle `custom_data.licenkit_checkout_verification`，普通公开 SDK 不允许调用方自定义该字段。
+Offer 默认是 draft，但真实端到端测试又必须发生在激活前。为避免因此建立第二套履约逻辑，owner/admin 对 draft Sandbox Offer 发起验证时，服务端创建一条短期、一次性的 Checkout Verification，只保存验证令牌哈希，并把明文令牌随 `Cache-Control: no-store` 的验证配置返回一次。管理控制台内部直接调用 Paddle.js，固定打开一个 Price、数量 1，并只在这条受控路径把令牌放入 `custom_data.licenkit_checkout_verification`。静态产品页不获得验证令牌。
 
 已验签 Transaction 到达后，服务端必须以等值索引查询令牌哈希，同时确认验证尝试仍为 `pending`、未过期、Offer/Provider/Price 完全一致且 Provider 为 Sandbox，再以条件更新消费令牌。随后仍调用统一 Customer 解析、Fulfillment 和 Delivery 模块，但创建的 License 固定为 `is_checkout_verification=1`、`status=suspended`、`status_reason=checkout_verification`。它会产生真实注册码和通知 Delivery，以验证发码接管链路，但激活、恢复和方案迁移都必须拒绝该 License。
 
@@ -262,9 +261,9 @@ Paddle 把退款、credit 和拒付表示为 Adjustment。LicenKit 必须订阅 
 
 ## 5. License 签发与通知不是同一状态
 
-正常产品页收款前必须已经存在 active 且 Endpoint Test 被接收的 Notification Gateway，因此 Offer 激活和公开 Checkout API 都要把通知联通作为门禁。管理控制台在 Billing Provider 与 Offer 页面展示：Webhook 事件合同、最近验签事件、Notification Gateway 最近测试、调度器健康、Sandbox 端到端验收、签名密钥和最终 `checkout_available` 状态。
+Offer 激活前必须已经存在 active 且 Endpoint Test 被接收的 Notification Gateway，因此激活动作把通知联通作为门禁。管理控制台在 Billing Provider 与 Offer 页面展示：Webhook 事件合同、最近验签事件、Notification Gateway 最近测试、调度器健康、Sandbox 端到端验收、签名密钥和当前 Readiness 状态。
 
-该门禁只能阻止 LicenKit 官方 SDK/模板发起新 Checkout，不能撤销支付平台已经发生的外部付款。如果管理员在 Paddle 后台手工创建交易、旧页面继续收款或关键配置在 Checkout 打开后失效，只要已验签交易仍满足一个 active Offer、数量 1、环境一致和 Customer 可解析这些履约合同，LicenKit 就必须履约，不能因通知配置缺失拒绝已付款用户。不满足授权合同的付款必须完整保存并进入 `needs_attention`，由管理员决定，不能自动猜测发码，也不能静默丢弃。License 创建成功后，即使通知 Webhook 尚未配置或投递失败，授权事实也已经存在。管理控制台必须分别展示：
+静态产品页不读取 LicenKit 的运行状态，因此激活门禁不能阻止已经发布的页面继续打开 Paddle Checkout。如果管理员在 Paddle 后台手工创建交易、静态页面继续收款或关键配置在 Checkout 打开后失效，只要已验签交易仍满足一个 active Offer、数量 1、环境一致和 Customer 可解析这些履约合同，LicenKit 就必须履约，不能因通知配置缺失拒绝已付款用户。不满足授权合同的付款必须完整保存并进入 `needs_attention`，由管理员决定，不能自动猜测发码，也不能静默丢弃。License 创建成功后，即使通知 Webhook 尚未配置或投递失败，授权事实也已经存在。管理控制台必须分别展示：
 
 - License 履约状态；
 - 注册码通知状态；
@@ -427,7 +426,7 @@ sequenceDiagram
     Portal-->>Customer: 相同的 accepted 响应
 ```
 
-Turnstile 必须在服务端调用 Siteverify；只渲染客户端 Widget 不构成验证。服务端校验 Token 单次使用、`action=customer_magic_link` 和当前实例 hostname，短暂网络重试复用同一个 Siteverify idempotency key；验证失败或无法确认时在查询 Customer 之前 fail-closed。Turnstile Token 不写入数据库或日志。
+Turnstile 必须在服务端调用 Siteverify；只渲染客户端 Widget 不构成验证。服务端校验 Token 单次使用、`action=customer_magic_link` 和 `site_url` hostname，短暂网络重试复用同一个 Siteverify idempotency key；验证失败或无法确认时在查询 Customer 之前 fail-closed。Turnstile Token 不写入数据库或日志。
 
 已存在 Customer 的重复请求使用 `customer_login_challenges(account_id, customer_id, created_at)` 索引执行默认 60 秒冷却，不增加 KV、Durable Object 或新的限流表。无论 Customer 是否存在或是否命中冷却，公开响应的状态码、内容、缓存头和最短响应时间策略保持一致，并在各分支使用相同的小幅随机抖动，降低通过稳定时差枚举购买者邮箱的风险。
 

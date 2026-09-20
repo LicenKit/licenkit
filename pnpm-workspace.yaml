@@ -1,5 +1,4 @@
 packages:
   - 'apps/*'
   - 'packages/*'
-  - 'custom_template/site'
-  - 'custom/site'
+  - 'examples/*'

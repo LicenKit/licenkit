@@ -19,7 +19,7 @@
 | Scheduled Worker | 当前 Cron 每日运行且只清理未使用的过期 License | 改为每分钟运行统一调度入口，并把清理保留为独立作业 |
 | 支付配置 | 多渠道配置混在账户 JSON 字段 | 拆成 Billing Provider 表 |
 | 价格映射 | 放在 Policy metadata，找不到时存在回退 | 拆成 Offer Mapping，缺失时失败 |
-| 产品购买页 | 没有公开 Checkout 配置合同、可复用 Web SDK 或收款就绪门禁 | 新建公开 API、无界面 SDK 和可修改参考模板 |
+| 产品购买页 | 需要静态产品/方案配置、Paddle.js 入口和安全响应头 | 提供可修改参考模板，直接用 Price ID 连接 Paddle |
 | 订阅 | 事件处理不完整，续费可能进入新 License 签发路径 | 重新实现 Subscription 状态模型 |
 | 入站幂等 | 代码有查询检查，当前运行 Schema 与文档约束不完全一致 | 新 Schema 使用数据库唯一约束 |
 | 邮件发码 | 只有通用业务事件广播概念，没有完成可验证的客户邮件闭环 | 新建 Notification Gateway 和 Delivery 流程 |
@@ -93,7 +93,7 @@
 - [ ] 出站 URL 只允许公网 HTTPS，完成端口、地址和逐跳重定向校验；V1 不支持私网目标；
 - [ ] 敏感负载加密、accepted 后立即清理、未成功负载默认 24 小时到期，以及 Magic Link 更短生命周期清理；
 - [ ] 控制台展示阻塞配置、pending、accepted 和 failed。
-- [ ] Notification Gateway 缺失或 Endpoint Test 未 accepted 时，Offer 激活和公开 Checkout API 均不可收款；
+- [ ] Notification Gateway 缺失或 Endpoint Test 未 accepted 时，Offer 不能激活；静态产品页仍可能产生付款，异常必须被持久化并进入可恢复状态；
 - [ ] 对异常产生的 `blocked_configuration` Delivery 提供“配置完成后绑定并发送”，仅允许负载未过期且零 Attempt 的记录；
 
 完成条件：在真实外部接收端点中完成一次签名验证并接管邮件发送任务；关闭接收端点后能观察失败、保留注册码负载并在恢复后成功 retry；中断即时处理后 Scheduled Worker 可以恢复同一 Delivery；全程不调用 Cloudflare Queues 和 Resend API。
@@ -107,11 +107,10 @@
 - [ ] Customer API 返回 `401/403` 时同时保存 Inbound Event 原始错误、去重 upsert Provider capability System Issue，并停止重复调用无效配置；
 - [ ] System Issue 管理界面展示关联事件和恢复预览；“已修复”先验证 capability，再由管理员明确选择是否把仍可重放的 Event 交回完整状态机；
 - [ ] Product `slug`、唯一 `billing_environment`、默认 draft Offer Mapping、Checkout Readiness 和显式激活；
-- [ ] Public Checkout API、无界面 Web Checkout SDK 和可修改参考产品页；
-- [ ] 参考模板说明 Sandbox/Live Default Payment Link、Live Website Approval 与 CSP 前提；实际 Live Origin 完成一次不付款的 Checkout 打开测试，SDK 保留 Origin/初始化原始错误；
-- [ ] owner/admin 通过 POST draft Sandbox Offer 验证配置创建短期一次性验证令牌，并用同一 SDK 运行真实 Checkout；验证 License 固定不可激活，accepted Delivery 成功后才能形成完成证据，Live Offer 可复用同产品/方案/购买类型的 Sandbox 闭环证据，不把 PricePreview 保存为激活证据；
-- [ ] 公开 SDK 使用本次加载的 Client-side Token 和 Price 实时执行 PricePreview；只有成功后才启用购买和允许 `open()`，失败时保留 Paddle 原始错误并阻断当前页面 Checkout；
-- [ ] SDK 只能按返回的 `offerId` 打开一个 Price、数量 1，不接受调用方传入任意 Price ID 或数量；
+- [ ] 可修改参考产品页静态维护产品、方案、展示价格和 Paddle Price ID，并直接调用 Paddle.js；
+- [ ] 参考模板说明 Sandbox/Live Default Payment Link、Live Website Approval 与 CSP 前提；实际 Live Origin 完成一次不付款的 Checkout 打开测试并保留 Paddle Origin/初始化错误；
+- [ ] owner/admin 通过 POST draft Sandbox Offer 验证配置创建短期一次性验证令牌，并由 Admin 内部 Paddle.js 调用运行真实 Checkout；验证 License 固定不可激活，accepted Delivery 成功后才能形成完成证据，Live Offer 可复用同产品/方案/购买类型的 Sandbox 闭环证据；
+- [ ] 参考产品页和 Admin 验证都只打开一个 Price、数量 1；服务端仍以已验签 Webhook 独立校验，不信任前端参数；
 - [ ] 原始请求签名验证；
 - [ ] 入站事件数据库幂等；
 - [ ] Paddle Notification Destination 最小事件合同：`customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created`、`adjustment.updated`；
@@ -134,7 +133,7 @@
 - [ ] 支付成功后通过 Notification Webhook 发码；
 - [ ] 配置具备 `customer_portal_session.write` 的加密 Paddle API Key 后，Billing Adapter 创建支付平台托管客户门户会话；未配置时只禁用该能力，不禁用购买；
 
-完成条件：owner/admin 先通过 draft Sandbox Offer 的验证入口完成真实闭环，验证令牌只能消费一次，验证 License 的激活、恢复和迁移均被拒绝；激活后用户可在自定义页面通过公开 API 和 Web SDK 完成 Product 所选环境的 Paddle Checkout。真实事件从 Customer 创建、付款、唯一 License 签发到外部接收方接受邮件任务闭环，并可从事件 ID 追踪到 Billing Customer、Subscription、License、Delivery、Checkout Verification 和所有 Attempt。分别证明 Customer Webhook 先到、购买事件先到后等待 Customer Webhook、配置 API Key 后读穿加速、已有 Paddle Customer 再次购买四条路径只履约一次；多商品、数量不为 1、Provider/Product 环境不一致不发正式 License；最小事件合同和 Notification Gateway 任一缺失时不能激活 Offer；至少一条免费订阅试用完成 `trialing -> active`；Adjustment 各状态映射通过；配置 API Key 后可以创建托管门户会话，但该动作不直接修改本地 Subscription。
+完成条件：owner/admin 先通过 draft Sandbox Offer 的验证入口完成真实闭环，验证令牌只能消费一次，验证 License 的激活、恢复和迁移均被拒绝；激活后用户可在静态自定义页面直接通过 Paddle.js 完成 Product 所选环境的 Checkout。真实事件从 Customer 创建、付款、唯一 License 签发到外部接收方接受邮件任务闭环，并可从事件 ID 追踪到 Billing Customer、Subscription、License、Delivery、Checkout Verification 和所有 Attempt。分别证明 Customer Webhook 先到、购买事件先到后等待 Customer Webhook、配置 API Key 后读穿加速、已有 Paddle Customer 再次购买四条路径只履约一次；多商品、数量不为 1、Provider/Product 环境不一致不发正式 License；最小事件合同和 Notification Gateway 任一缺失时不能激活 Offer；静态页面在运行期异常时产生的付款能够保留事实并进入修复流程；至少一条免费订阅试用完成 `trialing -> active`；Adjustment 各状态映射通过；配置 API Key 后可以创建托管门户会话，但该动作不直接修改本地 Subscription。
 
 ### Phase 4：Customer Portal
 
@@ -206,6 +205,6 @@
 5. 未成功的敏感 Delivery 负载推荐默认保留 24 小时；accepted 后立即清除，Magic Link 以 15 分钟有效期为更早上限。
 6. 两类免费试用都进入 V1 首发：Product/设备 Trial Claim 必须显式配置时长且只支持在线校验；Paddle 免费订阅试用要求预先绑定支付方式，周期只取已验签 Paddle Subscription。
 7. 管理员和受信 API 可以签发永久、固定期限和手动续期订阅；永久 License 无到期时间，只有手动订阅必须提供明确的未来到期时间。
-8. 产品页使用公开 Checkout API 和无界面 SDK；Client-side Token 可公开，API Key 和 Webhook Secret 永不进入前端。
+8. 产品页静态维护展示内容和 Price ID，直接调用 Paddle.js；Client-side Token 与 Price ID 可公开，API Key 和 Webhook Secret 永不进入前端。
 
 这些值已经进入对应阶段的验收用例。24 小时是推荐运行默认值；调整时只能改显式配置和新 Delivery 的 `payload_expires_at`，不能切换处理机制。
