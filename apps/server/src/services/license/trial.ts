@@ -9,7 +9,6 @@ import {
 import { parseFeatures } from "../../domain/license/terms";
 import { requireProductRelease } from "./activation";
 import { firstD1 } from "./d1";
-import { consumeRateLimit } from "../../middleware/rate-limit";
 
 interface TrialProductRow {
   status: string;
@@ -28,32 +27,6 @@ interface TrialClaimRow {
   last_validated_at: string | null;
   revoked_at: string | null;
   revoke_reason: string | null;
-}
-
-export async function enforceTrialClaimRateLimit(input: {
-  store: KVNamespace;
-  accountId: string;
-  productId: string;
-  fingerprint: string;
-  ip: string;
-  now?: Date;
-}): Promise<void> {
-  const nowSeconds = Math.floor((input.now ?? new Date()).getTime() / 1000);
-  const ipHash = await sha256Hex(input.ip);
-  const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
-  const keys = [
-    `rl:trial_claim:${input.accountId}:${input.productId}:ip:${ipHash}`,
-    `rl:trial_claim:${input.accountId}:${input.productId}:fp:${fingerprintHash}`,
-  ];
-  for (const key of keys) {
-    await consumeRateLimit(input.store, key, {
-      limit: 10,
-      windowSeconds: 60,
-      nowSeconds,
-      errorCode: "TRIAL_CLAIM_RATE_LIMITED",
-      message: "Too many Trial Claim requests.",
-    });
-  }
 }
 
 export async function claimTrial(input: {

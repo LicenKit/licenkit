@@ -35,10 +35,13 @@ LicenKit 将数据库中的入站事件和 Delivery 作为异步任务的事实�
 ## 仓库结构
 
 ```text
-apps/server    Hono + Cloudflare Workers API
-apps/web       React 管理控制台与客户授权中心
-apps/cli       命令行客户端
-docs           产品、架构、数据模型和接口文档
+apps/server             Hono + Cloudflare Workers API
+apps/admin              React 管理控制台
+apps/cli                命令行客户端
+packages/checkout-sdk   网站调用的无界面 Checkout SDK
+custom_template/site    LicenKit 维护的完整用户 Site 模板
+custom                  使用者自有的 Site 与 Wrangler 配置；上游保持为空
+docs                    产品、架构、数据模型和接口文档
 ```
 
 Swift SDK 位于同级独立仓库 `licenkit-sdk-swift`。
@@ -64,6 +67,23 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+## 自定义与上游升级
+
+LicenKit 只在 `custom_template` 维护默认实现，不写入 `custom`。使用者需要定制官网时，将 `custom_template/site` 复制到 `custom/site` 后自行修改；这个 Site 包含产品列表与购买、邮箱 Magic Link，以及 License、设备和订阅管理，不包含 Admin。
+
+选择规则只有两条：
+
+- `custom/site/package.json` 存在时，使用完整的 `custom/site`；否则使用完整的 `custom_template/site`。两者不逐文件合并。
+- `custom/wrangler.jsonc` 存在时，Wrangler 命令使用它；否则使用 `custom_template/wrangler.jsonc`。配置字段不自动合并。
+
+构建与部署命令会打印实际选择的路径。首次定制 Wrangler 配置时，可以复制模板后完整修改：
+
+```bash
+cp custom_template/wrangler.jsonc custom/wrangler.jsonc
+```
+
+因此上游升级只更新 LicenKit 代码和 `custom_template`；使用者仓库中的 `custom` 仍由使用者负责比较和调整。`dist` 是按所选 Site 与独立 Admin 生成的部署产物，不是配置来源。
 
 测试与正式环境使用相同模块和调用流程，只替换资源地址、Secret 和支付平台环境等配置。
 

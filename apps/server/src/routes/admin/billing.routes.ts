@@ -429,7 +429,6 @@ adminBillingRouter.post("/offers/:offerId/activate", requireRole(["owner", "admi
   }
   const readiness = await evaluateBillingOfferReadiness(c.env.DB, row, {
     activation: true,
-    schedulerStore: c.env.KEYS_KV,
   });
   if (!readiness.ready) {
     throw new AppError(
@@ -491,7 +490,7 @@ adminBillingRouter.post("/events/:eventId/replay", requireRole(["owner", "admin"
   const result = await c.env.DB.prepare(
     `UPDATE inbound_events
      SET status = 'pending', next_attempt_at = ?1, locked_by = NULL, locked_until = NULL,
-         last_error_code = NULL, last_error_detail = NULL, updated_at = ?1
+         updated_at = ?1
      WHERE account_id = ?2 AND id = ?3
        AND status IN ('failed', 'needs_attention')
        AND payload_ciphertext IS NOT NULL

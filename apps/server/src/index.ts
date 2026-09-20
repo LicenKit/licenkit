@@ -9,7 +9,6 @@ import {
   requireExactOrigin,
 } from "./middleware/auth";
 import { requestContext } from "./middleware/request-context";
-import { rateLimit } from "./middleware/rate-limit";
 import { systemRouter } from "./routes/system.routes";
 import { setupRouter } from "./routes/setup.routes";
 import { adminAuthRouter } from "./routes/auth.routes";
@@ -27,10 +26,12 @@ import { adminOutboundRouter } from "./routes/admin/webhooks.routes";
 import { adminCustomersRouter } from "./routes/customer-admin.routes";
 import { adminStatsRouter } from "./routes/admin/stats.routes";
 import { adminAuditRouter } from "./routes/admin/audit.routes";
+import { adminSystemIssuesRouter } from "./routes/admin/system-issues.routes";
 import { webhookRouter } from "./routes/webhook.routes";
 import { processDueBillingInboundEvents } from "./services/billing/fulfillment";
 import { runDeliveryScheduler } from "./services/delivery/scheduler";
 import { recordSchedulerSuccess } from "./services/runtime/scheduler-health";
+import { clearExpiredInboundEventPayloads } from "./services/runtime/retention";
 
 const app = new Hono<AppContext>();
 app.onError(errorHandler);
@@ -71,7 +72,7 @@ app.use("*", async (c, next) => {
       "Paddle-Signature",
     ],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    exposeHeaders: ["X-Request-Id", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    exposeHeaders: ["X-Request-Id"],
     maxAge: 600,
     credentials: true,
   });
@@ -112,16 +113,9 @@ admin.use("*", async (c, next) => {
     await next();
     return;
   }
-  await rateLimit({
-    limit: 120,
-    windowSeconds: 60,
-    keyPrefix: "admin_mutation",
-    key: (context) => `${context.get("accountId")}:${context.get("userId")}`,
-  })(c, async () => {
-    await requireExactOrigin(c, async () => {
-      await adminCsrf(c, async () => {
-        await next();
-      });
+  await requireExactOrigin(c, async () => {
+    await adminCsrf(c, async () => {
+      await next();
     });
   });
 });
@@ -135,6 +129,7 @@ admin.route("/outbound", adminOutboundRouter);
 admin.route("/customers", adminCustomersRouter);
 admin.route("/stats", adminStatsRouter);
 admin.route("/audit-logs", adminAuditRouter);
+admin.route("/system", adminSystemIssuesRouter);
 api.route("/admin", admin);
 
 app.route("/api/v1", api);
@@ -150,12 +145,14 @@ export default {
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     const startedAt = Date.now();
     ctx.waitUntil(
-      Promise.all([
-        processDueBillingInboundEvents(env),
-        runDeliveryScheduler(env),
-      ]).then(async () => {
-        await recordSchedulerSuccess(env.KEYS_KV, startedAt);
-      }),
+      (async () => {
+        await Promise.all([
+          processDueBillingInboundEvents(env),
+          runDeliveryScheduler(env),
+        ]);
+        await clearExpiredInboundEventPayloads(env.DB);
+        await recordSchedulerSuccess(env.DB, startedAt);
+      })(),
     );
   },
 };

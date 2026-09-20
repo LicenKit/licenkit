@@ -133,7 +133,7 @@ LicenKit 不包含 Resend、SMTP 或特定邮件服务商客户端。Magic Link 
 
 该模块不提供自主注册、密码登录或管理员能力。它调用 License、Activation 和 Billing 模块完成领域动作，不直接跨表拼装新的状态机。
 
-Customer Portal 与管理控制台可以由同一个 `apps/web` 构建和部署，但使用独立路由、Session Cookie 和 API 权限边界；不需要为 V1 新增 Web 服务或部署单元。
+Customer Portal 属于用户 Site，源码位于 `custom_template/site` 或使用者自有的 `custom/site`；管理控制台位于独立的 `apps/admin`。二者使用独立路由、Session Cookie 和 API 权限边界，最终仍可作为同一个 Worker 的静态资源部署，不增加第二套服务端状态机。
 
 ### M08 管理控制台
 
@@ -324,7 +324,7 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - `TURNSTILE_SITE_KEY`：Customer Portal Magic Link 请求页使用的公开 Widget Sitekey；
 - `TURNSTILE_SECRET_KEY`：Worker 调用 Siteverify 的服务端 Secret，不进入浏览器、日志或数据库；
 - Cloudflare 资源绑定：自部署 V1 只要求 D1，不要求 KV、Durable Object 或 Queue；
-- Scheduled Trigger：负责入站事件履约、出站投递重试和过期租约恢复。
+- Scheduled Trigger：负责入站事件履约、出站投递重试和过期租约恢复；全部作业成功后把最近成功时间与耗时写入 D1 `system_settings`，Readiness 不读取 KV 或进程内心跳。
 
 ### 7.2 数据库配置
 
@@ -379,7 +379,7 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - 客户端公钥应随应用内置或通过可信发布链固定，不能把同一不可信运行时服务返回的公钥直接作为离线信任根；
 - App 只提交版本号和平台；服务端使用 Product Release 的受信 `released_at`，并把 Release 身份与发布时间写入 Signed License Token；
 - Signed License Token 固定使用 JWS `alg=EdDSA` 和专用 `typ`，SDK 必须拒绝算法降级、未知 `kid`、错误类型和不符合预期的 Claim；
-- 管理端、激活、试用领取、找回和 Webhook 测试接口需要独立限流；
+- 自部署应用不在 Worker 内保存通用限流计数，也不为此引入 KV、Durable Object 或 D1 限流表。部署时必须在 Cloudflare Zone 级 WAF Rate Limiting Rules 配置边缘保护；建议按方法与路径分别覆盖 Setup 写入、管理员登录、管理端写操作、客户端激活/校验/解绑、Trial Claim/校验、Customer 敏感写操作和 Webhook 测试。具体阈值与可用匹配条件由实际流量和 Cloudflare WAF 套餐决定，不写入应用业务合同；
 - License Key、Delivery 敏感负载和完整支付包体不能进入普通审计详情或应用日志。
 
 V1 出站 URL 只允许公网 HTTPS：禁止 URL credentials、非标准端口、IP literal、localhost 和已知私网/链路本地/云元数据目标；`fetch` 使用 `redirect: manual`，每个重定向目标重新执行同一策略。Cloudflare Workers 的出站请求还经过平台代理的公网边界，但应用不能把平台限制当成唯一校验。
@@ -391,7 +391,7 @@ V1 出站 URL 只允许公网 HTTPS：禁止 URL credentials、非标准端口�
 Readiness 至少覆盖：
 
 - D1 可读写；
-- Scheduled Worker 最近一次成功执行时间未超过告警阈值；
+- D1 `system_settings` 记录的 Scheduled Worker 最近一次完整成功执行时间未超过告警阈值；
 - 最老的待履约事件和待发送 Delivery 未超过积压阈值；
 - `STORAGE_ENCRYPTION_KEY` 可解密一条健康检查样本；
 - 启用中的 Billing Provider 配置可解密；
@@ -401,6 +401,7 @@ Readiness 至少覆盖：
 - active Paddle Provider 的 Client-side Token、Webhook Secret 和环境匹配，最小事件合同完整；
 - 启用了 Customer API 读穿、定期对账或托管客户门户时，对应 Paddle API Key 可解密、环境和最小权限匹配；
 - Turnstile Sitekey/Secret 已配置，Siteverify 可用且 Widget hostname 与实例 `app_url` 一致；
+- 部署检查确认上述 Zone 级 WAF Rate Limiting Rules 已配置；Worker 运行时无法在不引入额外 Cloudflare 管理凭证的情况下自行读取该控制面事实，因此 `/system/readiness` 不伪造这一检查；
 - open System Issue 数量、最早发生时间、受影响且仍阻塞的 Inbound Event 数量；
 - 每个 active Offer 的 Provider/Product 环境一致性、Notification Gateway 最近测试、真实 Sandbox 端到端验收和公开 Checkout 状态；
 - 待处理或失败事件没有超过告警阈值。

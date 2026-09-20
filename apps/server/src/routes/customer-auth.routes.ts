@@ -9,9 +9,12 @@ import {
   customerSessionAuth,
   requireExactOrigin,
 } from "../middleware/auth";
-import { consumeRateLimit, rateLimit } from "../middleware/rate-limit";
-import { prepareNotificationDelivery } from "../services/delivery/outbox";
+import {
+  prepareNotificationDelivery,
+  validateNotificationDeliveryConfiguration,
+} from "../services/delivery/outbox";
 import { prepareAuditInsert } from "../services/identity/audit";
+import { verifyCustomerMagicLinkTurnstile } from "../services/identity/turnstile";
 import {
   clearCustomerCookies,
   createSessionSecrets,
@@ -25,6 +28,7 @@ export const customerAuthRouter = new Hono<AppContext>();
 const MagicLinkRequestSchema = z.object({
   accountSlug: z.string().trim().toLowerCase().min(1).max(63),
   email: z.string().email().max(320),
+  turnstileToken: z.string().trim().min(1).max(2048),
 });
 const ConsumeSchema = z.object({
   accountSlug: z.string().trim().toLowerCase().min(1).max(63),
@@ -41,57 +45,112 @@ async function preserveEnumerationTiming(startedAt: number): Promise<void> {
   if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
+interface CustomerAuthRuntimeEnv {
+  TURNSTILE_SECRET_KEY?: string;
+  TURNSTILE_SITE_KEY?: string;
+  CUSTOMER_MAGIC_LINK_TTL_SECONDS?: string | number;
+  CUSTOMER_MAGIC_LINK_COOLDOWN_SECONDS?: string | number;
+}
+
+function runtimeEnv(c: { env: unknown }): CustomerAuthRuntimeEnv {
+  return c.env as CustomerAuthRuntimeEnv;
+}
+
+customerAuthRouter.get("/config", (c) => {
+  c.header("Cache-Control", "no-store");
+  const turnstileSiteKey = runtimeEnv(c).TURNSTILE_SITE_KEY?.trim();
+  if (!turnstileSiteKey || turnstileSiteKey.startsWith("replace-with-")) {
+    throw new AppError(
+      "TURNSTILE_CONFIGURATION_ERROR",
+      "Turnstile is not configured for Customer authentication",
+      503,
+    );
+  }
+  return c.json({ success: true, data: { turnstileSiteKey } });
+});
+
 customerAuthRouter.post(
   "/magic-link",
-  rateLimit({ limit: 30, windowSeconds: 900, keyPrefix: "customer_magic_link_ip" }),
   requireExactOrigin,
   async (c) => {
     const startedAt = Date.now();
     const input = MagicLinkRequestSchema.parse(await c.req.json());
     const email = input.email.trim().toLowerCase();
     const ip = requestIp(c) ?? "unknown";
-    const emailHash = await sha256Hex(email);
-    const ipHash = await sha256Hex(ip);
-    await consumeRateLimit(
-      c.env.KEYS_KV,
-      `rl:customer_magic_link_identity:${input.accountSlug}:${emailHash}:${ipHash}`,
-      { limit: 5, windowSeconds: 900, message: "Too many Magic Link requests" },
-    );
+    const settingsResult = await c.env.DB
+      .prepare(`SELECT app_url FROM system_settings WHERE id = 'current' LIMIT 1`)
+      .all<{ app_url: string }>();
+    const appUrl = settingsResult.results[0]?.app_url;
+    if (!appUrl) {
+      throw new AppError("SETUP_REQUIRED", "LicenKit setup has not completed", 503);
+    }
+    await verifyCustomerMagicLinkTurnstile({
+      env: runtimeEnv(c),
+      token: input.turnstileToken,
+      expectedHostname: new URL(appUrl).hostname,
+      remoteIp: requestIp(c),
+    });
     // Fail for every caller before identity lookup when sensitive payload encryption is unavailable.
     getStorageEncryptionKey(c.env);
+    const now = new Date();
+    const ttlSeconds = positiveIntegerSetting(
+      runtimeEnv(c).CUSTOMER_MAGIC_LINK_TTL_SECONDS,
+      900,
+      "CUSTOMER_MAGIC_LINK_TTL_SECONDS",
+    );
+    const cooldownSeconds = positiveIntegerSetting(
+      runtimeEnv(c).CUSTOMER_MAGIC_LINK_COOLDOWN_SECONDS,
+      60,
+      "CUSTOMER_MAGIC_LINK_COOLDOWN_SECONDS",
+    );
 
-    const customerResult = await c.env.DB
+    const accountResult = await c.env.DB
       .prepare(
-        `SELECT a.id AS account_id, a.slug AS account_slug, c.id AS customer_id,
-                c.email, s.app_url
-         FROM accounts AS a
-         JOIN customers AS c ON c.account_id = a.id
-         JOIN system_settings AS s ON s.id = 'current'
-         WHERE a.slug = ?1 AND a.status = 'active'
-           AND c.email = ?2 COLLATE NOCASE AND c.status = 'active'
-         LIMIT 1`
+        `SELECT id, slug
+         FROM accounts
+         WHERE slug = ?1 AND status = 'active'
+         LIMIT 1`,
       )
-      .bind(input.accountSlug, email)
-      .all<any>();
-    const customer = customerResult.results[0];
-    if (customer) {
-      const now = new Date();
+      .bind(input.accountSlug)
+      .all<{ id: string; slug: string }>();
+    const account = accountResult.results[0];
+    if (account) {
+      // Validate shared gateway crypto before looking up the private email so
+      // a broken endpoint cannot turn the public response into an oracle.
+      await validateNotificationDeliveryConfiguration({
+        db: c.env.DB,
+        env: c.env,
+        accountId: account.id,
+        eventType: "customer.portal_access_requested",
+      });
+    }
+
+    const customerResult = account
+      ? await c.env.DB
+        .prepare(
+          `SELECT id AS customer_id, email
+           FROM customers
+           WHERE account_id = ?1 AND email = ?2 COLLATE NOCASE
+             AND status = 'active'
+           LIMIT 1`,
+        )
+        .bind(account.id, email)
+        .all<{ customer_id: string; email: string }>()
+      : null;
+    const customer = customerResult?.results[0];
+    if (account && customer) {
       const nowIso = now.toISOString();
-      const ttlSeconds = positiveIntegerSetting(
-        (c.env as any).CUSTOMER_MAGIC_LINK_TTL_SECONDS,
-        900,
-        "CUSTOMER_MAGIC_LINK_TTL_SECONDS"
-      );
+      const cooldownCutoff = new Date(now.getTime() - cooldownSeconds * 1000).toISOString();
       const expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
       const challengeId = `clg_${ulid().toLowerCase()}`;
       const token = randomToken("mlk");
       const tokenHash = await sha256Hex(token);
-      const baseUrl = String(customer.app_url).replace(/\/+$/, "");
-      const accessUrl = `${baseUrl}/customer/${encodeURIComponent(customer.account_slug)}/auth#token=${encodeURIComponent(token)}`;
+      const baseUrl = appUrl.replace(/\/+$/, "");
+      const accessUrl = `${baseUrl}/customer/${encodeURIComponent(account.slug)}/auth#token=${encodeURIComponent(token)}`;
       const delivery = await prepareNotificationDelivery({
         db: c.env.DB,
         env: c.env as any,
-        accountId: customer.account_id,
+        accountId: account.id,
         customerId: customer.customer_id,
         eventType: "customer.portal_access_requested",
         recipientEmail: customer.email,
@@ -100,7 +159,32 @@ customerAuthRouter.post(
         idempotencyKey: `customer.portal_access_requested:${challengeId}`,
         now,
       });
-      await c.env.DB.batch([
+      const auditId = `aud_${ulid().toLowerCase()}`;
+      const statements = [
+        ...delivery.statements,
+        c.env.DB
+          .prepare(
+            `INSERT INTO customer_login_challenges (
+               id, account_id, customer_id, token_hash, expires_at,
+               delivery_id, requested_ip, created_at
+             )
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+             WHERE NOT EXISTS (
+               SELECT 1 FROM customer_login_challenges
+               WHERE account_id = ?2 AND customer_id = ?3 AND created_at > ?9
+             )`
+          )
+          .bind(
+            challengeId,
+            account.id,
+            customer.customer_id,
+            tokenHash,
+            expiresAt,
+            delivery.deliveryId,
+            ip.slice(0, 45),
+            nowIso,
+            cooldownCutoff,
+          ),
         c.env.DB
           .prepare(
             `UPDATE outbound_deliveries
@@ -110,49 +194,68 @@ customerAuthRouter.post(
                AND id IN (
                  SELECT delivery_id FROM customer_login_challenges
                  WHERE account_id = ?2 AND customer_id = ?3
+                   AND id <> ?4
                    AND consumed_at IS NULL AND revoked_at IS NULL
+               )
+               AND EXISTS (
+                 SELECT 1 FROM customer_login_challenges
+                 WHERE account_id = ?2 AND id = ?4
                )
                AND status NOT IN ('accepted', 'payload_expired')`
           )
-          .bind(nowIso, customer.account_id, customer.customer_id),
+          .bind(nowIso, account.id, customer.customer_id, challengeId),
         c.env.DB
           .prepare(
             `UPDATE customer_login_challenges SET revoked_at = ?1
              WHERE account_id = ?2 AND customer_id = ?3
-               AND consumed_at IS NULL AND revoked_at IS NULL`
+               AND id <> ?4
+               AND consumed_at IS NULL AND revoked_at IS NULL
+               AND EXISTS (
+                 SELECT 1 FROM customer_login_challenges AS created_challenge
+                 WHERE created_challenge.account_id = ?2 AND created_challenge.id = ?4
+               )`
           )
-          .bind(nowIso, customer.account_id, customer.customer_id),
-        ...delivery.statements,
+          .bind(nowIso, account.id, customer.customer_id, challengeId),
         c.env.DB
           .prepare(
-            `INSERT INTO customer_login_challenges (
-               id, account_id, customer_id, token_hash, expires_at,
-               delivery_id, requested_ip, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`
+            `INSERT INTO audit_logs (
+               id, account_id, actor_type, actor_user_id, actor_customer_id,
+               action, resource_type, resource_id, request_id,
+               details_redacted_json, ip, user_agent, created_at
+             )
+             SELECT ?1, ?2, 'system', NULL, NULL,
+                    'customer.magic_link.requested', 'customer_login_challenge', ?3, NULL,
+                    ?4, ?5, ?6, ?7
+             WHERE EXISTS (
+               SELECT 1 FROM customer_login_challenges
+               WHERE account_id = ?2 AND id = ?3
+             )`
           )
           .bind(
+            auditId,
+            account.id,
             challengeId,
-            customer.account_id,
-            customer.customer_id,
-            tokenHash,
-            expiresAt,
-            delivery.deliveryId,
-            ip,
-            nowIso
+            JSON.stringify({
+              customerId: customer.customer_id,
+              deliveryId: delivery.deliveryId,
+              deliveryStatus: delivery.status,
+            }),
+            ip.slice(0, 45),
+            c.req.header("user-agent")?.slice(0, 255) ?? null,
+            nowIso,
           ),
-        prepareAuditInsert({
-          db: c.env.DB,
-          accountId: customer.account_id,
-          actor: { type: "system" },
-          action: "customer.magic_link.requested",
-          resourceType: "customer_login_challenge",
-          resourceId: challengeId,
-          details: { customerId: customer.customer_id, deliveryId: delivery.deliveryId, deliveryStatus: delivery.status },
-          ip,
-          userAgent: c.req.header("user-agent"),
-          now: nowIso,
-        }),
-      ]);
+        c.env.DB
+          .prepare(
+            `DELETE FROM outbound_deliveries
+             WHERE account_id = ?1 AND id = ?2
+               AND NOT EXISTS (
+                 SELECT 1 FROM customer_login_challenges
+                 WHERE account_id = ?1 AND delivery_id = ?2
+               )`
+          )
+          .bind(account.id, delivery.deliveryId),
+      ];
+      await c.env.DB.batch(statements);
     }
     await preserveEnumerationTiming(startedAt);
     c.header("Cache-Control", "no-store");
@@ -162,7 +265,6 @@ customerAuthRouter.post(
 
 customerAuthRouter.post(
   "/magic-link/consume",
-  rateLimit({ limit: 20, windowSeconds: 900, keyPrefix: "customer_magic_link_consume" }),
   requireExactOrigin,
   async (c) => {
     const input = ConsumeSchema.parse(await c.req.json());

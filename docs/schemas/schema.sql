@@ -4,15 +4,23 @@
 
 PRAGMA foreign_keys = ON;
 
--- 用途：保存整套自部署实例的初始化结果和公开地址，是全局配置而不是租户数据。
--- 机制：固定主键 `current` 保证全库只有一行；初始化后只允许更新，删除由 Trigger 拒绝。
+-- 用途：保存整套自部署实例的初始化结果、公开地址和 Scheduled Worker 最近一次成功心跳，是全局状态而不是租户数据。
+-- 机制：固定主键 `current` 保证全库只有一行；Scheduler 只更新成对的成功时间与耗时；初始化后删除由 Trigger 拒绝。
 CREATE TABLE system_settings (
     id TEXT PRIMARY KEY CHECK (id = 'current'),
     instance_name TEXT NOT NULL,
     app_url TEXT NOT NULL,
     api_base_url TEXT,
+    scheduler_last_success_at TEXT,
+    scheduler_last_duration_ms INTEGER
+        CHECK (scheduler_last_duration_ms IS NULL OR scheduler_last_duration_ms >= 0),
     initialized_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (scheduler_last_success_at IS NULL AND scheduler_last_duration_ms IS NULL)
+        OR
+        (scheduler_last_success_at IS NOT NULL AND scheduler_last_duration_ms IS NOT NULL)
+    )
 );
 
 CREATE TRIGGER trg_system_settings_prevent_delete
@@ -925,6 +933,10 @@ CREATE INDEX idx_inbound_events_blocking_issue
     ON inbound_events(account_id, blocking_system_issue_id, status, received_at)
     WHERE blocking_system_issue_id IS NOT NULL;
 
+CREATE INDEX idx_inbound_events_payload_retention
+    ON inbound_events(payload_expires_at, id)
+    WHERE payload_ciphertext IS NOT NULL;
+
 -- 用途：永久记录一条系统问题曾影响过哪些 Inbound Event，供管理端展示、恢复预览和审计。
 -- 机制：同一 Issue/Event 只保留一行并累加问题观测次数；它不是执行 Attempt 记录，事件解除阻塞或处理完成后仍保留关联。
 CREATE TABLE system_issue_inbound_events (
@@ -1027,7 +1039,7 @@ CREATE TABLE outbound_deliveries (
         AND automatic_attempt_count <= max_automatic_attempts
     ),
     CHECK (
-        status = 'blocked_configuration'
+        status IN ('blocked_configuration', 'payload_expired')
         OR (
             endpoint_id IS NOT NULL
             AND target_url IS NOT NULL

@@ -120,7 +120,6 @@ export interface TestEnvContext {
   env: Env;
   sqliteDb: Database.Database;
   d1: any;
-  sentQueueMessages: any[];
 }
 
 export function createTestEnv(overrides?: Partial<Env>): TestEnvContext {
@@ -128,20 +127,10 @@ export function createTestEnv(overrides?: Partial<Env>): TestEnvContext {
   applyMigrations(sqliteDb);
   const d1 = createMockD1(sqliteDb);
 
-  const sentQueueMessages: any[] = [];
-
-  const kvValues = new Map<string, string>();
-  const mockKv: any = {
-    async get(key: string) { return kvValues.get(key) ?? null; },
-    async put(key: string, value: string) { kvValues.set(key, value); },
-    async delete(key: string) { kvValues.delete(key); },
-  };
-
   const defaultMasterKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
   const env: Env = {
     DB: d1,
-    KEYS_KV: mockKv,
     STORAGE_ENCRYPTION_KEY: defaultMasterKey,
     STORAGE_ENCRYPTION_KEY_ID: "test-primary",
     INITIAL_SETUP_TOKEN: "test-setup-token-super-secure-32chars",
@@ -150,5 +139,5 @@ export function createTestEnv(overrides?: Partial<Env>): TestEnvContext {
     ...overrides,
   };
 
-  return { env, sqliteDb, d1, sentQueueMessages };
+  return { env, sqliteDb, d1 };
 }

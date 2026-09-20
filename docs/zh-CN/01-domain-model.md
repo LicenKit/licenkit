@@ -117,7 +117,7 @@ Trial Claim 是无需支付方式的 Product/设备级免费试用，不是价�
 
 V1 按 `account + product + device fingerprint` 最多领取一次，返回只展示一次的高熵 Trial Token，服务端只保存 Token 哈希。Trial Claim 不创建 Customer、License、Activation 或 Billing 记录，也不使用注册码和 Signed License Token。试用校验必须联网，并继续要求当前 App 对应受信 Product Release。
 
-设备指纹由客户端产生，能够阻止正常客户端重复领取，但不是硬件证明。V1 同时使用账户、产品、来源 IP 的限流降低滥用风险，不宣称它能抵抗修改客户端或伪造指纹的攻击者。
+设备指纹由客户端产生，能够阻止正常客户端重复领取，但不是硬件证明。业务上的重复领取由 D1 中 `account + product + device fingerprint` 唯一约束拒绝；针对同一路由和来源 IP 的突发请求量，由部署在 Worker 前的 Cloudflare Zone WAF Rate Limiting Rule 处理，不在应用内新增通用限流表。两者都不宣称能够抵抗修改客户端或伪造指纹的攻击者。
 
 ### 2.10 三类 License 凭证
 

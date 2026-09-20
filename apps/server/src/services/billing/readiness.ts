@@ -143,7 +143,7 @@ async function checkoutVerificationReady(
 export async function evaluateBillingOfferReadiness(
   db: D1Database,
   row: BillingOfferReadinessRow,
-  options: { now?: Date; activation?: boolean; schedulerStore?: KVNamespace } = {},
+  options: { now?: Date; activation?: boolean } = {},
 ): Promise<CheckoutReadiness> {
   const now = options.now ?? new Date();
   const checks: ReadinessCheck[] = [];
@@ -190,9 +190,7 @@ export async function evaluateBillingOfferReadiness(
 
   const processingReady = await processingBacklogHealthy(db, row.account_id, now);
   checks.push(check("processing_backlog", processingReady, "CHECKOUT_PROCESSING_UNAVAILABLE"));
-  const schedulerHealth = options.schedulerStore
-    ? await readSchedulerHealth(options.schedulerStore, now)
-    : { ready: false, record: null };
+  const schedulerHealth = await readSchedulerHealth(db, now);
   checks.push(check(
     "scheduled_worker_health",
     schedulerHealth.ready,

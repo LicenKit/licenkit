@@ -7,7 +7,6 @@ export const publicCheckoutRouter = new Hono<AppContext>();
 publicCheckoutRouter.get("/accounts/:accountSlug/products/:productSlug/checkout", async (c) => {
   const config = await loadPublicCheckoutConfiguration(
     c.env.DB,
-    c.env.KEYS_KV,
     c.req.param("accountSlug"),
     c.req.param("productSlug"),
   );

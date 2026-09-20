@@ -1,7 +1,8 @@
 import { ulid } from "ulid";
 import { fetchPaddleCustomer } from "../../infra/billing/paddle";
 import type { BillingProviderRecord } from "../../infra/billing/types";
-import { BillingProcessingError } from "../../infra/billing/errors";
+import { BillingProcessingError, PaddleHttpError } from "../../infra/billing/errors";
+import { recordProviderSystemIssue } from "./system-issues";
 
 export type BillingCustomerSyncSource = "webhook" | "api" | "reconciliation";
 
@@ -218,6 +219,7 @@ export async function reconcileBillingCustomer(input: {
   accountId: string;
   billingCustomerId: string;
   fetchImpl?: typeof fetch;
+  now?: Date;
 }): Promise<Record<string, unknown>> {
   const current = await input.db.prepare(
     `SELECT id, billing_provider_id, external_customer_id
@@ -246,17 +248,35 @@ export async function reconcileBillingCustomer(input: {
       { billingProviderId: provider.id, capability: "customer.read" },
     );
   }
-  const snapshot = await fetchPaddleCustomer(
-    provider,
-    current.external_customer_id,
-    input.env,
-    input.fetchImpl,
-  );
+  const now = input.now ?? new Date();
+  let snapshot;
+  try {
+    snapshot = await fetchPaddleCustomer(
+      provider,
+      current.external_customer_id,
+      input.env,
+      input.fetchImpl,
+    );
+  } catch (error) {
+    if (error instanceof PaddleHttpError && error.code === "BILLING_PROVIDER_API_AUTH_INVALID") {
+      await recordProviderSystemIssue({
+        db: input.db,
+        accountId: input.accountId,
+        billingProviderId: provider.id,
+        capability: "customer_read",
+        issueCode: error.code,
+        providerError: error.providerDetails,
+        now,
+      });
+    }
+    throw error;
+  }
   const synced = await syncTrustedBillingCustomer({
     db: input.db,
     accountId: input.accountId,
     billingProviderId: provider.id,
     source: "reconciliation",
+    now,
     snapshot: {
       externalCustomerId: snapshot.id,
       email: snapshot.email,
@@ -274,4 +294,3 @@ export async function reconcileBillingCustomer(input: {
     providerRequestId: snapshot.requestId,
   };
 }
-

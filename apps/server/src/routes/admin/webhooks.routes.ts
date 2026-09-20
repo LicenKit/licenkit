@@ -11,7 +11,6 @@ import { AppError, NotFoundError } from "../../middleware/error";
 import { prepareAuditInsert } from "../../services/identity/audit";
 import { requestIp } from "../../services/identity/session";
 import { prepareEndpointTestDelivery } from "../../services/delivery/outbox";
-import { rateLimit } from "../../middleware/rate-limit";
 
 export const adminOutboundRouter = new Hono<AppContext>();
 export const adminWebhooksRouter = adminOutboundRouter;
@@ -252,12 +251,7 @@ adminOutboundRouter.post("/endpoints/:endpointId/disable", ...mutationGuards(), 
   return c.json({ success: true, data: { id: endpointId, status: "disabled" } });
 });
 
-adminOutboundRouter.post("/endpoints/:endpointId/test", ...mutationGuards(), rateLimit({
-  limit: 10,
-  windowSeconds: 300,
-  keyPrefix: "admin_endpoint_test",
-  key: (c) => `${c.get("accountId")}:${c.get("userId")}:${c.req.param("endpointId")}`,
-}), async (c) => {
+adminOutboundRouter.post("/endpoints/:endpointId/test", ...mutationGuards(), async (c) => {
   const accountId = c.get("accountId")!;
   const actorId = c.get("userId")!;
   const endpointId = c.req.param("endpointId");

@@ -12,7 +12,6 @@ import { rotateLicenseKey } from "../services/license/key-rotation";
 import { prepareAuditInsert } from "../services/identity/audit";
 import { positiveIntegerSetting, requestIp } from "../services/identity/session";
 import { createCustomerPortalSession } from "../services/billing/customer-portal";
-import { rateLimit } from "../middleware/rate-limit";
 
 export const customerRouter = new Hono<AppContext>();
 customerRouter.use("*", customerSessionAuth);
@@ -156,12 +155,6 @@ customerRouter.get("/licenses/:licenseId/subscription", async (c) => {
 customerRouter.post(
   "/licenses/:licenseId/activations/:activationId/deactivate",
   ...writeGuards(),
-  rateLimit({
-    limit: 20,
-    windowSeconds: 300,
-    keyPrefix: "customer_activation_release",
-    key: (c) => `${c.get("accountId")}:${c.get("customerId")}`,
-  }),
   async (c) => {
     const accountId = c.get("accountId")!;
     const ownerCustomerId = customerId(c);
@@ -244,33 +237,17 @@ async function rotateFromCustomer(c: any, reason: "recovery" | "security_reset")
   });
 }
 
-customerRouter.post("/licenses/:licenseId/recover-key", ...writeGuards(), rateLimit({
-  limit: 5,
-  windowSeconds: 900,
-  keyPrefix: "customer_license_recovery",
-  key: (c) => `${c.get("accountId")}:${c.get("customerId")}`,
-}), (c) =>
+customerRouter.post("/licenses/:licenseId/recover-key", ...writeGuards(), (c) =>
   rotateFromCustomer(c, "recovery")
 );
 
-customerRouter.post("/licenses/:licenseId/security-reset", ...writeGuards(), rateLimit({
-  limit: 5,
-  windowSeconds: 900,
-  keyPrefix: "customer_security_reset",
-  key: (c) => `${c.get("accountId")}:${c.get("customerId")}`,
-}), (c) =>
+customerRouter.post("/licenses/:licenseId/security-reset", ...writeGuards(), (c) =>
   rotateFromCustomer(c, "security_reset")
 );
 
 customerRouter.post(
   "/licenses/:licenseId/subscription/portal-session",
   ...writeGuards(),
-  rateLimit({
-    limit: 10,
-    windowSeconds: 300,
-    keyPrefix: "customer_portal_session",
-    key: (c) => `${c.get("accountId")}:${c.get("customerId")}`,
-  }),
   async (c) => {
     const accountId = c.get("accountId")!;
     const ownerCustomerId = customerId(c);

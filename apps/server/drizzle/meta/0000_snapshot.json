@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "bb976ea4-647d-4354-9e6d-27415aac3d7c",
+  "id": "5dc5e8da-937c-4697-8906-d0d79796132e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "accounts": {
@@ -2579,6 +2579,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "blocking_system_issue_id": {
+          "name": "blocking_system_issue_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "received_at": {
           "name": "received_at",
           "type": "text",
@@ -2667,6 +2674,26 @@
           "isUnique": false,
           "where": "\"inbound_events\".\"external_adjustment_id\" is not null"
         },
+        "idx_inbound_events_blocking_issue": {
+          "name": "idx_inbound_events_blocking_issue",
+          "columns": [
+            "account_id",
+            "blocking_system_issue_id",
+            "status",
+            "received_at"
+          ],
+          "isUnique": false,
+          "where": "\"inbound_events\".\"blocking_system_issue_id\" is not null"
+        },
+        "idx_inbound_events_payload_retention": {
+          "name": "idx_inbound_events_payload_retention",
+          "columns": [
+            "payload_expires_at",
+            "id"
+          ],
+          "isUnique": false,
+          "where": "\"inbound_events\".\"payload_ciphertext\" is not null"
+        },
         "uq_inbound_events_account_id": {
           "name": "uq_inbound_events_account_id",
           "columns": [
@@ -2705,6 +2732,21 @@
           "columnsFrom": [
             "account_id",
             "billing_provider_id"
+          ],
+          "columnsTo": [
+            "account_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_inbound_events_blocking_issue": {
+          "name": "fk_inbound_events_blocking_issue",
+          "tableFrom": "inbound_events",
+          "tableTo": "system_issues",
+          "columnsFrom": [
+            "account_id",
+            "blocking_system_issue_id"
           ],
           "columnsTo": [
             "account_id",
@@ -4105,7 +4147,7 @@
         },
         "ck_outbound_deliveries_target": {
           "name": "ck_outbound_deliveries_target",
-          "value": "\"outbound_deliveries\".\"status\" = 'blocked_configuration'\n        or (\"outbound_deliveries\".\"endpoint_id\" is not null\n          and \"outbound_deliveries\".\"target_url\" is not null\n          and \"outbound_deliveries\".\"signing_secret_ciphertext\" is not null)"
+          "value": "\"outbound_deliveries\".\"status\" in ('blocked_configuration', 'payload_expired')\n        or (\"outbound_deliveries\".\"endpoint_id\" is not null\n          and \"outbound_deliveries\".\"target_url\" is not null\n          and \"outbound_deliveries\".\"signing_secret_ciphertext\" is not null)"
         }
       }
     },
@@ -4738,6 +4780,376 @@
         }
       }
     },
+    "system_issue_inbound_events": {
+      "name": "system_issue_inbound_events",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "system_issue_id": {
+          "name": "system_issue_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "inbound_event_id": {
+          "name": "inbound_event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "occurrence_count": {
+          "name": "occurrence_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_system_issue_inbound_events_issue": {
+          "name": "idx_system_issue_inbound_events_issue",
+          "columns": [
+            "account_id",
+            "system_issue_id",
+            "\"last_seen_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_system_issue_inbound_events_event": {
+          "name": "idx_system_issue_inbound_events_event",
+          "columns": [
+            "account_id",
+            "inbound_event_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "system_issue_inbound_events_account_id_accounts_id_fk": {
+          "name": "system_issue_inbound_events_account_id_accounts_id_fk",
+          "tableFrom": "system_issue_inbound_events",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_system_issue_inbound_events_issue": {
+          "name": "fk_system_issue_inbound_events_issue",
+          "tableFrom": "system_issue_inbound_events",
+          "tableTo": "system_issues",
+          "columnsFrom": [
+            "account_id",
+            "system_issue_id"
+          ],
+          "columnsTo": [
+            "account_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_system_issue_inbound_events_event": {
+          "name": "fk_system_issue_inbound_events_event",
+          "tableFrom": "system_issue_inbound_events",
+          "tableTo": "inbound_events",
+          "columnsFrom": [
+            "account_id",
+            "inbound_event_id"
+          ],
+          "columnsTo": [
+            "account_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "system_issue_inbound_events_system_issue_id_inbound_event_id_pk": {
+          "columns": [
+            "system_issue_id",
+            "inbound_event_id"
+          ],
+          "name": "system_issue_inbound_events_system_issue_id_inbound_event_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_system_issue_inbound_events_occurrence_count": {
+          "name": "ck_system_issue_inbound_events_occurrence_count",
+          "value": "\"system_issue_inbound_events\".\"occurrence_count\" >= 1"
+        },
+        "ck_system_issue_inbound_events_seen_order": {
+          "name": "ck_system_issue_inbound_events_seen_order",
+          "value": "\"system_issue_inbound_events\".\"last_seen_at\" >= \"system_issue_inbound_events\".\"first_seen_at\""
+        }
+      }
+    },
+    "system_issues": {
+      "name": "system_issues",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "billing_provider_id": {
+          "name": "billing_provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "capability": {
+          "name": "capability",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "issue_code": {
+          "name": "issue_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "severity": {
+          "name": "severity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'error'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'open'"
+        },
+        "occurrence_count": {
+          "name": "occurrence_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_error_detail_json": {
+          "name": "last_error_detail_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "resolved_by_user_id": {
+          "name": "resolved_by_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "resolution_note": {
+          "name": "resolution_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_system_issues_status": {
+          "name": "idx_system_issues_status",
+          "columns": [
+            "account_id",
+            "status",
+            "severity",
+            "\"last_seen_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_system_issues_provider_capability": {
+          "name": "idx_system_issues_provider_capability",
+          "columns": [
+            "account_id",
+            "billing_provider_id",
+            "capability",
+            "status"
+          ],
+          "isUnique": false
+        },
+        "uq_system_issues_account_id": {
+          "name": "uq_system_issues_account_id",
+          "columns": [
+            "account_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "uq_system_issues_identity": {
+          "name": "uq_system_issues_identity",
+          "columns": [
+            "account_id",
+            "billing_provider_id",
+            "capability",
+            "issue_code"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "system_issues_account_id_accounts_id_fk": {
+          "name": "system_issues_account_id_accounts_id_fk",
+          "tableFrom": "system_issues",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_system_issues_provider": {
+          "name": "fk_system_issues_provider",
+          "tableFrom": "system_issues",
+          "tableTo": "billing_providers",
+          "columnsFrom": [
+            "account_id",
+            "billing_provider_id"
+          ],
+          "columnsTo": [
+            "account_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_system_issues_resolved_by": {
+          "name": "fk_system_issues_resolved_by",
+          "tableFrom": "system_issues",
+          "tableTo": "users",
+          "columnsFrom": [
+            "account_id",
+            "resolved_by_user_id"
+          ],
+          "columnsTo": [
+            "account_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_system_issues_capability": {
+          "name": "ck_system_issues_capability",
+          "value": "\"system_issues\".\"capability\" in ('customer_read', 'customer_portal_session')"
+        },
+        "ck_system_issues_severity": {
+          "name": "ck_system_issues_severity",
+          "value": "\"system_issues\".\"severity\" in ('warning', 'error', 'critical')"
+        },
+        "ck_system_issues_status": {
+          "name": "ck_system_issues_status",
+          "value": "\"system_issues\".\"status\" in ('open', 'resolved')"
+        },
+        "ck_system_issues_occurrence_count": {
+          "name": "ck_system_issues_occurrence_count",
+          "value": "\"system_issues\".\"occurrence_count\" >= 1"
+        },
+        "ck_system_issues_seen_order": {
+          "name": "ck_system_issues_seen_order",
+          "value": "\"system_issues\".\"last_seen_at\" >= \"system_issues\".\"first_seen_at\""
+        },
+        "ck_system_issues_error_detail_json": {
+          "name": "ck_system_issues_error_detail_json",
+          "value": "json_valid(\"system_issues\".\"last_error_detail_json\") and json_type(\"system_issues\".\"last_error_detail_json\") = 'object'"
+        },
+        "ck_system_issues_resolution": {
+          "name": "ck_system_issues_resolution",
+          "value": "(\"system_issues\".\"status\" = 'open'\n          and \"system_issues\".\"resolved_at\" is null\n          and \"system_issues\".\"resolved_by_user_id\" is null\n          and \"system_issues\".\"resolution_note\" is null)\n        or (\"system_issues\".\"status\" = 'resolved'\n          and \"system_issues\".\"resolved_at\" is not null\n          and \"system_issues\".\"resolved_by_user_id\" is not null\n          and \"system_issues\".\"resolution_note\" is not null\n          and length(trim(\"system_issues\".\"resolution_note\")) > 0)"
+        }
+      }
+    },
     "system_settings": {
       "name": "system_settings",
       "columns": {
@@ -4769,6 +5181,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "scheduler_last_success_at": {
+          "name": "scheduler_last_success_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scheduler_last_duration_ms": {
+          "name": "scheduler_last_duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "initialized_at": {
           "name": "initialized_at",
           "type": "text",
@@ -4792,6 +5218,14 @@
         "ck_system_settings_singleton": {
           "name": "ck_system_settings_singleton",
           "value": "\"system_settings\".\"id\" = 'current'"
+        },
+        "ck_system_settings_scheduler_duration": {
+          "name": "ck_system_settings_scheduler_duration",
+          "value": "\"system_settings\".\"scheduler_last_duration_ms\" is null or \"system_settings\".\"scheduler_last_duration_ms\" >= 0"
+        },
+        "ck_system_settings_scheduler_health_pair": {
+          "name": "ck_system_settings_scheduler_health_pair",
+          "value": "(\"system_settings\".\"scheduler_last_success_at\" is null and \"system_settings\".\"scheduler_last_duration_ms\" is null)\n        or (\"system_settings\".\"scheduler_last_success_at\" is not null and \"system_settings\".\"scheduler_last_duration_ms\" is not null)"
         }
       }
     },
@@ -5238,6 +5672,20 @@
       "idx_outbound_deliveries_customer": {
         "columns": {
           "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_system_issue_inbound_events_issue": {
+        "columns": {
+          "\"last_seen_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_system_issues_status": {
+        "columns": {
+          "\"last_seen_at\" desc": {
             "isExpression": true
           }
         }

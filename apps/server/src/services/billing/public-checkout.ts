@@ -40,7 +40,6 @@ export type PublicCheckoutConfiguration =
 
 export async function loadPublicCheckoutConfiguration(
   db: D1Database,
-  schedulerStore: KVNamespace,
   accountSlug: string,
   productSlug: string,
   now = new Date(),
@@ -116,7 +115,7 @@ export async function loadPublicCheckoutConfiguration(
       reasonCodes.add("CHECKOUT_CONFIGURATION_PENDING");
       continue;
     }
-    const readiness = await evaluateBillingOfferReadiness(db, row, { now, schedulerStore });
+    const readiness = await evaluateBillingOfferReadiness(db, row, { now });
     if (!readiness.ready) {
       readiness.publicReasonCodes.forEach((code) => reasonCodes.add(code));
       continue;

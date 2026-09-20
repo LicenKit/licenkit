@@ -9,6 +9,7 @@
 #      npx wrangler secret put STORAGE_ENCRYPTION_KEY
 #      npx wrangler secret put STORAGE_ENCRYPTION_KEY_ID
 #      npx wrangler secret put INITIAL_SETUP_TOKEN
+#      npx wrangler secret put TURNSTILE_SECRET_KEY
 # ==============================================================================
 
 # Platform Master Key Encryption Key (KEK) - Min 16 chars (recommended 32+ chars).
@@ -22,9 +23,15 @@ STORAGE_ENCRYPTION_KEY_ID=local-primary
 # High-entropy one-time Setup secret. Setup closes permanently after success.
 INITIAL_SETUP_TOKEN=licenkit_local_dev_initial_setup_token_32b!
 
+# Turnstile public Sitekey is safe for the browser; its matching Secret stays
+# only in .dev.vars / Wrangler Secrets. Replace both placeholders locally.
+TURNSTILE_SITE_KEY=replace-with-turnstile-site-key
+TURNSTILE_SECRET_KEY=replace-with-turnstile-secret-key
+
 # Optional TTL overrides (seconds).
 # ADMIN_SESSION_TTL_SECONDS=43200
 # CUSTOMER_MAGIC_LINK_TTL_SECONDS=900
+# CUSTOMER_MAGIC_LINK_COOLDOWN_SECONDS=60
 # CUSTOMER_SESSION_TTL_SECONDS=43200
 # CUSTOMER_RECENT_AUTH_SECONDS=900
 # SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS=86400

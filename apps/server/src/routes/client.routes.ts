@@ -2,8 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppContext } from "../types";
 import { activateLicense, deactivateActivation, validateActivation } from "../services/license/activation";
-import { claimTrial, enforceTrialClaimRateLimit, validateTrial } from "../services/license/trial";
-import { rateLimit } from "../middleware/rate-limit";
+import { claimTrial, validateTrial } from "../services/license/trial";
 
 export const clientRouter = new Hono<AppContext>();
 
@@ -22,7 +21,7 @@ const ActivateSchema = z.object({
   ...ReleaseFields,
 }).strict();
 
-clientRouter.post("/activate", rateLimit({ limit: 30, windowSeconds: 60, keyPrefix: "client_activate" }), async (c) => {
+clientRouter.post("/activate", async (c) => {
   const input = ActivateSchema.parse(await c.req.json());
   const data = await activateLicense({
     db: c.env.DB,
@@ -51,7 +50,7 @@ const ValidateSchema = z.object({
   ...ReleaseFields,
 }).strict();
 
-clientRouter.post("/validate", rateLimit({ limit: 120, windowSeconds: 60, keyPrefix: "client_validate" }), async (c) => {
+clientRouter.post("/validate", async (c) => {
   const input = ValidateSchema.parse(await c.req.json());
   const data = await validateActivation({
     db: c.env.DB,
@@ -78,13 +77,6 @@ const TrialClaimSchema = z.object({
 
 clientRouter.post("/trials/claim", async (c) => {
   const input = TrialClaimSchema.parse(await c.req.json());
-  await enforceTrialClaimRateLimit({
-    store: c.env.KEYS_KV,
-    accountId: input.account_id,
-    productId: input.product_id,
-    fingerprint: input.fingerprint,
-    ip: c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "unknown",
-  });
   const data = await claimTrial({
     db: c.env.DB,
     accountId: input.account_id,
@@ -130,7 +122,7 @@ const DeactivateSchema = z.object({
   fingerprint: z.string().trim().min(8).max(512),
 }).strict();
 
-clientRouter.post("/deactivate", rateLimit({ limit: 30, windowSeconds: 60, keyPrefix: "client_deactivate" }), async (c) => {
+clientRouter.post("/deactivate", async (c) => {
   const input = DeactivateSchema.parse(await c.req.json());
   const data = await deactivateActivation({
     db: c.env.DB,

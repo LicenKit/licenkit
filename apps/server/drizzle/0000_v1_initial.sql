@@ -388,11 +388,13 @@ CREATE TABLE `inbound_events` (
 	`result_reference_id` text,
 	`last_error_code` text,
 	`last_error_detail` text,
+	`blocking_system_issue_id` text,
 	`received_at` text NOT NULL,
 	`processed_at` text,
 	`updated_at` text NOT NULL,
 	FOREIGN KEY (`account_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`account_id`,`billing_provider_id`) REFERENCES `billing_providers`(`account_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`account_id`,`blocking_system_issue_id`) REFERENCES `system_issues`(`account_id`,`id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "ck_inbound_events_status" CHECK("inbound_events"."status" in ('pending', 'processing', 'processed', 'failed', 'needs_attention')),
 	CONSTRAINT "ck_inbound_events_attempt_count" CHECK("inbound_events"."attempt_count" >= 0)
 );
@@ -403,6 +405,8 @@ CREATE INDEX `idx_inbound_events_customer` ON `inbound_events` (`account_id`,`bi
 CREATE INDEX `idx_inbound_events_transaction` ON `inbound_events` (`account_id`,`billing_provider_id`,`external_transaction_id`,"received_at" desc) WHERE "inbound_events"."external_transaction_id" is not null;--> statement-breakpoint
 CREATE INDEX `idx_inbound_events_subscription` ON `inbound_events` (`account_id`,`billing_provider_id`,`external_subscription_id`,"received_at" desc) WHERE "inbound_events"."external_subscription_id" is not null;--> statement-breakpoint
 CREATE INDEX `idx_inbound_events_adjustment` ON `inbound_events` (`account_id`,`billing_provider_id`,`external_adjustment_id`,"received_at" desc) WHERE "inbound_events"."external_adjustment_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_blocking_issue` ON `inbound_events` (`account_id`,`blocking_system_issue_id`,`status`,`received_at`) WHERE "inbound_events"."blocking_system_issue_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_payload_retention` ON `inbound_events` (`payload_expires_at`,`id`) WHERE "inbound_events"."payload_ciphertext" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_inbound_events_account_id` ON `inbound_events` (`account_id`,`id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_inbound_events_external` ON `inbound_events` (`billing_provider_id`,`external_event_id`);--> statement-breakpoint
 CREATE TABLE `license_key_rotations` (
@@ -619,7 +623,7 @@ CREATE TABLE `outbound_deliveries` (
 	CONSTRAINT "ck_outbound_deliveries_max_attempts" CHECK("outbound_deliveries"."max_automatic_attempts" between 1 and 20),
 	CONSTRAINT "ck_outbound_deliveries_attempt_budget" CHECK("outbound_deliveries"."automatic_attempt_count" <= "outbound_deliveries"."attempt_count"
         and "outbound_deliveries"."automatic_attempt_count" <= "outbound_deliveries"."max_automatic_attempts"),
-	CONSTRAINT "ck_outbound_deliveries_target" CHECK("outbound_deliveries"."status" = 'blocked_configuration'
+	CONSTRAINT "ck_outbound_deliveries_target" CHECK("outbound_deliveries"."status" in ('blocked_configuration', 'payload_expired')
         or ("outbound_deliveries"."endpoint_id" is not null
           and "outbound_deliveries"."target_url" is not null
           and "outbound_deliveries"."signing_secret_ciphertext" is not null))
@@ -725,14 +729,77 @@ CREATE TABLE `signing_keys` (
 CREATE INDEX `idx_signing_keys_product_status` ON `signing_keys` (`account_id`,`product_id`,`status`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_signing_keys_product_active` ON `signing_keys` (`account_id`,`product_id`) WHERE "signing_keys"."status" = 'active';--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_signing_keys_account_id` ON `signing_keys` (`account_id`,`id`);--> statement-breakpoint
+CREATE TABLE `system_issue_inbound_events` (
+	`account_id` text NOT NULL,
+	`system_issue_id` text NOT NULL,
+	`inbound_event_id` text NOT NULL,
+	`occurrence_count` integer DEFAULT 1 NOT NULL,
+	`first_seen_at` text NOT NULL,
+	`last_seen_at` text NOT NULL,
+	PRIMARY KEY(`system_issue_id`, `inbound_event_id`),
+	FOREIGN KEY (`account_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`account_id`,`system_issue_id`) REFERENCES `system_issues`(`account_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`account_id`,`inbound_event_id`) REFERENCES `inbound_events`(`account_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_system_issue_inbound_events_occurrence_count" CHECK("system_issue_inbound_events"."occurrence_count" >= 1),
+	CONSTRAINT "ck_system_issue_inbound_events_seen_order" CHECK("system_issue_inbound_events"."last_seen_at" >= "system_issue_inbound_events"."first_seen_at")
+);
+--> statement-breakpoint
+CREATE INDEX `idx_system_issue_inbound_events_issue` ON `system_issue_inbound_events` (`account_id`,`system_issue_id`,"last_seen_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_system_issue_inbound_events_event` ON `system_issue_inbound_events` (`account_id`,`inbound_event_id`);--> statement-breakpoint
+CREATE TABLE `system_issues` (
+	`id` text PRIMARY KEY NOT NULL,
+	`account_id` text NOT NULL,
+	`billing_provider_id` text NOT NULL,
+	`capability` text NOT NULL,
+	`issue_code` text NOT NULL,
+	`severity` text DEFAULT 'error' NOT NULL,
+	`status` text DEFAULT 'open' NOT NULL,
+	`occurrence_count` integer DEFAULT 1 NOT NULL,
+	`first_seen_at` text NOT NULL,
+	`last_seen_at` text NOT NULL,
+	`last_error_detail_json` text DEFAULT '{}' NOT NULL,
+	`resolved_at` text,
+	`resolved_by_user_id` text,
+	`resolution_note` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`account_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`account_id`,`billing_provider_id`) REFERENCES `billing_providers`(`account_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`account_id`,`resolved_by_user_id`) REFERENCES `users`(`account_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_system_issues_capability" CHECK("system_issues"."capability" in ('customer_read', 'customer_portal_session')),
+	CONSTRAINT "ck_system_issues_severity" CHECK("system_issues"."severity" in ('warning', 'error', 'critical')),
+	CONSTRAINT "ck_system_issues_status" CHECK("system_issues"."status" in ('open', 'resolved')),
+	CONSTRAINT "ck_system_issues_occurrence_count" CHECK("system_issues"."occurrence_count" >= 1),
+	CONSTRAINT "ck_system_issues_seen_order" CHECK("system_issues"."last_seen_at" >= "system_issues"."first_seen_at"),
+	CONSTRAINT "ck_system_issues_error_detail_json" CHECK(json_valid("system_issues"."last_error_detail_json") and json_type("system_issues"."last_error_detail_json") = 'object'),
+	CONSTRAINT "ck_system_issues_resolution" CHECK(("system_issues"."status" = 'open'
+          and "system_issues"."resolved_at" is null
+          and "system_issues"."resolved_by_user_id" is null
+          and "system_issues"."resolution_note" is null)
+        or ("system_issues"."status" = 'resolved'
+          and "system_issues"."resolved_at" is not null
+          and "system_issues"."resolved_by_user_id" is not null
+          and "system_issues"."resolution_note" is not null
+          and length(trim("system_issues"."resolution_note")) > 0))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_system_issues_status` ON `system_issues` (`account_id`,`status`,`severity`,"last_seen_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_system_issues_provider_capability` ON `system_issues` (`account_id`,`billing_provider_id`,`capability`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_system_issues_account_id` ON `system_issues` (`account_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_system_issues_identity` ON `system_issues` (`account_id`,`billing_provider_id`,`capability`,`issue_code`);--> statement-breakpoint
 CREATE TABLE `system_settings` (
 	`id` text PRIMARY KEY NOT NULL,
 	`instance_name` text NOT NULL,
 	`app_url` text NOT NULL,
 	`api_base_url` text,
+	`scheduler_last_success_at` text,
+	`scheduler_last_duration_ms` integer,
 	`initialized_at` text NOT NULL,
 	`updated_at` text NOT NULL,
-	CONSTRAINT "ck_system_settings_singleton" CHECK("system_settings"."id" = 'current')
+	CONSTRAINT "ck_system_settings_singleton" CHECK("system_settings"."id" = 'current'),
+	CONSTRAINT "ck_system_settings_scheduler_duration" CHECK("system_settings"."scheduler_last_duration_ms" is null or "system_settings"."scheduler_last_duration_ms" >= 0),
+	CONSTRAINT "ck_system_settings_scheduler_health_pair" CHECK(("system_settings"."scheduler_last_success_at" is null and "system_settings"."scheduler_last_duration_ms" is null)
+        or ("system_settings"."scheduler_last_success_at" is not null and "system_settings"."scheduler_last_duration_ms" is not null))
 );
 --> statement-breakpoint
 CREATE TABLE `trial_claims` (

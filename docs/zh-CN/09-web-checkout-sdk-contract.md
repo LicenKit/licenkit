@@ -2,7 +2,7 @@
 
 ## 1. 目标与边界
 
-V1 提供 `@licenkit/checkout` JavaScript/TypeScript SDK 和一个可修改的参考产品页。SDK 是无界面的支付启动器，用户拥有页面结构、样式、文案、分析和路由；参考页面只是同一公开合同的示例，不是特殊收款通道。
+V1 提供 `@licenkit/checkout` JavaScript/TypeScript SDK 和一个可修改的完整 Site 模板。SDK 是无界面的支付启动器，用户拥有页面结构、样式、文案、分析和路由；模板中的产品页只是同一公开合同的调用方，不是特殊收款通道。Site 同时承载 Magic Link 与 Customer Portal，但不包含 Admin。
 
 这个 SDK 解决三个问题：
 
@@ -166,6 +166,8 @@ if (!state.available) {
 `checkout.completed` 只允许显示“付款已提交，正在等待授权邮件”或跳转成功页。它不能显示注册码、调用发码 API、创建本地 License，也不能把用户标记为已获得权益。用户可能关闭页面，浏览器事件也可能被伪造或丢失；Webhook 才有签名、重试和服务端持久化保证。
 
 ## 6. 参考产品页
+
+仓库中的完整模板位于 `custom_template/site`。使用者需要定制时复制到 `custom/site`；只要后者存在 `package.json`，构建命令就完整选用它，不与模板逐文件合并。`packages/checkout-sdk` 仍是独立包，Site 通过包接口调用，不能把 SDK 的职责复制进页面。
 
 参考模板必须：
 

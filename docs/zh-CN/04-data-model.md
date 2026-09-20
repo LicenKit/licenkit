@@ -62,9 +62,11 @@ erDiagram
 
 ### 3.1 `system_settings`
 
-实例级配置，仅保存实例名称、外部 URL 和初始化状态。Secret 不进入此表。
+实例级单例状态，保存实例名称、外部 URL、初始化结果，以及 Scheduled Worker 最近一次完整成功的时间和运行耗时。Secret 不进入此表；调度器健康字段只记录已经完成的运行事实，不保存可由调用方写入的 `ready=true`。
 
 不存在 `id='current'` 行且 Account、User 同时为空，表示独立部署尚未初始化。Setup 在同一个 D1 原子批次中插入该固定行、首个 Account、首位 Owner、管理员 Session 和 Setup 审计。固定行是一次性初始化闩锁，数据库 Trigger 禁止删除；需要重新初始化测试实例时应重建空数据库，不能删除该行重新开放 Setup。
+
+`scheduler_last_success_at` 与 `scheduler_last_duration_ms` 必须同时为空或同时存在。每分钟 Scheduled Worker 只有在统一调度入口的全部作业成功后才更新这两个字段；Readiness 直接读取 D1 中的持久事实并按时间阈值判断，不依赖 KV、进程内状态或调用方自报健康。
 
 ### 3.2 `accounts`
 
@@ -97,7 +99,7 @@ Customer ID 是 License 的稳定归属。修改邮箱是显式管理操作，�
 - `token_hash`：高熵 Token 的哈希且全局唯一；
 - `expires_at`、`consumed_at`、`revoked_at`：限制有效期、保证只能消费一次，并支持邮箱变更或禁用 Customer 时主动吊销；
 - `delivery_id`：关联发送该 Magic Link 的 Notification Delivery；
-- `requested_ip`：用于安全审计和限流诊断。
+- `requested_ip`：用于安全审计和事后定位；Magic Link 的自动化请求门槛由 Turnstile 提供，应用不基于该字段维护通用限流计数。
 
 明文 Token 只存在于加密 Delivery 负载和客户收到的 URL 中。过期、已消费、已吊销或 Customer 被禁用时不能创建 Session。
 
@@ -384,7 +386,7 @@ V1 的 Paddle 免费订阅试用只接受 `trial_type=free_payment_method_requir
 
 保存验签后的原始支付事件和处理状态：
 
-- 原始负载加密保存，超过保留期后清空 `payload_ciphertext`，同时保留 Hash、事件身份、结果和错误链路；
+- 原始负载加密保存，超过保留期后清空 `payload_ciphertext`，同时保留 Hash、事件身份、结果和错误链路；同一 Provider 再次投递相同 Event ID 时必须先比对 payload Hash，不同 Hash 明确报冲突，相同 Hash 只允许为尚未完成且 payload 已清理/过期的原事件刷新加密负载，不改变既有状态、错误、Attempt 数或当前 System Issue 阻塞；
 - 验签后把 payload 中存在的 `external_customer_id`、`external_transaction_id`、`external_subscription_id` 与 `external_adjustment_id` 提取为可查询关联字段；字段缺失保持 `NULL`，不能伪造占位值；
 - `(billing_provider_id, external_event_id)` 唯一；路由已绑定一个明确的 sandbox/live Provider 配置；
 - 状态：`pending`、`processing`、`processed`、`failed`、`needs_attention`；
@@ -414,7 +416,7 @@ V1 不建立 `inbound_event_attempts` 或其他逐次 Inbound Attempt 表。`att
 
 去重身份固定为 `account_id + billing_provider_id + capability + issue_code`。首次发生时插入 `open`；重复发生时原子增加次数并更新最近错误；已 `resolved` 后再次出现时重新打开同一行并清空旧解决字段。Provider request ID 和 message 不参与去重，否则每次请求都会制造一个新问题。
 
-管理员点击“已修复”时，服务端先使用当前 Provider 配置执行对应能力的只读验证。`customer_read` 使用 Paddle 的 Customer 列表读取接口验证 API Key、环境与 `customer.read` 权限；仍返回 `401/403` 时 Issue 保持 open，`429/5xx` 或网络失败表示尚不能确认修复，也不能关闭。验证成功后才写入解决人、时间和说明。关闭 Issue 本身不修改任何 Inbound Event。
+管理员点击“已修复”时，服务端先使用当前 Provider 配置执行对应能力的最小验证。`customer_read` 使用 Paddle 的 Customer 列表读取接口验证 API Key、环境与权限；`customer_portal_session` 从该 Provider 已有的 linked Billing Subscription 中选择一个真实 Customer/Subscription 创建短期门户会话并立即丢弃 URL，它不修改本地 Subscription，也不重放客户旧请求。找不到安全验证上下文时不能关闭问题。验证仍返回 `401/403` 时 Issue 保持 open，`429/5xx` 或网络失败表示尚不能确认修复，也不能关闭。验证成功后才写入解决人、时间和说明。关闭 Issue 本身不修改任何 Inbound Event。
 
 ### 5.9 `system_issue_inbound_events`
 
@@ -424,6 +426,8 @@ V1 不建立 `inbound_event_attempts` 或其他逐次 Inbound Attempt 表。`att
 2. 事件处理成功后仍要能从 System Issue 页面找到它，不能因为清空当前阻塞引用而失去问题链路。
 
 “已修复并重试”只选择同时满足以下条件的事件：仍由该 Issue 阻塞、状态为 `pending`、最近错误仍是该 Issue 的错误码、加密 payload 尚未到期且尚未产生不可逆的冲突结果。选择必须通过带索引的数据库关联查询完成，不能加载全部事件后在内存筛选。符合条件的事件只被重新排入原 Inbound Event 状态机，不直接调用“发码”或只把 Get Customer 成功当作完成；业务唯一键继续防止重复 License 与 Delivery。
+
+关闭 Issue 与恢复 Event 是两个可分离动作。若管理员关闭时选择不重试，或某条 Event 当时因 payload 过期被跳过，该 Event 继续保留 `blocking_system_issue_id`。之后相同 Paddle Webhook 的验签重投可以恢复原 payload；管理员再从已 resolved Issue 执行“重新处理剩余事件”。服务端再次使用上述资格条件并确认 Issue 仍为同一 resolved 版本，不能把关闭 Issue 解释成永久放弃，也不能由单 Event replay 绕过共享问题边界。
 
 ## 6. 出站投递
 

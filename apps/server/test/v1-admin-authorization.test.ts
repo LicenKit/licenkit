@@ -43,6 +43,8 @@ const ALL_ROLE_ROUTE_KEYS = [
   "GET /api/v1/admin/products",
   "GET /api/v1/admin/products/:productId",
   "GET /api/v1/admin/stats",
+  "GET /api/v1/admin/system/issues",
+  "GET /api/v1/admin/system/issues/:issueId",
 ] as const;
 
 const OWNER_ONLY_ROUTE_KEYS = [
@@ -102,6 +104,8 @@ const OWNER_ADMIN_ROUTE_KEYS = [
   "POST /api/v1/admin/products/:productId/archive",
   "POST /api/v1/admin/products/:productId/releases",
   "POST /api/v1/admin/products/:productId/trials/:trialId/revoke",
+  "POST /api/v1/admin/system/issues/:issueId/resolve",
+  "POST /api/v1/admin/system/issues/:issueId/retry-affected-events",
 ] as const;
 
 const EXPECTED_ROUTE_ROLES: ReadonlyMap<string, readonly UserRole[]> = new Map([

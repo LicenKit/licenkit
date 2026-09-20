@@ -138,12 +138,17 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
   ).run();
 
   const persisted = await c.env.DB.prepare(
-    `SELECT id, status, received_at
+    `SELECT id, status, payload_ciphertext, payload_hash, payload_expires_at, received_at
      FROM inbound_events
      WHERE account_id = ?1 AND billing_provider_id = ?2 AND external_event_id = ?3
      LIMIT 1`,
   ).bind(route.account_id, route.id, event.event_id).first<{
-    id: string; status: string; received_at: string;
+    id: string;
+    status: string;
+    payload_ciphertext: string | null;
+    payload_hash: string;
+    payload_expires_at: string;
+    received_at: string;
   }>();
   if (!persisted) {
     throw new AppError(
@@ -152,6 +157,45 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       500,
       { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
     );
+  }
+  const duplicate = persisted.id !== inboundEventId;
+  if (persisted.payload_hash !== payloadHash) {
+    throw new AppError(
+      "BILLING_WEBHOOK_EVENT_ID_CONFLICT",
+      "Paddle event ID was already persisted with a different payload.",
+      409,
+      { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
+    );
+  }
+
+  let payloadRefreshed = false;
+  if (
+    duplicate
+    && ["pending", "failed", "needs_attention"].includes(persisted.status)
+    && (!persisted.payload_ciphertext || Date.parse(persisted.payload_expires_at) <= now.getTime())
+  ) {
+    const refreshedCiphertext = await encryptInboundPayload(
+      rawBody,
+      c.env,
+      route.account_id,
+      persisted.id,
+    );
+    const refresh = await c.env.DB.prepare(
+      `UPDATE inbound_events
+       SET payload_ciphertext = ?1, payload_expires_at = ?2,
+           payload_cleared_at = NULL, updated_at = ?3
+       WHERE account_id = ?4 AND id = ?5 AND payload_hash = ?6
+         AND status IN ('pending', 'failed', 'needs_attention')
+         AND (payload_ciphertext IS NULL OR payload_expires_at <= ?3)`,
+    ).bind(
+      refreshedCiphertext,
+      payloadExpiresAt,
+      nowIso,
+      route.account_id,
+      persisted.id,
+      payloadHash,
+    ).run();
+    payloadRefreshed = Number(refresh.meta?.changes ?? 0) === 1;
   }
 
   let executionContext: { waitUntil(promise: Promise<unknown>): void } | undefined;
@@ -191,7 +235,8 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       eventId: persisted.id,
       externalEventId: event.event_id,
       status: persisted.status,
-      duplicate: persisted.id !== inboundEventId,
+      duplicate,
+      payloadRefreshed,
     },
   }, 200);
 });

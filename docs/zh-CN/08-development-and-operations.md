@@ -4,10 +4,17 @@
 
 ```text
 licenkit/
-├── apps/server    # Hono + Cloudflare Workers + D1 + Drizzle
-├── apps/web       # React + Vite 管理控制台与客户授权中心
-├── apps/cli       # 命令行客户端
-└── docs           # V1 设计合同
+├── apps/server             # Hono + Cloudflare Workers + D1 + Drizzle
+├── apps/admin              # React + Vite 管理控制台
+├── apps/cli                # 命令行客户端
+├── packages/checkout-sdk   # 网站使用的无界面 Checkout SDK
+├── custom_template/
+│   ├── site                # 产品购买、Magic Link 与客户自助管理模板
+│   └── wrangler.jsonc      # 完整的默认 Worker 配置
+├── custom/
+│   └── site                # 使用者自有区域；上游保持为空
+├── dist                    # Site 与 Admin 的生成产物
+└── docs                    # V1 设计合同
 ```
 
 Swift SDK 位于独立仓库 `licenkit-sdk-swift`。
@@ -23,6 +30,15 @@ pnpm build
 ```
 
 具体脚本以根目录 `package.json` 为准。重新生成 V1 migration 前，不对旧原型数据库执行兼容迁移。
+
+Site 与 Wrangler 配置都使用完整文件二选一，不执行自动合并：
+
+1. `custom/site/package.json` 存在时，`dev:site`、`build`、`typecheck` 和 `test` 使用 `custom/site`；否则使用 `custom_template/site`。
+2. `custom/wrangler.jsonc` 存在时，Worker 开发、迁移、构建和部署使用该文件；否则使用 `custom_template/wrangler.jsonc`。
+3. 每条命令都会输出最终选择路径。`custom` 由使用者维护，LicenKit 上游只更新 `custom_template`。
+4. `custom_template/wrangler.jsonc` 是完整可复制配置，不是待合并片段。复制到 `custom/wrangler.jsonc` 后，使用者负责数据库 ID、变量、环境和后续模板差异。
+
+Admin 固定构建到 `dist/admin`；所选 Site 构建到 `dist` 根目录，并包含购买页、Magic Link 页面与 Customer Portal。`packages/checkout-sdk` 保持独立，由 Site 调用，不被复制进 Admin 或服务端业务逻辑。
 
 ## 3. 环境配置
 
@@ -60,6 +76,8 @@ Secret 不进入代码、普通环境变量文件、日志、审计详情或 API
 
 V1 不配置 Cloudflare Queue producer 或 consumer binding。后台工作由 D1 持久状态和 Scheduled Worker 驱动。
 
+V1 也不配置 KV、Durable Object 或 Workers Rate Limit binding。部署者必须在 Cloudflare Zone 级 WAF Rate Limiting Rules 配置边缘保护；建议至少按方法与路径覆盖 Setup 写入、管理员登录、管理端写操作、客户端激活/校验/解绑、Trial Claim/校验、Customer 敏感写操作和 Webhook 测试。规则能力与阈值取决于实际流量和所用 WAF 套餐，不作为应用内固定额度。Magic Link 请求另由 Turnstile 和 D1 Login Challenge 冷却共同保护。
+
 ### 3.4 Scheduled Trigger
 
 默认每分钟运行一次统一调度入口：
@@ -75,7 +93,9 @@ V1 不配置 Cloudflare Queue producer 或 consumer binding。后台工作由 D1
 3. 已超过 `locked_until` 的 processing 任务；
 4. 到期的敏感负载和保留数据清理。
 
-即时处理和定时处理调用同一个 Fulfillment/Delivery Service，不能维护两套业务逻辑。Cron 频率、批次大小、租约时长和退避参数可以配置，但测试与正式环境使用同一调度模块。
+即时处理和定时处理调用同一个 Fulfillment/Delivery Service，不能维护两套业务逻辑。每轮先处理可领取的 Inbound Event 与 Delivery，再以有界批次清空已超过 `payload_expires_at` 的 Inbound Event 密文并写入 `payload_cleared_at`；即使事件被 System Issue 阻塞也不能无限保留密文。Cron 频率、批次大小、租约时长和退避参数可以配置，但测试与正式环境使用同一调度模块。
+
+只有上述统一调度入口的全部作业成功后，Worker 才更新 D1 `system_settings.scheduler_last_success_at` 与 `scheduler_last_duration_ms`。Readiness 以这组持久事实判断调度器是否在阈值内运行；自部署 V1 不为心跳配置 KV、Durable Object 或进程内共享状态。
 
 ### 3.5 数据库配置
 
@@ -250,7 +270,7 @@ Customer Portal 至少验证：
 7. Product 后续修改试用时长或功能不改变已有 Claim 快照；
 8. Trial Token 丢失不能仅凭指纹补发；
 9. 断网不返回本地试用有效；
-10. 领取接口按 Account、Product、来源 IP 和设备指纹限流。
+10. D1 唯一约束继续拒绝同一 Account、Product 和设备指纹的重复/并发领取；部署验证同时确认 Trial Claim/校验路径已纳入 Zone 级 WAF Rate Limiting Rules，不在应用中建立限流表。
 11. owner/admin 可以查询和吊销本账户 Trial Claim，member/viewer 与跨账户请求默认拒绝，吊销不删除历史且写入审计。
 
 设备指纹不是硬件证明，这组测试验证的是 V1 合同和基础滥用控制，不宣称能够抵抗修改后的客户端。
@@ -272,7 +292,8 @@ Customer Portal 至少验证：
 
 - D1 schema version；
 - 初始化状态；未初始化时只允许 Setup 路由，已初始化时 Setup 写接口必须关闭；
-- Scheduled Worker 最近一次成功时间和运行耗时；
+- D1 `system_settings` 中 Scheduled Worker 最近一次完整成功时间和运行耗时；
+- Cloudflare Zone 级 WAF Rate Limiting Rules 已覆盖 Setup、登录、管理写操作、客户端凭证、Trial 和 Customer 敏感写路径；该项通过部署控制面核对，Worker `/system/readiness` 不持有 Cloudflare 管理凭证，也不伪造可自检状态；
 - 最老 pending Inbound Event 与 Delivery 的等待时间；
 - Secret 是否存在且格式可用；
 - active Billing Provider 配置数量；

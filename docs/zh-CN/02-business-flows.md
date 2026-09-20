@@ -88,11 +88,11 @@ Customer Webhook 是正常路径；API 读穿和定期对账是配置 API Key �
 | 返回 `429/5xx` 或网络超时 | 事件保持 `pending` 并按退避时间重试 | 不重新打开认证 Issue，保留 Provider 原始错误 |
 | 再次返回 `401/403` | 重新打开同一 System Issue，事件再次阻塞 | 不创建第二条相同 Issue |
 | 邮箱不一致、链接冲突或 Customer 被禁用 | 事件进入 `needs_attention` | 必须人工处理身份问题，不能使用事件里的邮箱旁路 |
-| payload 已清理或过期 | 不自动重放 | 管理端提示从 Paddle 重放原始 Webhook；不能只靠已提取 ID 猜测交易行项目 |
+| payload 已清理或过期 | 不自动重放 | 管理端提示从 Paddle 重放原始 Webhook；只有验签成功、Event ID 与原 payload Hash 都一致时才恢复原事件的加密 payload，之后从已 resolved System Issue 显式执行“重新处理剩余事件”，不能只靠已提取 ID 猜测交易行项目 |
 | License/Subscription/Delivery 已由其他乱序事件完成 | 状态机命中现有业务唯一键并关联既有结果 | 不重复发 License 或 Delivery |
 | 事件已 processed，或当前错误已不是该 Issue | 从恢复候选中跳过 | System Issue 详情仍保留历史关联 |
 
-管理员手动执行 Billing Customer reconcile 时发生的 `401/403` 也 upsert 同一个 `customer_read` System Issue，但不能伪造一条 Inbound Event；修复后的重试对象只是该 reconcile 操作。创建客户门户会话的认证错误使用独立 capability，其修复后由用户重新发起短期门户会话，不自动重放旧的同步 HTTP 请求。这样每个“重试”都对应可验证的原始工作单元。
+管理员手动执行 Billing Customer reconcile 时发生的 `401/403` 也 upsert 同一个 `customer_read` System Issue，但不能伪造一条 Inbound Event；修复后的重试对象只是该 reconcile 操作。创建客户门户会话的认证错误使用独立 capability；管理员处理时，服务端从该 Provider 已有的 linked Subscription 中选取真实 Customer/Subscription 创建并丢弃一个短期测试会话，只验证权限、不修改本地订阅。验证通过后仍由用户重新发起门户会话，不自动重放旧请求或旧 URL。这样每个“重试”都对应可验证的原始工作单元。
 
 Paddle Customer 邮箱只作为初次联系和发码地址来源，不宣称已经验证邮箱所有权。Customer Portal 的 Magic Link 消费才证明收件人当前控制该邮箱。
 
@@ -518,7 +518,7 @@ SDK 只提交 App 的 `release_version + release_platform`，设备平台另行�
 
 重复或并发领取由唯一约束拒绝，返回 `TRIAL_ALREADY_CLAIMED`，不能延长原试用、创建第二条 Claim 或重新显示旧 Token。Trial Token 丢失时不能仅凭设备指纹补发；用户可以购买并使用正常 License。试用到期或吊销后返回独立状态，不转换成 License 过期，也不创建 Customer、License、Activation、Subscription 或 Delivery。
 
-V1 试用不签发 Signed License Token，因此不能离线证明有效。设备指纹不是防篡改硬件身份；服务端还必须按 Account、Product、来源 IP 和设备指纹限流，并保留原始拒绝原因。
+V1 试用不签发 Signed License Token，因此不能离线证明有效。设备指纹不是防篡改硬件身份；D1 唯一约束负责拒绝同一 Account、Product 与设备指纹的重复领取，Cloudflare Zone WAF Rate Limiting Rule 负责路由与来源 IP 维度的突发流量防护。应用不为此新增通用限流表，业务拒绝仍保留原始原因。
 
 ## 12. 授权方案修改
 

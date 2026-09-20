@@ -73,7 +73,7 @@ systemRouter.get("/readiness", async (c) => {
 
   let schedulerHealth;
   try {
-    schedulerHealth = await readSchedulerHealth(c.env.KEYS_KV, new Date(now));
+    schedulerHealth = await readSchedulerHealth(c.env.DB, new Date(now));
   } catch (error) {
     throw new AppError(
       "READINESS_SCHEDULER_STATE_UNAVAILABLE",
@@ -84,8 +84,16 @@ systemRouter.get("/readiness", async (c) => {
     );
   }
   const storageKeyReady = Boolean(c.env.STORAGE_ENCRYPTION_KEY?.trim());
+  const turnstileSiteKey = c.env.TURNSTILE_SITE_KEY?.trim() ?? "";
+  const turnstileSecretKey = c.env.TURNSTILE_SECRET_KEY?.trim() ?? "";
+  const turnstileReady = Boolean(
+    turnstileSiteKey
+    && turnstileSecretKey
+    && !turnstileSiteKey.startsWith("replace-with-")
+    && !turnstileSecretKey.startsWith("replace-with-"),
+  );
   const initialized = Number(row?.initialized || 0) === 1;
-  const ready = initialized && storageKeyReady && schedulerHealth.ready;
+  const ready = initialized && storageKeyReady && turnstileReady && schedulerHealth.ready;
   c.header("Cache-Control", "no-store");
   return c.json(
     {
@@ -97,6 +105,7 @@ systemRouter.get("/readiness", async (c) => {
           database: "ready",
           initialized: initialized ? "ready" : "not_ready",
           storageEncryptionKey: storageKeyReady ? "ready" : "not_ready",
+          turnstileConfiguration: turnstileReady ? "ready" : "not_ready",
           schedulerLastSuccess: schedulerHealth.ready ? "ready" : "not_ready",
         },
         scheduler: schedulerHealth.record,

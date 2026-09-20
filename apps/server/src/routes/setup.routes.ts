@@ -13,7 +13,6 @@ import {
   setAdminCookies,
 } from "../services/identity/session";
 import { prepareAuditInsert } from "../services/identity/audit";
-import { rateLimit } from "../middleware/rate-limit";
 
 export const setupRouter = new Hono<AppContext>();
 
@@ -53,7 +52,6 @@ setupRouter.get("/status", async (c) => {
 
 setupRouter.post(
   "/",
-  rateLimit({ limit: 5, windowSeconds: 900, keyPrefix: "initial_setup" }),
   requireExactOrigin,
   setupGuard,
   async (c) => {

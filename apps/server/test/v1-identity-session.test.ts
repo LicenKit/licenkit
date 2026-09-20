@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { AppContext } from "../src/types";
 import { errorHandler } from "../src/middleware/error";
@@ -42,8 +42,20 @@ describe("V1 identity and sessions", () => {
       INITIAL_SETUP_TOKEN: "initial-setup-token-with-enough-entropy",
       STORAGE_ENCRYPTION_KEY_ID: "test-primary",
       ENVIRONMENT: "test",
-    });
+      TURNSTILE_SECRET_KEY: "test-turnstile-secret",
+      TURNSTILE_SITE_KEY: "test-turnstile-site-key",
+    } as any);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      action: "customer_magic_link",
+      hostname: "license.example.test",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
   });
+
+  afterEach(() => vi.unstubAllGlobals());
 
   it("rejects an invalid Setup token without leaving partial initialization", async () => {
     const app = identityApp();
@@ -276,7 +288,11 @@ describe("V1 identity and sessions", () => {
       {
         method: "POST",
         headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({ accountSlug: "identity", email: "unknown@example.test" }),
+        body: JSON.stringify({
+          accountSlug: "identity",
+          email: "unknown@example.test",
+          turnstileToken: "turnstile-unknown",
+        }),
       },
       testEnv.env
     );
@@ -289,7 +305,11 @@ describe("V1 identity and sessions", () => {
       {
         method: "POST",
         headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({ accountSlug: "identity", email: "buyer@example.test" }),
+        body: JSON.stringify({
+          accountSlug: "identity",
+          email: "buyer@example.test",
+          turnstileToken: "turnstile-known",
+        }),
       },
       testEnv.env
     );

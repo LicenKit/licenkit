@@ -5,6 +5,7 @@ import {
   foreignKey,
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   unique,
@@ -25,10 +26,23 @@ export const systemSettings = sqliteTable(
     instanceName: text("instance_name").notNull(),
     appUrl: text("app_url").notNull(),
     apiBaseUrl: text("api_base_url"),
+    schedulerLastSuccessAt: text("scheduler_last_success_at"),
+    schedulerLastDurationMs: integer("scheduler_last_duration_ms"),
     initializedAt: text("initialized_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [check("ck_system_settings_singleton", sql`${table.id} = 'current'`)],
+  (table) => [
+    check("ck_system_settings_singleton", sql`${table.id} = 'current'`),
+    check(
+      "ck_system_settings_scheduler_duration",
+      sql`${table.schedulerLastDurationMs} is null or ${table.schedulerLastDurationMs} >= 0`,
+    ),
+    check(
+      "ck_system_settings_scheduler_health_pair",
+      sql`(${table.schedulerLastSuccessAt} is null and ${table.schedulerLastDurationMs} is null)
+        or (${table.schedulerLastSuccessAt} is not null and ${table.schedulerLastDurationMs} is not null)`,
+    ),
+  ],
 );
 
 export const accounts = sqliteTable(
@@ -357,6 +371,88 @@ export const billingProviders = sqliteTable(
       "ck_billing_providers_client_side_token",
       sql`(${table.environment} = 'sandbox' and substr(${table.clientSideToken}, 1, 5) = 'test_')
         or (${table.environment} = 'live' and substr(${table.clientSideToken}, 1, 5) = 'live_')`,
+    ),
+  ],
+);
+
+export const systemIssues = sqliteTable(
+  "system_issues",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, accountReference),
+    billingProviderId: text("billing_provider_id").notNull(),
+    capability: text("capability").notNull(),
+    issueCode: text("issue_code").notNull(),
+    severity: text("severity").notNull().default("error"),
+    status: text("status").notNull().default("open"),
+    occurrenceCount: integer("occurrence_count").notNull().default(1),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    lastErrorDetailJson: text("last_error_detail_json").notNull().default("{}"),
+    resolvedAt: text("resolved_at"),
+    resolvedByUserId: text("resolved_by_user_id"),
+    resolutionNote: text("resolution_note"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    unique("uq_system_issues_account_id").on(table.accountId, table.id),
+    unique("uq_system_issues_identity").on(
+      table.accountId,
+      table.billingProviderId,
+      table.capability,
+      table.issueCode,
+    ),
+    foreignKey({
+      name: "fk_system_issues_provider",
+      columns: [table.accountId, table.billingProviderId],
+      foreignColumns: [billingProviders.accountId, billingProviders.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "fk_system_issues_resolved_by",
+      columns: [table.accountId, table.resolvedByUserId],
+      foreignColumns: [users.accountId, users.id],
+    }).onDelete("restrict"),
+    index("idx_system_issues_status").on(
+      table.accountId,
+      table.status,
+      table.severity,
+      sql`${table.lastSeenAt} desc`,
+    ),
+    index("idx_system_issues_provider_capability").on(
+      table.accountId,
+      table.billingProviderId,
+      table.capability,
+      table.status,
+    ),
+    check(
+      "ck_system_issues_capability",
+      sql`${table.capability} in ('customer_read', 'customer_portal_session')`,
+    ),
+    check(
+      "ck_system_issues_severity",
+      sql`${table.severity} in ('warning', 'error', 'critical')`,
+    ),
+    check("ck_system_issues_status", sql`${table.status} in ('open', 'resolved')`),
+    check("ck_system_issues_occurrence_count", sql`${table.occurrenceCount} >= 1`),
+    check("ck_system_issues_seen_order", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
+    check(
+      "ck_system_issues_error_detail_json",
+      sql`json_valid(${table.lastErrorDetailJson}) and json_type(${table.lastErrorDetailJson}) = 'object'`,
+    ),
+    check(
+      "ck_system_issues_resolution",
+      sql`(${table.status} = 'open'
+          and ${table.resolvedAt} is null
+          and ${table.resolvedByUserId} is null
+          and ${table.resolutionNote} is null)
+        or (${table.status} = 'resolved'
+          and ${table.resolvedAt} is not null
+          and ${table.resolvedByUserId} is not null
+          and ${table.resolutionNote} is not null
+          and length(trim(${table.resolutionNote})) > 0)`,
     ),
   ],
 );
@@ -934,6 +1030,7 @@ export const inboundEvents = sqliteTable(
     resultReferenceId: text("result_reference_id"),
     lastErrorCode: text("last_error_code"),
     lastErrorDetail: text("last_error_detail"),
+    blockingSystemIssueId: text("blocking_system_issue_id"),
     receivedAt: text("received_at").notNull(),
     processedAt: text("processed_at"),
     updatedAt: text("updated_at").notNull(),
@@ -945,6 +1042,11 @@ export const inboundEvents = sqliteTable(
       name: "fk_inbound_events_provider",
       columns: [table.accountId, table.billingProviderId],
       foreignColumns: [billingProviders.accountId, billingProviders.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "fk_inbound_events_blocking_issue",
+      columns: [table.accountId, table.blockingSystemIssueId],
+      foreignColumns: [systemIssues.accountId, systemIssues.id],
     }).onDelete("restrict"),
     index("idx_inbound_events_status_schedule").on(
       table.accountId,
@@ -991,11 +1093,66 @@ export const inboundEvents = sqliteTable(
         sql`${table.receivedAt} desc`,
       )
       .where(sql`${table.externalAdjustmentId} is not null`),
+    index("idx_inbound_events_blocking_issue")
+      .on(
+        table.accountId,
+        table.blockingSystemIssueId,
+        table.status,
+        table.receivedAt,
+      )
+      .where(sql`${table.blockingSystemIssueId} is not null`),
+    index("idx_inbound_events_payload_retention")
+      .on(table.payloadExpiresAt, table.id)
+      .where(sql`${table.payloadCiphertext} is not null`),
     check(
       "ck_inbound_events_status",
       sql`${table.status} in ('pending', 'processing', 'processed', 'failed', 'needs_attention')`,
     ),
     check("ck_inbound_events_attempt_count", sql`${table.attemptCount} >= 0`),
+  ],
+);
+
+export const systemIssueInboundEvents = sqliteTable(
+  "system_issue_inbound_events",
+  {
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, accountReference),
+    systemIssueId: text("system_issue_id").notNull(),
+    inboundEventId: text("inbound_event_id").notNull(),
+    occurrenceCount: integer("occurrence_count").notNull().default(1),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.systemIssueId, table.inboundEventId] }),
+    foreignKey({
+      name: "fk_system_issue_inbound_events_issue",
+      columns: [table.accountId, table.systemIssueId],
+      foreignColumns: [systemIssues.accountId, systemIssues.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "fk_system_issue_inbound_events_event",
+      columns: [table.accountId, table.inboundEventId],
+      foreignColumns: [inboundEvents.accountId, inboundEvents.id],
+    }).onDelete("restrict"),
+    index("idx_system_issue_inbound_events_issue").on(
+      table.accountId,
+      table.systemIssueId,
+      sql`${table.lastSeenAt} desc`,
+    ),
+    index("idx_system_issue_inbound_events_event").on(
+      table.accountId,
+      table.inboundEventId,
+    ),
+    check(
+      "ck_system_issue_inbound_events_occurrence_count",
+      sql`${table.occurrenceCount} >= 1`,
+    ),
+    check(
+      "ck_system_issue_inbound_events_seen_order",
+      sql`${table.lastSeenAt} >= ${table.firstSeenAt}`,
+    ),
   ],
 );
 
@@ -1135,7 +1292,7 @@ export const outboundDeliveries = sqliteTable(
     ),
     check(
       "ck_outbound_deliveries_target",
-      sql`${table.status} = 'blocked_configuration'
+      sql`${table.status} in ('blocked_configuration', 'payload_expired')
         or (${table.endpointId} is not null
           and ${table.targetUrl} is not null
           and ${table.signingSecretCiphertext} is not null)`,

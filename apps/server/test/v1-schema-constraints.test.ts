@@ -55,6 +55,62 @@ function seedUser(db: Database.Database, accountId: string, id: string): void {
   ).run(id, accountId, `${id.toLowerCase()}@example.com`, `User ${id}`, now, now);
 }
 
+function seedBillingProvider(
+  db: Database.Database,
+  accountId: string,
+  id: string,
+  environment: "sandbox" | "live" = "sandbox",
+): void {
+  const token = environment === "sandbox" ? "test_public" : "live_public";
+  db.prepare(
+    `INSERT INTO billing_providers (
+       id, account_id, provider, environment, client_side_token,
+       webhook_secret_ciphertext, created_at, updated_at
+     ) VALUES (?, ?, 'paddle', ?, ?, 'ciphertext', ?, ?)`,
+  ).run(id, accountId, environment, token, now, now);
+}
+
+function seedSystemIssue(
+  db: Database.Database,
+  accountId: string,
+  providerId: string,
+  id: string,
+  issueCode = "BILLING_PROVIDER_API_AUTH_INVALID",
+): void {
+  db.prepare(
+    `INSERT INTO system_issues (
+       id, account_id, billing_provider_id, capability, issue_code,
+       first_seen_at, last_seen_at, created_at, updated_at
+     ) VALUES (?, ?, ?, 'customer_read', ?, ?, ?, ?, ?)`,
+  ).run(id, accountId, providerId, issueCode, now, now, now, now);
+}
+
+function seedInboundEvent(
+  db: Database.Database,
+  accountId: string,
+  providerId: string,
+  id: string,
+  blockingSystemIssueId: string | null = null,
+): void {
+  db.prepare(
+    `INSERT INTO inbound_events (
+       id, account_id, billing_provider_id, external_event_id,
+       external_event_type, payload_hash, payload_expires_at,
+       blocking_system_issue_id, received_at, updated_at
+     ) VALUES (?, ?, ?, ?, 'transaction.completed', ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    accountId,
+    providerId,
+    `external-${id}`,
+    `hash-${id}`,
+    "2026-09-20T00:00:00Z",
+    blockingSystemIssueId,
+    now,
+    now,
+  );
+}
+
 function seedPerpetualPlan(
   db: Database.Database,
   accountId: string,
@@ -137,13 +193,16 @@ describe("V1 initial database schema", () => {
       .all() as Array<{ name: string }>;
     const names = tables.map(({ name }) => name);
 
-    expect(names).toHaveLength(26);
+    expect(names).toHaveLength(28);
     expect(names).toContain("license_plans");
     expect(names).toContain("activations");
     expect(names).toContain("billing_checkout_verifications");
+    expect(names).toContain("system_issues");
+    expect(names).toContain("system_issue_inbound_events");
     expect(names).not.toContain("policies");
     expect(names).not.toContain("machines");
     expect(names).not.toContain("webhook_events");
+    expect(names).not.toContain("inbound_event_attempts");
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     const triggerCount = db
@@ -241,6 +300,173 @@ describe("V1 initial database schema", () => {
     expect(() => db.prepare("DELETE FROM product_releases WHERE id = 'rel_a'").run()).toThrow(
       /PRODUCT_RELEASE_DELETE_FORBIDDEN/,
     );
+  });
+
+  it("stores Scheduler health as an all-or-nothing successful run fact", () => {
+    const setupUpdatedAt = "2026-09-18T00:00:00Z";
+    db.prepare(
+      `INSERT INTO system_settings (
+         id, instance_name, app_url, initialized_at, updated_at
+       ) VALUES ('current', 'LicenKit', 'https://example.com', ?, ?)`,
+    ).run(now, setupUpdatedAt);
+
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE system_settings
+           SET scheduler_last_success_at = ?, scheduler_last_duration_ms = NULL
+           WHERE id = 'current'`,
+        )
+        .run(now),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE system_settings
+           SET scheduler_last_success_at = ?, scheduler_last_duration_ms = -1
+           WHERE id = 'current'`,
+        )
+        .run(now),
+    ).toThrow(/CHECK constraint failed/);
+
+    db.prepare(
+      `UPDATE system_settings
+       SET scheduler_last_success_at = ?, scheduler_last_duration_ms = 42
+       WHERE id = 'current'`,
+    ).run(now);
+    expect(
+      db
+        .prepare(
+          `SELECT scheduler_last_success_at AS successAt,
+                  scheduler_last_duration_ms AS durationMs,
+                  updated_at AS updatedAt
+           FROM system_settings WHERE id = 'current'`,
+        )
+        .get(),
+    ).toEqual({ successAt: now, durationMs: 42, updatedAt: setupUpdatedAt });
+  });
+
+  it("enforces System Issue identity, tenant and resolution invariants", () => {
+    seedAccount(db, "acct_a");
+    seedAccount(db, "acct_b");
+    seedUser(db, "acct_a", "user_a");
+    seedUser(db, "acct_b", "user_b");
+    seedBillingProvider(db, "acct_a", "provider_a");
+    seedBillingProvider(db, "acct_b", "provider_b");
+    seedSystemIssue(db, "acct_a", "provider_a", "issue_a");
+
+    expect(() =>
+      seedSystemIssue(db, "acct_a", "provider_a", "issue_duplicate"),
+    ).toThrow(/UNIQUE constraint failed/);
+    expect(() =>
+      seedSystemIssue(db, "acct_a", "provider_b", "issue_cross", "PROVIDER_CROSS_ACCOUNT"),
+    ).toThrow(/FOREIGN KEY constraint failed/);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO system_issues (
+             id, account_id, billing_provider_id, capability, issue_code,
+             first_seen_at, last_seen_at, last_error_detail_json,
+             created_at, updated_at
+           ) VALUES ('issue_bad_json', 'acct_a', 'provider_a',
+             'customer_portal_session', 'BAD_JSON', ?, ?, '[]', ?, ?)`,
+        )
+        .run(now, now, now, now),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE system_issues
+           SET status = 'resolved', resolved_at = ?,
+               resolved_by_user_id = 'user_b', resolution_note = 'fixed'
+           WHERE id = 'issue_a'`,
+        )
+        .run(now),
+    ).toThrow(/FOREIGN KEY constraint failed/);
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE system_issues
+           SET status = 'resolved', resolved_at = ?,
+               resolved_by_user_id = 'user_a', resolution_note = '   '
+           WHERE id = 'issue_a'`,
+        )
+        .run(now),
+    ).toThrow(/CHECK constraint failed/);
+
+    db.prepare(
+      `UPDATE system_issues
+       SET status = 'resolved', resolved_at = ?,
+           resolved_by_user_id = 'user_a', resolution_note = 'credential replaced'
+       WHERE id = 'issue_a'`,
+    ).run(now);
+  });
+
+  it("keeps current Inbound blocking and permanent issue history separate", () => {
+    seedAccount(db, "acct_a");
+    seedAccount(db, "acct_b");
+    seedBillingProvider(db, "acct_a", "provider_a");
+    seedBillingProvider(db, "acct_b", "provider_b");
+    seedSystemIssue(db, "acct_a", "provider_a", "issue_a");
+
+    expect(() =>
+      seedInboundEvent(db, "acct_b", "provider_b", "event_cross", "issue_a"),
+    ).toThrow(/FOREIGN KEY constraint failed/);
+
+    seedInboundEvent(db, "acct_a", "provider_a", "event_a", "issue_a");
+    seedInboundEvent(db, "acct_b", "provider_b", "event_b");
+    db.prepare(
+      `INSERT INTO system_issue_inbound_events (
+         account_id, system_issue_id, inbound_event_id, first_seen_at, last_seen_at
+       ) VALUES ('acct_a', 'issue_a', 'event_a', ?, ?)`,
+    ).run(now, now);
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO system_issue_inbound_events (
+             account_id, system_issue_id, inbound_event_id, first_seen_at, last_seen_at
+           ) VALUES ('acct_a', 'issue_a', 'event_a', ?, ?)`,
+        )
+        .run(now, now),
+    ).toThrow(/UNIQUE constraint failed/);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO system_issue_inbound_events (
+             account_id, system_issue_id, inbound_event_id, first_seen_at, last_seen_at
+           ) VALUES ('acct_a', 'issue_a', 'event_b', ?, ?)`,
+        )
+        .run(now, now),
+    ).toThrow(/FOREIGN KEY constraint failed/);
+
+    db.prepare(
+      `UPDATE inbound_events
+       SET blocking_system_issue_id = NULL
+       WHERE account_id = 'acct_a' AND id = 'event_a'`,
+    ).run();
+    expect(
+      db
+        .prepare(
+          `SELECT count(*) AS count FROM system_issue_inbound_events
+           WHERE account_id = 'acct_a'
+             AND system_issue_id = 'issue_a'
+             AND inbound_event_id = 'event_a'`,
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+
+    const indexes = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'index' AND name IN (
+           'idx_inbound_events_blocking_issue',
+           'idx_system_issue_inbound_events_issue',
+           'idx_system_issue_inbound_events_event'
+         ) ORDER BY name`,
+      )
+      .all();
+    expect(indexes).toHaveLength(3);
   });
 
   it("enforces the activation seat limit on insertion and reactivation", () => {

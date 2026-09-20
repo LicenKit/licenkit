@@ -32,6 +32,13 @@ export interface PrepareEndpointTestDeliveryInput {
   now?: Date;
 }
 
+export interface ValidateNotificationDeliveryConfigurationInput {
+  db: D1Database;
+  env: PrepareNotificationDeliveryInput["env"];
+  accountId: string;
+  eventType: string;
+}
+
 interface NotificationEndpointRow {
   id: string;
   url: string;
@@ -50,27 +57,12 @@ function readPositiveInteger(value: string | number | undefined, fallback: numbe
   return parsed;
 }
 
-/**
- * Builds the Delivery INSERT without executing it so callers can include it in
- * the same D1 batch as the domain mutation that produced the notification.
- */
-export async function prepareNotificationDelivery(
-  input: PrepareNotificationDeliveryInput
-): Promise<PreparedNotificationDelivery> {
-  const now = input.now ?? new Date();
-  const nowIso = now.toISOString();
-  const deliveryId = `dly_${ulid().toLowerCase()}`;
-  const idempotencyKey = input.idempotencyKey ?? `${input.eventType}:${deliveryId}`;
-  const ttlSeconds = readPositiveInteger(
-    input.env.SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS,
-    DEFAULT_SENSITIVE_PAYLOAD_TTL_SECONDS
-  );
-  const payloadExpiresAt = input.payloadExpiresAt ?? new Date(now.getTime() + ttlSeconds * 1000).toISOString();
-  if (Date.parse(payloadExpiresAt) <= now.getTime()) {
-    throw new Error("Delivery payload expiration must be in the future");
-  }
-
-  const endpointResult = await input.db
+async function findNotificationEndpoint(
+  db: D1Database,
+  accountId: string,
+  eventType: string,
+): Promise<NotificationEndpointRow | undefined> {
+  const endpointResult = await db
     .prepare(
       `SELECT id, url, signing_secret_ciphertext, max_automatic_attempts
        FROM outbound_endpoints
@@ -89,11 +81,53 @@ export async function prepareNotificationDelivery(
              AND endpoint_test.status = 'accepted'
              AND endpoint_test.accepted_at >= outbound_endpoints.updated_at
          )
-       LIMIT 1`
+       LIMIT 1`,
     )
-    .bind(input.accountId, input.eventType)
+    .bind(accountId, eventType)
     .all<NotificationEndpointRow>();
-  const endpoint = endpointResult.results[0];
+  return endpointResult.results[0];
+}
+
+/**
+ * Validates shared Notification Gateway crypto before a caller branches on a
+ * private recipient identity. Missing/unverified endpoints are valid here:
+ * the resulting Delivery is persisted as blocked_configuration instead.
+ */
+export async function validateNotificationDeliveryConfiguration(
+  input: ValidateNotificationDeliveryConfigurationInput,
+): Promise<void> {
+  const endpoint = await findNotificationEndpoint(input.db, input.accountId, input.eventType);
+  if (!endpoint) return;
+  await decryptEnvelopeV1(endpoint.signing_secret_ciphertext, input.env, {
+    accountId: input.accountId,
+    table: "outbound_endpoints",
+    rowId: endpoint.id,
+    field: "signing_secret_ciphertext",
+  });
+}
+
+/**
+ * Builds the Delivery INSERT without executing it so callers can include it in
+ * the same D1 batch as the domain mutation that produced the notification.
+ */
+export async function prepareNotificationDelivery(
+  input: PrepareNotificationDeliveryInput
+): Promise<PreparedNotificationDelivery> {
+  const now = input.now ?? new Date();
+  const nowIso = now.toISOString();
+  const deliveryId = `dly_${ulid().toLowerCase()}`;
+  const idempotencyKey = input.idempotencyKey ?? `${input.eventType}:${deliveryId}`;
+  const payloadExpiresAt = input.payloadExpiresAt ?? new Date(
+    now.getTime() + readPositiveInteger(
+      input.env.SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS,
+      DEFAULT_SENSITIVE_PAYLOAD_TTL_SECONDS,
+    ) * 1000,
+  ).toISOString();
+  if (Date.parse(payloadExpiresAt) <= now.getTime()) {
+    throw new Error("Delivery payload expiration must be in the future");
+  }
+
+  const endpoint = await findNotificationEndpoint(input.db, input.accountId, input.eventType);
 
   const body = JSON.stringify({
     id: deliveryId,

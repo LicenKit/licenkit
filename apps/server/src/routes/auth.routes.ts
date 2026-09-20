@@ -9,7 +9,6 @@ import {
   adminSessionAuth,
   requireExactOrigin,
 } from "../middleware/auth";
-import { rateLimit } from "../middleware/rate-limit";
 import {
   clearAdminCookies,
   createSessionSecrets,
@@ -41,7 +40,6 @@ interface LoginRow {
 
 authRouter.post(
   "/login",
-  rateLimit({ limit: 10, windowSeconds: 60, keyPrefix: "admin_login" }),
   requireExactOrigin,
   async (c) => {
     const input = LoginSchema.parse(await c.req.json());
@@ -178,4 +176,3 @@ authRouter.post(
     return c.json({ success: true, data: { loggedOut: true } });
   }
 );
-
