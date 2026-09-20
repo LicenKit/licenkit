@@ -14,13 +14,19 @@
   "author": "LicenKit Contributors",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:server": "pnpm --filter @licenkit/server run dev",
+    "dev:server": "wrangler dev",
     "dev:admin": "pnpm --filter @licenkit/admin run dev",
     "dev:cli": "pnpm --filter @licenkit/cli run dev",
-    "build": "node scripts/clean-dist.mjs && pnpm --filter @licenkit/cli run build && pnpm --filter @licenkit/admin run build && pnpm --filter @licenkit/server run build",
+    "build": "node scripts/clean-dist.mjs && pnpm --filter @licenkit/cli run build && pnpm --filter @licenkit/admin run build && wrangler deploy --dry-run --outdir apps/server/dist",
     "typecheck": "pnpm --filter @licenkit/cli run typecheck && pnpm --filter @licenkit/admin run typecheck && pnpm --filter @licenkit/server run typecheck",
     "test": "pnpm --filter @licenkit/server run test && pnpm --filter @licenkit/cli run test && pnpm --filter @licenkit/admin run test",
-    "deploy": "pnpm run build && pnpm --filter @licenkit/server run deploy"
+    "db:generate": "pnpm --filter @licenkit/server run db:generate",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy": "pnpm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.132.0"
   },
   "packageManager": "pnpm@10.32.1"
 }

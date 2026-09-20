@@ -72,7 +72,7 @@ LicenKit 的生产部署只包含 Worker API、Scheduled Worker 和 `/admin` 管
 
 Setup 要求显式填写 `siteUrl`，用于生成邮件中的 Magic Link；当前合同要求它与 LicenKit `appUrl` 同源。使用方站点通过同源 `/api/v1` 访问 Customer API，Admin 入口由 `appUrl + /admin/` 派生，不需要单独的 Admin URL 配置。
 
-根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源。直接在该文件中配置数据库 ID、变量和环境；开发、迁移、构建与部署不会再从其他目录选择或合并配置。
+根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源。Wrangler 由根包直接依赖，因为它负责整个 LicenKit 实例的开发、迁移、构建和部署；`apps/server` 只负责 Worker 服务端源码及其测试。直接在根配置中填写数据库 ID、变量和环境，不再从其他目录选择或合并配置。
 
 `dist` 只包含 LicenKit Admin 的部署资产。使用方需要实现的页面、Customer API 和安全合同见[Customer Site 接入清单](./docs/zh-CN/customer-site-integration.md)。
 

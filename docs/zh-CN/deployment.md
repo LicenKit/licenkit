@@ -25,10 +25,10 @@ pnpm build
 
 ## 3. Wrangler 配置
 
-根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源。创建 D1 数据库：
+根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源。Wrangler 安装在根包，因为它管理整个实例的开发、迁移、构建和部署，而不是 `apps/server` 内部的代码工具。创建 D1 数据库：
 
 ```bash
-node scripts/run-wrangler.mjs d1 create licenkit-db
+pnpm exec wrangler d1 create licenkit-db
 ```
 
 把命令返回的数据库 ID 写入 `wrangler.jsonc`，并检查：
@@ -51,12 +51,12 @@ node scripts/run-wrangler.mjs d1 create licenkit-db
 | `STORAGE_ENCRYPTION_KEY` | 加密支付凭证、签名私钥、通知签名 Secret 和敏感 Delivery 负载。 |
 | `TURNSTILE_SECRET_KEY` | 服务端验证 Customer Magic Link 请求。 |
 
-使用根目录脚本写入 Secret，例如：
+在仓库根目录写入 Secret，例如：
 
 ```bash
-node scripts/run-wrangler.mjs secret put INITIAL_SETUP_TOKEN
-node scripts/run-wrangler.mjs secret put STORAGE_ENCRYPTION_KEY
-node scripts/run-wrangler.mjs secret put TURNSTILE_SECRET_KEY
+pnpm exec wrangler secret put INITIAL_SETUP_TOKEN
+pnpm exec wrangler secret put STORAGE_ENCRYPTION_KEY
+pnpm exec wrangler secret put TURNSTILE_SECRET_KEY
 ```
 
 Secret 不进入仓库、普通环境变量文件、日志、审计详情或 API 响应。
@@ -66,13 +66,13 @@ Secret 不进入仓库、普通环境变量文件、日志、审计详情或 API
 本地开发数据库：
 
 ```bash
-pnpm --filter @licenkit/server run db:migrate:local
+pnpm db:migrate:local
 ```
 
 远程实例：
 
 ```bash
-pnpm --filter @licenkit/server run db:migrate:remote
+pnpm db:migrate:remote
 ```
 
 首次部署使用空数据库执行当前迁移。不要通过删除 `system_settings` 绕过已完成的 Setup；需要重新初始化测试实例时，应明确重建测试数据库。

@@ -490,13 +490,13 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       "UPDATE products SET billing_environment = 'live' WHERE id = 'prd_one'",
     ).run();
     const token = "vfy_single_use_token";
+    const verificationExpiresAt = new Date(Date.now() + 3_600_000).toISOString();
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_checkout_verifications (
          id, account_id, billing_offer_id, requested_by_user_id, token_hash,
          status, expires_at, created_at, updated_at
-       ) VALUES ('bcv_one', ?, 'off_one', 'usr_verify', ?, 'pending',
-         '2026-09-20T08:00:00.000Z', ?, ?)`,
-    ).run(accountId, await sha256Hex(token), nowIso, nowIso);
+       ) VALUES ('bcv_one', ?, 'off_one', 'usr_verify', ?, 'pending', ?, ?, ?)`,
+    ).run(accountId, await sha256Hex(token), verificationExpiresAt, nowIso, nowIso);
     const first = await postEvent(eventPayload("evt_verify_one", "transaction.completed", {
       id: "txn_verify1",
       customer_id: "ctm_buyer1",

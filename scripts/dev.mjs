@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const commands = [
-  ["pnpm", ["--filter", "@licenkit/server", "run", "dev"]],
+  ["pnpm", ["run", "dev:server"]],
   ["pnpm", ["--filter", "@licenkit/admin", "run", "dev"]],
 ];
 const children = commands.map(([command, args]) => spawn(command, args, {

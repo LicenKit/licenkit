@@ -28,7 +28,7 @@ pnpm build
 
 具体脚本以根目录 `package.json` 为准。重新生成 V1 migration 前，不对旧原型数据库执行兼容迁移。
 
-根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源。直接在该文件中配置数据库 ID、变量、环境与触发器；开发、迁移、构建和部署都读取同一文件，不选择或合并模板与覆盖配置。Secrets 仍通过 Wrangler Secret 管理，不写入该文件。
+根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源，Wrangler 也由根包直接依赖。原因是开发、迁移、构建和部署属于整个 LicenKit 实例的生命周期，而 `apps/server` 只负责 Worker 源码、类型检查和测试。所有部署命令读取同一份根配置，不选择或合并模板与覆盖配置。Secrets 仍通过 Wrangler Secret 管理，不写入该文件。
 
 Admin 固定构建到 `dist/admin`，Worker 只在 `/admin` 路径读取静态资产；其他非 API、非 Admin 路径返回 404，根路径重定向到 `/admin/`。
 

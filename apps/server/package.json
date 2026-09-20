@@ -5,15 +5,10 @@
   "description": "LicenKit Server - Core Licensing & Key Generation Engine on Cloudflare Workers",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "node ../../scripts/run-wrangler.mjs dev",
-    "build": "node ../../scripts/run-wrangler.mjs deploy --dry-run --outdir apps/server/dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "deploy": "node ../../scripts/run-wrangler.mjs deploy",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "node ../../scripts/run-wrangler.mjs d1 migrations apply DB --local",
-    "db:migrate:remote": "node ../../scripts/run-wrangler.mjs d1 migrations apply DB --remote"
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -27,7 +22,6 @@
     "better-sqlite3": "^13.0.3",
     "drizzle-kit": "^0.30.5",
     "typescript": "^5.7.3",
-    "vitest": "^5.0.1",
-    "wrangler": "^4.132.0"
+    "vitest": "^5.0.1"
   }
 }
