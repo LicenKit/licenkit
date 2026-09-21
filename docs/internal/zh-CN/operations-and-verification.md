@@ -26,7 +26,7 @@ pnpm build
 
 `pnpm dev` 只启动 Server 与 Admin；`build`、`typecheck`、`test` 和 `deploy` 不包含产品官网、Magic Link 页面或 Customer Portal。仓库不保存这些页面的示例前端源码。
 
-具体脚本以根目录 `package.json` 为准。重新生成 V1 migration 前，不对旧原型数据库执行兼容迁移。
+具体脚本以根目录 `package.json` 为准。邮件重构使用 `0001_email_delivery_schema.sql` 在已有 `0000_v1_initial.sql` 之上向前迁移，不重写已可能应用的初始 migration。
 
 根目录 `wrangler.jsonc` 是当前实例唯一的 Worker 配置来源，Wrangler 也由根包直接依赖。原因是开发、迁移、构建和部署属于整个 LicenKit 实例的生命周期，而 `apps/server` 只负责 Worker 源码、类型检查和测试。所有部署命令读取同一份根配置，不选择或合并模板与覆盖配置。Secrets 仍通过 Wrangler Secret 管理，不写入该文件。
 
@@ -40,7 +40,7 @@ Setup 时必须显式填写产品站与 Customer Portal 的 `siteUrl`，服务�
 
 | 名称 | 作用 |
 | --- | --- |
-| `STORAGE_ENCRYPTION_KEY` | 加密签名私钥、支付 Webhook Secret、支付平台服务端 API 凭证、出站 Secret 和敏感 Delivery 负载 |
+| `STORAGE_ENCRYPTION_KEY` | 加密签名私钥、支付 Webhook Secret、支付/邮件 Provider 凭证、出站 Secret 和敏感 Delivery 负载 |
 | `INITIAL_SETUP_TOKEN` | 独立部署首次 Setup 使用的一次性高熵 Secret；初始化完成后可以移除 |
 | `TURNSTILE_SECRET_KEY` | Worker 调用 Turnstile Siteverify 的服务端 Secret；不返回浏览器 |
 
@@ -57,10 +57,10 @@ Secret 不进入代码、普通环境变量文件、日志、审计详情或 API
 | `CUSTOMER_MAGIC_LINK_COOLDOWN_SECONDS` | 同一 Customer 重复请求新 Magic Link 的 D1 冷却时间；默认 `60` |
 | `CUSTOMER_SESSION_TTL_SECONDS` | Customer Session 服务端最长有效时间；默认 `604800`（7 天） |
 | `CUSTOMER_RECENT_AUTH_SECONDS` | 敏感操作最近认证窗口；默认 `900`（15 分钟） |
-| `SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS` | 未成功敏感 Delivery 负载的最长保留时间；推荐默认 `86400`（24 小时） |
+| `SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS` | Provider accepted 后敏感 Delivery 变量继续保留的时间；推荐默认 `86400`（24 小时） |
 | `ADMIN_SESSION_TTL_SECONDS` | 管理员服务端 Session 最长有效时间 |
 
-这些值在测试和正式环境使用相同代码路径，只允许显式配置值不同。未配置时使用上述默认值，不能因环境名称隐式改变。Delivery 创建时把实际截止时间固化到 `payload_expires_at`；Magic Link 取该值与 Challenge 到期时间中的较早者，accepted 后不等待 TTL 而是立即清除负载。
+这些值在测试和正式环境使用相同代码路径，只允许显式配置值不同。未配置时使用上述默认值，不能因环境名称隐式改变。普通 Delivery 创建时不启动敏感变量清理倒计时；Provider accepted 后才写入清理期限。Magic Link 另外把 Challenge 到期时间写为业务发送期限，未 accepted 前一旦到期就停止发送并清除负载。
 
 ### 3.3 Cloudflare Bindings
 
@@ -83,11 +83,11 @@ V1 也不配置 KV、Durable Object 或 Workers Rate Limit binding。部署者�
 每次运行使用有界批次分别处理：
 
 1. 到期的 `inbound_events`；
-2. 到期的 `outbound_deliveries`；
+2. 到期的 `email_deliveries`；
 3. 已超过 `locked_until` 的 processing 任务；
 4. 到期的敏感负载和保留数据清理。
 
-即时处理和定时处理调用同一个 Fulfillment/Delivery Service，不能维护两套业务逻辑。每轮先处理可领取的 Inbound Event 与 Delivery，再以有界批次清空已超过 `payload_expires_at` 的 Inbound Event 密文并写入 `payload_cleared_at`；即使事件被 System Issue 阻塞也不能无限保留密文。Cron 频率、批次大小、租约时长和退避参数可以配置，但测试与正式环境使用同一调度模块。
+即时处理和定时处理调用同一个 Fulfillment/Delivery Service，不能维护两套业务逻辑。每轮先处理可领取的 Inbound Event 与 Delivery，再以有界批次清空已超过 `payload_expires_at` 的 Inbound Event 密文并写入 `payload_cleared_at`；进入 `needs_attention` 的事件也不能无限保留密文。Cron 频率、批次大小、租约时长和退避参数可以配置，但测试与正式环境使用同一调度模块。
 
 只有上述统一调度入口的全部作业成功后，Worker 才更新 D1 `system_settings.scheduler_last_success_at` 与 `scheduler_last_duration_ms`。Readiness 以这组持久事实判断调度器是否在阈值内运行；自部署 V1 不为心跳配置 KV、Durable Object 或进程内共享状态。
 
@@ -97,7 +97,9 @@ V1 也不配置 KV、Durable Object 或 Workers Rate Limit binding。部署者�
 
 - Billing Provider 的环境、公开 Client-side Token、加密 Webhook Secret 和可选服务端 API 凭证；只有启用 Customer API 读穿/对账或托管客户门户时，Paddle API Key 才分别需要 `customer.read` 或 `customer_portal_session.write`；
 - 默认 draft 的 Offer Mapping；
-- Notification Gateway URL 和加密签名 Secret；
+- Email Integration 的 Provider、加密 API 凭证、From/Reply-To 和重试预算；
+- 四个 Email Template Binding 的外部 Template ID/Alias；测试由管理员输入收件人即时执行，结果不持久化；
+- `event_subscriber` 业务事件 Webhook URL 和加密签名 Secret；
 - License Plan；
 - Product Release；
 - Product/设备级免费试用配置；
@@ -118,15 +120,22 @@ Setup Token 不放入 URL、命令输出、日志或数据库。并发提交、�
 
 LicenKit Cloud 不属于 V1。代码只保留内部 Account Provisioning 接口和多账户约束，不增加 Cloud 路由、Cloud Adapter、Cloud 配置或第二套初始化流程。
 
-## 4. V1 初始化迁移
+## 4. 数据库迁移与本地证据
 
-由于 V1 没有旧数据兼容要求：
+本次重构不重写 `0000_v1_initial.sql`，使用显式 `0001_email_delivery_schema.sql`。已确认 `0001` 尚未部署，因此迁移直接删除未使用的 Outbound 模型，不承担旧 Outbound 数据兼容。
 
-1. 先完成 `schema.ts`；
-2. 对照[数据模型](./data-model.md)和 [`schema.sql`](../schema.sql) 复核；
-3. 删除旧原型 migration；
-4. 生成一个新的 V1 初始 migration；
-5. 在全新本地 D1 执行 migration；
+当前自动测试证据覆盖：
+
+1. 从空库应用 `0000` 后再应用 `0001`，确认三个旧 Outbound 表已删除；
+2. `customer_login_challenges`、`license_key_rotations`、`billing_checkout_verifications` 的 Delivery 外键都改指向 `email_deliveries`；
+3. `PRAGMA foreign_key_check` 为空，且 Email Integration/Binding/Delivery 与极简 System Issue 的同账户约束、组合字段和状态约束均有反例测试；
+4. Contract Registry、Resend Adapter、Email Dispatcher/Scheduler、管理 API、四个业务路径和 Billing Readiness 通过与正式相同的模块接口测试；
+5. 管理端核心状态翻译、变量敏感性与测试诊断有自动测试。
+
+这些是本地实现证据，不是目标环境状态证据。部署前必须对目标 D1 查询 migration 历史与关键表/列，应用 `0001` 后再 readback。本文档不声称任何远程 D1 已完成升级。
+
+其他数据模型回归仍必须：
+
 6. 运行唯一约束、事务和级联行为测试；
 7. 验证只有 `perpetual` 可以设置 `update_window_seconds` 和 `updates_until`；
 8. 验证 Customer 邮箱、Magic Link Token、Customer Session Token 的唯一约束和关联索引；
@@ -141,7 +150,7 @@ LicenKit Cloud 不属于 V1。代码只保留内部 Account Provisioning 接口�
 17. 验证手动续期只能把同一个 License 延长到更晚时间，不能修改支付续期 License，也不轮换注册码；
 18. 验证同一 Account、Product 和设备指纹不能并发创建多个 Trial Claim，Trial Token Hash 不能重复；
 19. 验证 `trialing` Billing Subscription 必须保存支付方式必需的试用类型、试用起止和下一扣款时间；
-20. 验证 Notification Endpoint 默认 `max_automatic_attempts=4`，Delivery 固化该值，人工 retry 不重置或增加自动预算；
+20. 验证 Email Integration 的 `max_automatic_attempts`，Provider 明确可重试的结果受此上限约束，人工 retry 不启动新的自动重试预算；
 21. 验证 Billing Customer 的外部 Customer ID 唯一键、链接状态与可空 `customer_id` 检查约束；
 22. 验证 Billing Subscription 的 `external_customer_id` 必须通过同账户、同 Provider 的复合外键命中 Billing Customer，跨账户或未知 Customer ID 均被数据库拒绝；
 23. 验证相同外部 Customer ID 在不同 Provider 或 environment 下可以独立存在、同一 Provider 连接内不能重复，并验证一个 LicenKit Customer 可以关联多条 Billing Customer；
@@ -151,56 +160,46 @@ LicenKit Cloud 不属于 V1。代码只保留内部 Account Provisioning 接口�
 27. 验证 Billing Adjustment 外部 ID 唯一、review/resolution 字段组合约束和跨账户外键；
 28. 验证 Admin/Customer CSRF Token Hash 各自唯一并绑定对应 Session；缺少或不匹配精确 Origin、CSRF Header、CSRF Cookie、Session Hash 任一条件时，Cookie 鉴权写操作均被拒绝；
 29. 验证 Checkout Verification 创建后不能改绑 Account、Offer、发起人或 Token，也不能延长过期时间；
-30. 验证 `system_issues` 对同一账户、Provider、capability 和错误码只保留一行，重复发生增加次数，resolved 后再次发生重新打开同一行；
-31. 验证 `system_issue_inbound_events` 不重复关联同一 Event，并且跨账户 Issue/Event 外键被拒绝；
-32. 验证非空 `blocking_system_issue_id` 阻止 Scheduler 领取 Event；仅解决 Issue 不会隐式唤醒 Event，而解除当前阻塞不删除永久 Issue/Event 关联；
-33. 在 migration 发布前冻结并评审。
+30. 验证 `system_issues` 对同一账户、类别、来源、操作和错误码只保留一行，管理员可标记已处理，重复发生增加次数、更新最近诊断并重新变为待处理；
+31. 验证 System Issue 的人工状态不控制 Inbound Event 或 Email Delivery 的状态、调度与重试；
+32. 验证 `401/403` Event 进入 `needs_attention`，修复配置后只能从 Event Replay；
+33. 验证配置测试不落库，等待中的 Delivery 使用最新 Integration/Binding 重试；
+34. 在 migration 发布前冻结并评审。
 
 不得先生成迁移再反向修改文档来迎合偶然的表结构。
 
-## 5. Notification Gateway 联调
+## 5. Email Provider 联调
 
-外部接收方至少实现：
+管理员先在 Resend 创建并发布四个外部模板，再在 LicenKit 创建 Email Integration 与四个 Template Binding。每个 Binding 使用统一配置测试路径向管理员指定的收件人发送测试变量；成功必须返回 Provider Message ID，只在当次响应中表述为 `provider_accepted`，不写数据库，也不表述为最终送达。
 
-1. 读取原始 HTTP body；
-2. 验证 `X-LicenKit-Timestamp` 和 `X-LicenKit-Signature`；
-3. 按 `X-LicenKit-Delivery` 幂等；
-4. 将消息可靠写入自己的邮件发送任务存储；
-5. 写入成功后返回 2xx；
-6. 写入失败时返回非 2xx 和可诊断错误。
+自动测试已覆盖 Contract Registry、Resend 请求格式、幂等键、超时/错误分类、原始诊断保留与脱敏，但如果没有目标 Resend API Key、已发布 Template ID/Alias 和可接收测试地址，不得将真实 Resend E2E 写为已完成。
 
-LicenKit 的 Endpoint Test 只发送 `endpoint.test`，不会携带真实注册码，也不会创建 License。
+目标环境联调必须覆盖：
 
-真实联调需要覆盖：
-
-- 首次发码；
-- 接收端 500 后自动 retry；
-- 接收端超时；
-- 签名 Secret 错误；
-- 重复 Delivery；
-- 人工 retry；
-- 首次失败后最多自动重试 3 次，并为最多 4 次请求分别保存 Attempt；
-- Endpoint URL 或 Secret 轮换后，旧 Delivery 仍使用创建时快照；
-- HTTP、URL credentials、非标准端口、IP literal、localhost、私网、链路本地、云元数据地址和跳转到这些目标的重定向全部被拒绝且不产生请求；
-- 注册码找回生成新码；
-- Magic Link 通知、自动 retry 和过期后拒绝消费；
-- Notification Gateway 接受后立即清除敏感负载；
-- 未成功敏感负载默认 24 小时到期，Magic Link 以 15 分钟为更早上限，负载到期后拒绝 retry。
-- 缺少 Gateway 或 Endpoint Test 未 accepted 时，Checkout Readiness 失败且 Offer 不能激活；
-- 异常产生的 `blocked_configuration` Delivery 在配置完成后只能通过显式绑定动作恢复；负载过期时必须轮换注册码。
+- 四个 Binding 都能在当前配置下即时得到 Provider Message ID，且测试不创建 Email Delivery；
+- 首次发码、找回、安全重置和 Magic Link 都经过同一 Dispatcher；
+- Provider 明确返回的 `429`/可重试 `5xx` 进入有界自动重试，并保存 request ID、Provider error code、Retry-After 和原始线索；
+- 超时和网络中断等结果未知时不自动重发，管理端提示可能重复并要求确认后才能人工重发；
+- `401/403`、配置、配额与无效 Message ID 在 Delivery 保存完整错误，并向统一 System Issue 收件箱写入被动提示；
+- `waiting_configuration` Delivery 可按通知类型和合同版本显式重排，也可从具体 Delivery 重试；
+- 所有自动和人工重发都读取最新 Integration/Binding，不存在旧 revision 兼容通道；
+- Provider 接受后才启动敏感变量保留期限，默认 24 小时后清除；普通未成功邮件保留密文供人工重发，Magic Link 仍以 Challenge 到期为业务发送上限；
+- 验证有效处理锁不会被到期扫描抢占，自动尝试达到上限后进入 `failed`，管理员可以重发或取消尚未发送的 Delivery；
+- 缺少 active Integration 或 `customer.license_issued@1` Binding 时 Checkout Readiness 失败；配置测试结果和 System Issue 不作为历史门禁；
+- `accepted` 展示为 Provider 已接收，不展示为最终送达。
 
 ## 6. 支付平台联调
 
 V1 首个且必须完成的支付闭环是 Paddle。Paddle Adapter 使用官方 Sandbox 和官方 Webhook 签名流程；Live 只替换 Provider 环境和 Secret，不切换处理模块。测试顺序：
 
 1. 配置 Billing Provider 的环境匹配 Client-side Token 与 Webhook Secret；暂不配置 API Key，证明基础购买、Customer 映射和发码不依赖它；
-2. 创建 Product `slug`、选择唯一 `billingEnvironment` 并创建 draft Offer，确认不同环境 Offer、缺少 Notification Gateway、事件合同或验收证据时无法激活，管理端展示具体检查项；
+2. 创建 Product `slug`、选择唯一 `billingEnvironment` 并创建 draft Offer，确认不同环境 Offer、缺少 active Email Integration/`customer.license_issued@1` Binding、事件合同或验收证据时无法激活，管理端展示具体检查项；配置测试结果不作为历史门禁；
 3. 订阅最小合同 `customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created`、`adjustment.updated`，逐项发送官方模拟事件并验证能够验签、持久化和被 Readiness 识别；轮换 Webhook Secret 后旧证据必须失效；
-4. 配置并测试 Notification Gateway，确认 `endpoint.test` 为 accepted 后联通状态更新；
+4. 配置 Email Integration 和四个 Template Binding，分别输入收件人完成即时 Provider 测试，并确认数据库没有新增测试 Delivery 或测试状态；
 5. owner/admin 通过 POST draft Sandbox Offer 的 `verification-config` 创建短期一次性令牌，并由 Admin 内部 Paddle.js 调用完成首个真实 Sandbox Checkout；只打开一个 Price、数量 1，令牌不进入日志、URL、localStorage 或分析事件；
 6. 在 Paddle Sandbox 与 Live 分别设置 Default Payment Link；为实际 Live 产品页完成 Website Approval，并在该 Origin 运行一次不付款的 Checkout 打开测试；未批准 Origin 或缺少 Default Payment Link 时保留 Paddle 原始错误并 fail-fast；
 7. 验证外部 Customer ID 映射到唯一 LicenKit Customer，首次发码只使用 Paddle Customer 实体中的邮箱，不读取 `custom_data.email` 或 Checkout 自定义邮箱；
-8. 验证 Sandbox 闭环只创建一组标记为 Checkout Verification 的 suspended License/Subscription（如有）/Delivery，注册码通过 Notification Gateway 发出但激活、恢复和迁移均被拒绝；Delivery accepted 后 verification 才 completed，Offer 才可通过后续激活检查；
+8. 验证 Sandbox 闭环只创建一组标记为 Checkout Verification 的 suspended License/Subscription（如有）/Email Delivery，注册码通过同一 Provider Adapter 发出但激活、恢复和迁移均被拒绝；Delivery 得到 Provider Message ID 并 accepted 后 verification 才 completed，Offer 才可通过后续激活检查；
 9. 激活与 Product 环境一致的 Offer 后，从静态产品页用对应 Price ID 打开 Checkout；直接构造多 Price、数量大于 1、未知 Price、draft Offer、Provider/Product 环境不一致、过期或重复验证令牌交易，分别进入 `needs_attention` 且不发正式 License；
 10. 使用配置免费试用期的 recurring price 完成要求预先绑定支付方式的真实 Sandbox Checkout；
 11. 验证已验签事件创建 `trialing` Billing Subscription、普通 License 和首次发码 Delivery，且不创建 Trial Claim；
@@ -216,10 +215,10 @@ V1 首个且必须完成的支付闭环是 Paddle。Paddle Adapter 使用官方 
 21. 分别让新 Customer 的 `customer.created` 先到、购买事件先到，并让已有 Paddle Customer 再次购买；购买先到时以 `BILLING_CUSTOMER_PENDING` 等待 Customer Webhook，三条路径最终只履约一次；
 22. 另外配置只具备 `customer.read` 的 API Key，验证购买先到时 Get Customer 可以加速同一同步路径；Sandbox Key 只能调用 Sandbox base URL、Live Key 只能调用 Live base URL；
 23. 模拟 Customer Webhook 延迟、API 暂时失败和等待超时，验证事件保留 Paddle request ID、HTTP 状态与原始错误，并只在超过上限或确认不可恢复时进入 `needs_attention`；分别用 Paddle Notification 重放 Customer 事件、配置只读 API Key 后 reconcile 两条路径恢复，再 replay 原购买事件；
-24. 让 Customer 读穿分别返回 `401` 和 `403`，验证 Event 保持 pending 并保存 HTTP 状态、Provider 原始 code、request ID 与 message；相同 Provider/capability 只产生一条 open System Issue，多条 Event 均可追溯；
-25. 更新 API Key 后执行“已修复但不重试”，验证 Issue resolved 而 Event 错误不变；再次触发相同错误时重开同一 Issue；
-26. 执行“已修复并重新处理”，分别覆盖 Customer Webhook 已补齐、Get Customer 200、404/archived、429/5xx、再次 401/403、邮箱冲突、payload 过期和业务结果已存在，验证只对符合条件的 Event 运行完整状态机且不会重复发码；
-27. 手动 reconcile 的 `401/403` 只 upsert System Issue 而不伪造 Event；客户门户 capability 独立去重，修复后不自动重放旧门户请求；
+24. 让 Customer 读穿分别返回 `401` 和 `403`，验证 Event 进入 `needs_attention` 并保存 HTTP 状态、Provider 原始 code、request ID 与 message；相同 Provider/operation 只累加一条被动 System Issue；
+25. 更新 API Key 并在 Provider 配置处测试后，从原 Event 执行 Replay，验证完整状态机重新读取当前配置且不会重复发码；
+26. 分别覆盖 Customer Webhook 已补齐、Get Customer 200、404/archived、429/5xx、再次 401/403、邮箱冲突、payload 过期和业务结果已存在，验证 Replay 的结果仍归原 Event 所有；
+27. 手动 reconcile 的 `401/403` 只 upsert 被动 System Issue 而不伪造 Event；客户门户操作独立去重，修复后不自动重放旧门户请求；
 28. 发送较旧的 Customer/Subscription/Adjustment 状态事件，验证不会覆盖较新的镜像和状态；
 29. 修改 Paddle Customer 邮箱，验证不会自动改绑或修改 LicenKit Customer，新签发进入 `email_mismatch` 人工处理，已有订阅仍续期原 License；
 30. 为 API Key 增加 `customer_portal_session.write` 后创建真实 Sandbox 客户门户会话；移除该能力只禁用门户，不影响购买；
@@ -233,23 +232,24 @@ Customer Portal 至少验证：
 
 1. Magic Link 请求必须通过 Turnstile 服务端 Siteverify，并校验固定 action 与 `site_url` hostname；无效、过期、重复或 hostname/action 不匹配时在 Customer 查询前拒绝；
 2. 使用 Cloudflare 官方测试 Sitekey/Secret 覆盖成功、失败和重复 Token，测试与正式环境走同一 Widget、请求字段和 Siteverify Adapter；
-3. 有效邮箱首次请求创建 Login Challenge 和 Notification Delivery；
-4. 默认 60 秒内重复请求命中 D1 Challenge 冷却，不创建新 Challenge/Delivery，也不吊销旧链接；冷却结束后的并发请求最多创建一组新记录；
-5. Customer 不存在、命中冷却和成功创建具有相同状态、响应体、缓存头和最短响应时间策略；
-6. Magic Link Token 只保存哈希且只能消费一次；
-7. 冷却结束后成功创建新链接才吊销旧 Challenge、停止旧 Delivery，旧链接无法登录；新建失败时旧链接保持有效；
-8. Magic Link 请求页 CSP 只增加 Turnstile 所需官方来源；Token 落地页仍阻止所有第三方资源，Token 不进入首个 HTTP 请求、Referer、浏览器历史或应用日志；GET、预取和链接扫描不消费 Challenge，只有显式用户动作后的 POST 才消费；
-9. 过期、已消费、已吊销 Token 和 disabled Customer 不能创建 Session；
-10. Customer Session 退出、过期和管理员吊销后立即失效；
-11. 最近认证过期后，设备释放、找回、安全重置和支付门户创建都要求重新 Magic Link 验证；
-12. Customer 只能查询自己名下的 License、Subscription 和 Activation；
-13. 账户 A 的 Session 不能访问账户 B 的任何 Customer 资源，越权 ID 不泄露资源是否存在；
-14. 释放设备写入 `deactivated` 和 Customer 审计，不删除 Activation；
-15. 普通找回保留激活，安全重置吊销全部激活；
-16. 找回和安全重置成功页只展示一次新注册码，同时创建通知 Delivery，不写入缓存、本地存储、日志或分析事件；
-17. Customer Portal 没有邮箱修改入口，Customer API 也不接受该操作；
-18. Magic Link 15 分钟、请求冷却 60 秒、Session 7 天、最近认证 15 分钟的默认边界值和显式配置覆盖均有测试；
-19. Customer 写操作拒绝跨站请求。
+3. Siteverify 通过后、查询 Customer 前，解密并校验当前 active Email Integration 凭证，使已知/未知邮箱共享同一配置失败边界；
+4. 有效邮箱首次请求创建 Login Challenge 和 Email Delivery；未配置 Binding 时只对真实 Customer 创建 `waiting_configuration` Delivery，对外仍返回统一 accepted；
+5. 默认 60 秒内重复请求命中 D1 Challenge 冷却，不创建新 Challenge/Delivery，也不吊销旧链接；冷却结束后的并发请求最多创建一组新记录；
+6. Customer 不存在、命中冷却和成功创建具有相同状态、响应体、缓存头和最短响应时间策略；
+7. Magic Link Token 只保存哈希且只能消费一次；
+8. 冷却结束后成功创建新链接才吊销旧 Challenge、停止旧 Delivery，旧链接无法登录；新建失败时旧链接保持有效；
+9. Magic Link 请求页 CSP 只增加 Turnstile 所需官方来源；Token 落地页仍阻止所有第三方资源，Token 不进入首个 HTTP 请求、Referer、浏览器历史或应用日志；GET、预取和链接扫描不消费 Challenge，只有显式用户动作后的 POST 才消费；
+10. 过期、已消费、已吊销 Token 和 disabled Customer 不能创建 Session；
+11. Customer Session 退出、过期和管理员吊销后立即失效；
+12. 最近认证过期后，设备释放、找回、安全重置和支付门户创建都要求重新 Magic Link 验证；
+13. Customer 只能查询自己名下的 License、Subscription 和 Activation；
+14. 账户 A 的 Session 不能访问账户 B 的任何 Customer 资源，越权 ID 不泄露资源是否存在；
+15. 释放设备写入 `deactivated` 和 Customer 审计，不删除 Activation；
+16. 普通找回保留激活，安全重置吊销全部激活；
+17. 找回和安全重置成功页只展示一次新注册码，同时创建 Email Delivery，不写入缓存、本地存储、日志或分析事件；
+18. Customer Portal 没有邮箱修改入口，Customer API 也不接受该操作；
+19. Magic Link 15 分钟、请求冷却 60 秒、Session 7 天、最近认证 15 分钟的默认边界值和显式配置覆盖均有测试；
+20. Customer 写操作拒绝跨站请求。
 
 ## 8. 无需支付方式的 Product/设备试用联调
 
@@ -294,16 +294,17 @@ Customer Portal 至少验证：
 - active Paddle Provider 的 Client-side Token 前缀、Webhook Secret、环境和最小事件合同是否匹配；
 - 仅在启用 API 读穿、对账或客户门户时，检查 Paddle API Key 是否可解密、环境匹配且具备该能力需要的最小权限；
 - `pending`、`email_mismatch` 和 `needs_attention` Billing Customer 数量与最老等待时间；
-- active Notification Gateway 是否存在；
-- active Notification Gateway 最近一次 Endpoint Test 是否 accepted，以及当前配置是否晚于该测试；
+- active Email Integration 是否存在，Provider 是否已注册，凭证是否可解密并通过 Adapter 校验；
+- 四种 Email Template Binding 各自是否 active；配置测试结果不持久化，Offer Readiness 只要求 `customer.license_issued@1` 当前配置存在；
+- 最近 Email 类 System Issue 的错误码、次数和 Provider request ID；
 - 每个 active Offer 的 Checkout Readiness、真实 Sandbox 端到端验收和当前就绪状态；
 - Product `billing_environment`、active Offer Provider 环境和非验证支付 License 来源环境是否一致；
 - pending/needs_attention Checkout Verification 数量、最老等待时间，以及验证 License 被异常激活或改为 active 的约束检查；
-- 部署 Customer Portal 时 Magic Link TTL、Session TTL、最近认证窗口和 Notification Gateway 是否有效；
+- 部署 Customer Portal 时 Magic Link TTL、Session TTL、最近认证窗口和 portal access Email Binding 是否有效；
 - 敏感 Delivery 负载 TTL 是否有效，以及最老未清理敏感负载的年龄；
 - 启用支付平台客户门户时，对应 Billing Provider 服务端 API 凭证是否可解密；
 - Turnstile Sitekey/Secret、Siteverify 连通性、固定 action 和 `site_url` hostname 是否匹配；
-- open System Issue 数量、最早发生时间、最近 Provider request ID 和仍受阻的 Inbound Event 数量；
+- 最近 Billing/Webhook 类 System Issue 的来源、错误码、次数和 Provider request ID；
 - pending/failed Inbound Event 数量；
 - open Billing Adjustment 数量、最老等待时间及自动暂停 License 数量；
 - pending/failed Delivery 数量；
@@ -355,6 +356,8 @@ Product Release 是被授权 App 的发布记录，不等于 LicenKit 服务自�
 - 部署目标和配置；
 - 线上 readiness；
 - 一条独立请求 readback；
-- 支付和 Notification Gateway 的环境均为预期环境。
+- 支付与 Email Provider 配置均为预期环境，并完成目标 D1 migration 与关键表/列 readback。
+
+本地自动测试不能代替真实 Resend E2E。只有在目标环境提供真实 API Key、已发布外部模板和测试收件地址，并独立 readback Provider Message ID 与管理端诊断后，才能声称该环境的 Resend 联调完成。
 
 测试与正式版本不使用不同代码路径。正式发布只替换环境资源和 Secret。

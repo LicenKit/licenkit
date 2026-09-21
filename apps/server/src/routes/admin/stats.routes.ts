@@ -20,8 +20,8 @@ adminStatsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), a
               AND expires_at >= ?2 AND expires_at <= ?3) AS expiring_soon,
          (SELECT COUNT(*) FROM inbound_events
             WHERE account_id = ?1 AND status IN ('pending', 'processing', 'needs_attention')) AS pending_inbound_events,
-         (SELECT COUNT(*) FROM outbound_deliveries
-            WHERE account_id = ?1 AND status IN ('pending', 'processing', 'retry_scheduled', 'blocked_configuration', 'failed')) AS pending_deliveries`
+         (SELECT COUNT(*) FROM email_deliveries
+            WHERE account_id = ?1 AND status IN ('pending', 'processing', 'retry_scheduled', 'waiting_configuration', 'failed')) AS pending_deliveries`
     )
     .bind(accountId, now.toISOString(), in30Days)
     .all<{

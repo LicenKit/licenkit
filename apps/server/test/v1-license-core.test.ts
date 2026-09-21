@@ -1,17 +1,17 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 import { issueManualLicense } from "../src/services/license/issue";
 import { activateLicense, validateActivation } from "../src/services/license/activation";
 import { rotateLicenseKey } from "../src/services/license/key-rotation";
 import { claimTrial, validateTrial } from "../src/services/license/trial";
-import { encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
+import { decryptEnvelopeV1, encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 import { generateEd25519KeyPair, base64UrlToJson } from "../src/infra/crypto";
 
 describe("V1 License core contract", () => {
   let testEnv: TestEnvContext;
   const accountId = "acc_v1_core";
   const userId = "usr_v1_owner";
-  const productId = "prd_v1_app";
+  const productId = "prd_00000000000000000000000001";
   const releaseId = "rel_v1_100";
   const releasedAt = "2026-09-01T00:00:00.000Z";
 
@@ -90,7 +90,11 @@ describe("V1 License core contract", () => {
     );
   });
 
+  afterEach(() => vi.unstubAllGlobals());
+
   it("freezes perpetual terms and does not inherit later plan edits", async () => {
+    const providerFetch = vi.fn();
+    vi.stubGlobal("fetch", providerFetch);
     await seedPlan({ id: "lpl_perpetual", updateWindowSeconds: 31_536_000, maxActivations: 2 });
     const issuedAt = new Date("2026-09-19T10:00:00.000Z");
     const issued = await issueManualLicense({
@@ -106,7 +110,42 @@ describe("V1 License core contract", () => {
     expect(issued.license.renewalMode).toBe("none");
     expect(issued.license.expiresAt).toBeNull();
     expect(issued.license.updatesUntil).toBe("2027-09-19T10:00:00.000Z");
-    expect(issued.delivery.status).toBe("blocked_configuration");
+    expect(issued.delivery.status).toBe("waiting_configuration");
+    expect(providerFetch).not.toHaveBeenCalled();
+
+    const delivery = testEnv.sqliteDb.prepare(
+      `SELECT notification_type, contract_version, recipient_email, status,
+              attempt_count, variables_ciphertext
+       FROM email_deliveries WHERE account_id = ? AND id = ?`,
+    ).get(accountId, issued.delivery.id) as any;
+    expect(delivery).toMatchObject({
+      notification_type: "customer.license_issued",
+      contract_version: 1,
+      recipient_email: "buyer@example.com",
+      status: "waiting_configuration",
+      attempt_count: 0,
+    });
+    const variables = JSON.parse(await decryptEnvelopeV1(
+      delivery.variables_ciphertext,
+      testEnv.env,
+      {
+        accountId,
+        table: "email_deliveries",
+        rowId: issued.delivery.id,
+        field: "variables_ciphertext",
+      },
+    ));
+    expect(variables).toMatchObject({
+      account_name: "V1 Core",
+      product_id: productId,
+      product_name: "V1 App",
+      license_id: issued.license.id,
+      license_key: issued.license.licenseKey,
+      license_model: "perpetual",
+      updates_until: "2027-09-19T10:00:00.000Z",
+    });
+    expect(variables).not.toHaveProperty("recipient_email");
+    expect(variables).not.toHaveProperty("expires_at");
 
     await run(
       `UPDATE license_plans SET max_activations = 9, features_json = '["changed"]', revision = 2
@@ -150,6 +189,42 @@ describe("V1 License core contract", () => {
     })).rejects.toMatchObject({ code: "MANUAL_SUBSCRIPTION_EXPIRES_AT_REQUIRED" });
   });
 
+  it("rolls back manual issuance when the selected Plan changes before commit", async () => {
+    await seedPlan({ id: "lpl_racing_manual" });
+    const racingDb = {
+      ...testEnv.d1,
+      batch: async (statements: D1PreparedStatement[]) => {
+        testEnv.sqliteDb.prepare(
+          "UPDATE license_plans SET status = 'archived' WHERE account_id = ? AND id = ?",
+        ).run(accountId, "lpl_racing_manual");
+        return testEnv.d1.batch(statements);
+      },
+    } as D1Database;
+
+    await expect(issueManualLicense({
+      db: racingDb,
+      env: testEnv.env,
+      accountId,
+      licensePlanId: "lpl_racing_manual",
+      customerEmail: "racing@example.com",
+      actor: { type: "user", id: userId },
+      now: new Date("2026-09-19T10:00:00.000Z"),
+    })).rejects.toMatchObject({ code: "LICENSE_MANUAL_ISSUE_STATE_CHANGED" });
+
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM customers WHERE account_id = ?) AS customers,
+         (SELECT COUNT(*) FROM licenses WHERE account_id = ?) AS licenses,
+         (SELECT COUNT(*) FROM email_deliveries WHERE account_id = ?) AS deliveries,
+         (SELECT COUNT(*) FROM audit_logs WHERE account_id = ?) AS audits`,
+    ).get(accountId, accountId, accountId, accountId)).toEqual({
+      customers: 0,
+      licenses: 0,
+      deliveries: 0,
+      audits: 0,
+    });
+  });
+
   it("rejects signed License issuance before any side effect when no active signing key exists", async () => {
     await seedPlan({ id: "lpl_signed_without_key", credential: "signed", signedTtl: 3600 });
 
@@ -170,7 +245,7 @@ describe("V1 License core contract", () => {
       `SELECT
          (SELECT COUNT(*) FROM customers WHERE account_id = ?1) AS customers,
          (SELECT COUNT(*) FROM licenses WHERE account_id = ?1) AS licenses,
-         (SELECT COUNT(*) FROM outbound_deliveries WHERE account_id = ?1) AS deliveries,
+         (SELECT COUNT(*) FROM email_deliveries WHERE account_id = ?1) AS deliveries,
          (SELECT COUNT(*) FROM audit_logs WHERE account_id = ?1) AS audits`
     ).bind(accountId).get();
     expect(counts).toEqual({ customers: 0, licenses: 0, deliveries: 0, audits: 0 });
@@ -479,7 +554,7 @@ describe("V1 License core contract", () => {
       releaseVersion: "1.0.0",
       releasePlatform: "macos-universal",
     })).resolves.toBeDefined();
-    await rotateLicenseKey({
+    const reset = await rotateLicenseKey({
       db: testEnv.d1,
       env: testEnv.env,
       accountId,
@@ -498,6 +573,49 @@ describe("V1 License core contract", () => {
       releaseVersion: "1.0.0",
       releasePlatform: "macos-universal",
     })).rejects.toMatchObject({ code: "ACTIVATION_REVOKED" });
+
+    const rows = testEnv.sqliteDb.prepare(
+      `SELECT id, notification_type, status, variables_ciphertext
+       FROM email_deliveries
+       WHERE account_id = ? AND customer_id = ?
+       ORDER BY CASE notification_type
+         WHEN 'customer.license_issued' THEN 1
+         WHEN 'customer.license_recovered' THEN 2
+         WHEN 'customer.license_security_reset' THEN 3
+         ELSE 4 END`,
+    ).all(accountId, issued.license.customerId) as any[];
+    expect(rows.map((row) => row.notification_type)).toEqual([
+      "customer.license_issued",
+      "customer.license_recovered",
+      "customer.license_security_reset",
+    ]);
+    for (const [row, expected] of [
+      [rows[1], { type: "customer.license_recovered", version: 2, key: recovered.licenseKey }],
+      [rows[2], { type: "customer.license_security_reset", version: 3, key: reset.licenseKey }],
+    ] as const) {
+      expect(row.status).toBe("waiting_configuration");
+      const variables = JSON.parse(await decryptEnvelopeV1(
+        row.variables_ciphertext,
+        testEnv.env,
+        {
+          accountId,
+          table: "email_deliveries",
+          rowId: row.id,
+          field: "variables_ciphertext",
+        },
+      ));
+      expect(row.notification_type).toBe(expected.type);
+      expect(variables).toMatchObject({
+        product_id: productId,
+        product_name: "V1 App",
+        license_id: issued.license.id,
+        license_key: expected.key,
+        license_model: "perpetual",
+        key_version: expected.version,
+      });
+      expect(variables).not.toHaveProperty("expires_at");
+      expect(variables).not.toHaveProperty("updates_until");
+    }
   });
 
   it("allows one online-only Trial Claim per product and device", async () => {

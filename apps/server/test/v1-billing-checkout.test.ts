@@ -1,19 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Hono } from "hono";
 import { app } from "../src/index";
+import type { AppContext } from "../src/types";
 import { computeHmacSha256, sha256Hex } from "../src/infra/crypto";
+import { encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 import { encryptBillingProviderSecret, encryptInboundPayload } from "../src/infra/billing/storage";
 import { processBillingInboundEvent, processDueBillingInboundEvents } from "../src/services/billing/fulfillment";
-import {
-  getSystemIssueDetail,
-  listSystemIssues,
-  recordProviderSystemIssue,
-  resolveSystemIssue,
-  retryResolvedSystemIssueEvents,
-} from "../src/services/billing/system-issues";
+import { listSystemIssues } from "../src/services/operations/system-issues";
 import { reconcileBillingCustomer } from "../src/services/billing/customer-sync";
 import { createCustomerPortalSession } from "../src/services/billing/customer-portal";
 import { evaluateBillingOfferReadiness, getBillingOfferReadinessRow } from "../src/services/billing/readiness";
 import { clearExpiredInboundEventPayloads } from "../src/services/runtime/retention";
+import { errorHandler } from "../src/middleware/error";
+import { adminEmailDeliveriesRouter } from "../src/routes/admin/email.routes";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const accountId = "acc_billing_v1";
@@ -68,20 +67,20 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     db.prepare(
       `INSERT INTO products (
          id, account_id, slug, name, billing_environment, status, created_at, updated_at
-       ) VALUES ('prd_one', ?, 'one', 'One Time', 'sandbox', 'active', ?, ?)`,
+       ) VALUES ('prd_00000000000000000000000001', ?, 'one', 'One Time', 'sandbox', 'active', ?, ?)`,
     ).run(accountId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO license_plans (
          id, account_id, product_id, name, license_model, credential_mode,
          payment_grace_seconds, features_json, status, created_at, updated_at
-       ) VALUES ('pln_one', ?, 'prd_one', 'One Time', 'perpetual', 'opaque',
+       ) VALUES ('pln_one', ?, 'prd_00000000000000000000000001', 'One Time', 'perpetual', 'opaque',
          0, '[]', 'active', ?, ?)`,
     ).run(accountId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO billing_offers (
          id, account_id, billing_provider_id, external_price_id, product_id,
          license_plan_id, purchase_type, status, created_at, updated_at
-       ) VALUES ('off_one', ?, ?, 'pri_one123', 'prd_one', 'pln_one',
+       ) VALUES ('off_one', ?, ?, 'pri_one123', 'prd_00000000000000000000000001', 'pln_one',
          'one_time', 'active', ?, ?)`,
     ).run(accountId, providerId, nowIso, nowIso);
   });
@@ -158,6 +157,36 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     testEnv.sqliteDb.prepare(
       "UPDATE billing_providers SET api_secret_ciphertext = ? WHERE account_id = ? AND id = ?",
     ).run(encrypted, accountId, providerId);
+  }
+
+  async function configureLicenseIssuedEmail(): Promise<void> {
+    const integrationId = "emi_billing_fulfillment";
+    const credentialCiphertext = await encryptEnvelopeV1(
+      JSON.stringify({ version: 1, apiKey: "re_billing_fulfillment" }),
+      testEnv.env,
+      {
+        accountId,
+        table: "email_integrations",
+        rowId: integrationId,
+        field: "credential_ciphertext",
+      },
+    );
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO email_integrations (
+         id, account_id, provider, name, credential_ciphertext,
+         default_from_email, max_automatic_attempts,
+         status, created_at, updated_at
+       ) VALUES (?, ?, 'resend', 'Billing', ?, 'licenses@example.test',
+         4, 'active', ?, ?)`,
+    ).run(integrationId, accountId, credentialCiphertext, nowIso, nowIso);
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO email_template_bindings (
+         id, account_id, email_integration_id, notification_type,
+         contract_version, provider_template_ref,
+         status, created_at, updated_at
+       ) VALUES ('etb_billing_fulfillment', ?, ?, 'customer.license_issued',
+         1, 'license-issued-v1', 'active', ?, ?)`,
+    ).run(accountId, integrationId, nowIso, nowIso);
   }
 
   it("verifies the raw signature and persists one encrypted event idempotently", async () => {
@@ -245,20 +274,20 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
   it("keeps an out-of-order subscription purchase pending, then fulfills once trusted dependencies arrive", async () => {
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (id, account_id, slug, name, billing_environment, status, created_at, updated_at)
-       VALUES ('prd_sub', ?, 'sub', 'Subscription', 'sandbox', 'active', ?, ?)`,
+       VALUES ('prd_00000000000000000000000002', ?, 'sub', 'Subscription', 'sandbox', 'active', ?, ?)`,
     ).run(accountId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
          id, account_id, product_id, name, license_model, credential_mode,
          payment_grace_seconds, features_json, status, created_at, updated_at
-       ) VALUES ('pln_sub', ?, 'prd_sub', 'Subscription', 'subscription', 'opaque',
+       ) VALUES ('pln_sub', ?, 'prd_00000000000000000000000002', 'Subscription', 'subscription', 'opaque',
          86400, '[]', 'active', ?, ?)`,
     ).run(accountId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_offers (
          id, account_id, billing_provider_id, external_price_id, product_id,
          license_plan_id, purchase_type, status, created_at, updated_at
-       ) VALUES ('off_sub', ?, ?, 'pri_sub123', 'prd_sub', 'pln_sub',
+       ) VALUES ('off_sub', ?, ?, 'pri_sub123', 'prd_00000000000000000000000002', 'pln_sub',
          'subscription', 'active', ?, ?)`,
     ).run(accountId, providerId, nowIso, nowIso);
 
@@ -360,6 +389,59 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       .toEqual({ status: "active" });
   });
 
+  it("commits fulfillment before immediately dispatching the typed License email", async () => {
+    seedLinkedCustomer();
+    await configureLicenseIssuedEmail();
+    const providerBodies: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      providerBodies.push(JSON.parse(String(init?.body)));
+      return new Response(
+        JSON.stringify({ id: "email_billing_license_issued" }),
+        {
+          status: 202,
+          headers: {
+            "content-type": "application/json",
+            "x-request-id": "request_billing_license_issued",
+          },
+        },
+      );
+    }));
+
+    const { licenseId } = await issueOneTimeLicense("txn_email_fulfillment");
+
+    expect(providerBodies).toHaveLength(1);
+    expect(providerBodies[0]).toMatchObject({
+      to: "buyer@example.test",
+      template: {
+        id: "license-issued-v1",
+        variables: {
+          account_name: "Billing V1",
+          product_id: "prd_00000000000000000000000001",
+          product_name: "One Time",
+          license_id: licenseId,
+          license_model: "perpetual",
+        },
+      },
+    });
+    expect(Object.keys(providerBodies[0].template.variables).sort()).toEqual([
+      "account_name",
+      "license_id",
+      "license_key",
+      "license_model",
+      "product_id",
+      "product_name",
+    ]);
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT status, notification_type, provider_message_id
+       FROM email_deliveries
+       WHERE account_id = ? AND notification_type = 'customer.license_issued'`,
+    ).get(accountId)).toEqual({
+      status: "accepted",
+      notification_type: "customer.license_issued",
+      provider_message_id: "email_billing_license_issued",
+    });
+  });
+
   it("does not expose a LicenKit public Checkout configuration endpoint", async () => {
     const response = await app.request(
       "/api/v1/public/accounts/billing-v1/products/one/checkout",
@@ -407,12 +489,15 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const row = await getBillingOfferReadinessRow(testEnv.env.DB, accountId, "off_live_readiness");
     expect(row).not.toBeNull();
 
-    const readiness = await evaluateBillingOfferReadiness(testEnv.env.DB, row!, { activation: true });
+    const readiness = await evaluateBillingOfferReadiness(testEnv.env.DB, row!, {
+      env: testEnv.env,
+      activation: true,
+    });
 
     expect(readiness.checks.map((item) => item.key)).not.toContain("live_price_preview");
   });
 
-  it("paginates active Accounts so work after the first page is not starved", async () => {
+  it("selects only Accounts with due Billing work and still reaches a late Account", async () => {
     const db = testEnv.sqliteDb;
     const insertAccount = db.prepare(
       `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
@@ -469,7 +554,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       now: scheduleNow,
       workerId: "scheduler_pagination_test",
     });
-    expect(result.accounts).toBe(106);
+    expect(result.accounts).toBe(1);
     expect(result.processed).toBe(1);
     expect(db.prepare("SELECT status, result_type FROM inbound_events WHERE id = ?").get(eventId))
       .toEqual({ status: "processed", result_type: "ignored_event_type" });
@@ -487,7 +572,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     // Verification intentionally remains valid when the public Product is
     // bound to Live; the draft Offer itself is on a Sandbox Provider.
     testEnv.sqliteDb.prepare(
-      "UPDATE products SET billing_environment = 'live' WHERE id = 'prd_one'",
+      "UPDATE products SET billing_environment = 'live' WHERE id = 'prd_00000000000000000000000001'",
     ).run();
     const token = "vfy_single_use_token";
     const verificationExpiresAt = new Date(Date.now() + 3_600_000).toISOString();
@@ -522,6 +607,80 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       .get(replay.body.data.eventId) as any).last_error_code).toBe("BILLING_CHECKOUT_VERIFICATION_INVALID");
     expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM licenses").get()).toEqual({ count: 1 });
 
+    const pendingDelivery = testEnv.sqliteDb.prepare(
+      "SELECT delivery_id FROM billing_checkout_verifications WHERE id = 'bcv_one'",
+    ).get() as { delivery_id: string };
+    const csrfToken = "acf_checkout_cancel_test_token";
+    const emailAdmin = new Hono<AppContext>();
+    emailAdmin.onError(errorHandler);
+    emailAdmin.use("*", async (c, next) => {
+      c.set("requestId", "req_checkout_cancel");
+      c.set("accountId", accountId);
+      c.set("userId", "usr_verify");
+      c.set("userRole", "owner");
+      c.set("userEmail", "admin@example.test");
+      c.set("sessionNamespace", "admin");
+      c.set("sessionCsrfTokenHash", await sha256Hex(csrfToken));
+      await next();
+    });
+    emailAdmin.route("/email-deliveries", adminEmailDeliveriesRouter);
+    const cancelled = await emailAdmin.request(
+      `https://licenses.example.test/email-deliveries/${pendingDelivery.delivery_id}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          Origin: "https://licenses.example.test",
+          "X-CSRF-Token": csrfToken,
+          Cookie: `__Host-licenkit-admin-csrf=${csrfToken}`,
+        },
+      },
+      testEnv.env,
+    );
+    expect(cancelled.status).toBe(200);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT status FROM billing_checkout_verifications WHERE id = 'bcv_one'",
+    ).get()).toEqual({ status: "cancelled" });
+
+    await configureLicenseIssuedEmail();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ id: "email_checkout_verification_accepted" }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )));
+    const acceptedToken = "vfy_delivery_accepted_token";
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO billing_checkout_verifications (
+         id, account_id, billing_offer_id, requested_by_user_id, token_hash,
+         status, expires_at, created_at, updated_at
+       ) VALUES ('bcv_accepted', ?, 'off_one', 'usr_verify', ?, 'pending', ?, ?, ?)`,
+    ).run(
+      accountId,
+      await sha256Hex(acceptedToken),
+      verificationExpiresAt,
+      nowIso,
+      nowIso,
+    );
+    const acceptedEvent = await postEvent(eventPayload(
+      "evt_verify_accepted",
+      "transaction.completed",
+      {
+        id: "txn_verify_accepted",
+        customer_id: "ctm_buyer1",
+        items: [{ price: { id: "pri_one123" }, quantity: 1 }],
+        custom_data: { licenkit_checkout_verification: acceptedToken },
+      },
+    ));
+    expect((await processEvent(acceptedEvent.body.data.eventId)).status).toBe("processed");
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT verification.status AS verification_status,
+              delivery.status AS delivery_status
+       FROM billing_checkout_verifications AS verification
+       JOIN email_deliveries AS delivery ON delivery.id = verification.delivery_id
+       WHERE verification.id = 'bcv_accepted'`,
+    ).get()).toEqual({
+      verification_status: "completed",
+      delivery_status: "accepted",
+    });
+
     const liveProviderId = "bpr_live_v1";
     const liveSecret = "pdl_ntfsec_live_test_secret_123456789";
     const encryptedLiveSecret = await encryptBillingProviderSecret(
@@ -541,7 +700,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       `INSERT INTO billing_offers (
          id, account_id, billing_provider_id, external_price_id, product_id,
          license_plan_id, purchase_type, status, created_at, updated_at
-       ) VALUES ('off_live_verify', ?, ?, 'pri_live123', 'prd_one', 'pln_one',
+       ) VALUES ('off_live_verify', ?, ?, 'pri_live123', 'prd_00000000000000000000000001', 'pln_one',
          'one_time', 'draft', ?, ?)`,
     ).run(accountId, liveProviderId, nowIso, nowIso);
     const liveToken = "vfy_live_must_not_work";
@@ -554,8 +713,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
          '2026-09-20T08:00:00.000Z', ?, ?)`,
     ).run(accountId, liveTokenHash, nowIso, nowIso)).toThrow(/draft_sandbox_offer/);
   });
-
-  it("deduplicates Paddle auth failures, blocks scheduling, and lets a trusted Customer webhook unblock only its own purchases", async () => {
+  it("keeps Provider auth failures as passive issues while Events remain independently actionable", async () => {
     await configureProviderApiKey();
     const providerFetch = vi.fn(async () => new Response(JSON.stringify({
       error: { code: "authentication_error", detail: "API key lacks customer.read" },
@@ -566,69 +724,67 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     }));
     vi.stubGlobal("fetch", providerFetch);
 
-    const first = await postEvent(eventPayload("evt_auth_block_one", "transaction.completed", {
-      id: "txn_auth_block_one",
+    const first = await postEvent(eventPayload("evt_auth_attention_one", "transaction.completed", {
+      id: "txn_auth_attention_one",
       customer_id: "ctm_authone",
       items: [{ price: { id: "pri_one123" }, quantity: 1 }],
     }));
-    const second = await postEvent(eventPayload("evt_auth_block_two", "transaction.completed", {
-      id: "txn_auth_block_two",
+    const second = await postEvent(eventPayload("evt_auth_attention_two", "transaction.completed", {
+      id: "txn_auth_attention_two",
       customer_id: "ctm_authtwo",
       items: [{ price: { id: "pri_one123" }, quantity: 1 }],
     }));
-    testEnv.sqliteDb.prepare(
-      "UPDATE inbound_events SET received_at = ? WHERE id = ?",
-    ).run(new Date(Date.now() - 25 * 60 * 60_000).toISOString(), second.body.data.eventId);
-    const firstProcess = await processEvent(first.body.data.eventId);
-    expect((testEnv.sqliteDb.prepare("SELECT last_error_code FROM inbound_events WHERE id = ?").get(first.body.data.eventId) as any).last_error_code)
-      .toBe("BILLING_PROVIDER_API_AUTH_INVALID");
-    expect(firstProcess.status).toBe("pending");
-    expect((await processEvent(second.body.data.eventId)).status).toBe("pending");
+
+    expect((await processEvent(first.body.data.eventId)).status).toBe("needs_attention");
+    expect((await processEvent(second.body.data.eventId)).status).toBe("needs_attention");
 
     const issues = testEnv.sqliteDb.prepare(
-      `SELECT id, status, occurrence_count, last_error_detail_json
+      `SELECT id, category, source_type, source_id, operation, error_code,
+              error_detail_json, occurrence_count
        FROM system_issues
-       WHERE account_id = ? AND billing_provider_id = ?`,
-    ).all(accountId, providerId) as Array<any>;
+       WHERE account_id = ?`,
+    ).all(accountId) as Array<any>;
     expect(issues).toHaveLength(1);
-    expect(issues[0].status).toBe("open");
-    expect(issues[0].occurrence_count).toBe(2);
-    expect(JSON.parse(issues[0].last_error_detail_json)).toMatchObject({
+    expect(issues[0]).toMatchObject({
+      category: "webhook",
+      source_type: "billing_provider",
+      source_id: providerId,
+      operation: "customer_read",
+      error_code: "BILLING_PROVIDER_API_AUTH_INVALID",
+      occurrence_count: 2,
+    });
+    expect(JSON.parse(issues[0].error_detail_json)).toMatchObject({
       httpStatus: 403,
       providerCode: "authentication_error",
       requestId: "req_auth_failure",
       message: "API key lacks customer.read",
     });
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT count(*) AS count FROM system_issue_inbound_events WHERE system_issue_id = ?",
-    ).get(issues[0].id)).toEqual({ count: 2 });
+
     const listed = await listSystemIssues({ db: testEnv.d1, accountId });
-    expect(listed.items).toHaveLength(1);
-    expect(listed.items[0]).toMatchObject({
-      id: issues[0].id,
-      occurrenceCount: 2,
-      recoveryPreview: { affectedEventCount: 2, blockedEventCount: 2, retryableEventCount: 2 },
-    });
-    const detail = await getSystemIssueDetail({ db: testEnv.d1, accountId, issueId: issues[0].id });
-    expect(detail).toMatchObject({
-      id: issues[0].id,
-      recoveryPreview: { affectedEventCount: 2, blockedEventCount: 2, retryableEventCount: 2 },
-    });
-    expect((detail.affectedEvents as Array<unknown>)).toHaveLength(2);
-    const blocked = testEnv.sqliteDb.prepare(
-      `SELECT external_customer_id, status, next_attempt_at, last_error_code,
-              last_error_detail, blocking_system_issue_id
+    expect(listed.items).toEqual([
+      expect.objectContaining({
+        id: issues[0].id,
+        category: "webhook",
+        sourceType: "billing_provider",
+        sourceId: providerId,
+        operation: "customer_read",
+        errorCode: "BILLING_PROVIDER_API_AUTH_INVALID",
+        occurrenceCount: 2,
+      }),
+    ]);
+
+    const events = testEnv.sqliteDb.prepare(
+      `SELECT status, next_attempt_at, last_error_code, last_error_detail
        FROM inbound_events
        WHERE id IN (?, ?)
-       ORDER BY external_customer_id`,
+       ORDER BY id`,
     ).all(first.body.data.eventId, second.body.data.eventId) as Array<any>;
-    expect(blocked).toHaveLength(2);
-    for (const event of blocked) {
+    expect(events).toHaveLength(2);
+    for (const event of events) {
       expect(event).toMatchObject({
-        status: "pending",
+        status: "needs_attention",
         next_attempt_at: null,
         last_error_code: "BILLING_PROVIDER_API_AUTH_INVALID",
-        blocking_system_issue_id: issues[0].id,
       });
       expect(JSON.parse(event.last_error_detail)).toMatchObject({
         httpStatus: 403,
@@ -639,12 +795,12 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
     const skipped = await processDueBillingInboundEvents(testEnv.env, {
       now: new Date(Date.now() + 5_000),
-      workerId: "blocked_scheduler",
+      workerId: "attention_scheduler",
     });
     expect(skipped.claimed).toBe(0);
     expect(providerFetch).toHaveBeenCalledTimes(2);
 
-    const customerWebhook = await postEvent(eventPayload("evt_customer_unblocks_one", "customer.updated", {
+    const customerWebhook = await postEvent(eventPayload("evt_customer_after_auth_error", "customer.updated", {
       id: "ctm_authone",
       email: "mapped-one@example.test",
       name: "Mapped One",
@@ -653,177 +809,12 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       updated_at: "2026-09-19T08:01:00.000Z",
     }));
     expect((await processEvent(customerWebhook.body.data.eventId)).status).toBe("processed");
-    const afterWebhook = testEnv.sqliteDb.prepare(
-      `SELECT external_customer_id, blocking_system_issue_id, next_attempt_at
-       FROM inbound_events
-       WHERE id IN (?, ?)
-       ORDER BY external_customer_id`,
-    ).all(first.body.data.eventId, second.body.data.eventId) as Array<any>;
-    expect(afterWebhook[0].external_customer_id).toBe("ctm_authone");
-    expect(afterWebhook[0].blocking_system_issue_id).toBeNull();
-    expect(afterWebhook[0].next_attempt_at).not.toBeNull();
-    expect(afterWebhook[1]).toMatchObject({
-      external_customer_id: "ctm_authtwo",
-      blocking_system_issue_id: issues[0].id,
-      next_attempt_at: null,
-    });
-    expect(testEnv.sqliteDb.prepare("SELECT status FROM system_issues WHERE id = ?").get(issues[0].id))
-      .toEqual({ status: "open" });
     expect(testEnv.sqliteDb.prepare(
-      "SELECT count(*) AS count FROM system_issue_inbound_events WHERE system_issue_id = ?",
-    ).get(issues[0].id)).toEqual({ count: 2 });
-
-    expect((await processEvent(first.body.data.eventId, new Date(Date.now() + 10_000))).status).toBe("processed");
-    expect(providerFetch).toHaveBeenCalledTimes(2);
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT count(*) AS count FROM licenses WHERE source_external_transaction_id = 'txn_auth_block_one'",
-    ).get()).toEqual({ count: 1 });
+      "SELECT status FROM inbound_events WHERE id = ?",
+    ).get(first.body.data.eventId)).toEqual({ status: "needs_attention" });
   });
 
-  it("verifies a fixed customer.read capability before resolving and requeues only eligible blocked events", async () => {
-    await configureProviderApiKey();
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-       VALUES ('usr_system_fix', ?, 'fixer@example.test', 'hash', 'Fixer', 'owner', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      error: { code: "authentication_error", detail: "Invalid API key" },
-    }), {
-      status: 401,
-      headers: { "content-type": "application/json", "request-id": "req_invalid_key" },
-    })));
-    const posted = await postEvent(eventPayload("evt_resolve_auth", "transaction.completed", {
-      id: "txn_resolve_auth",
-      customer_id: "ctm_resolveauth",
-      items: [{ price: { id: "pri_one123" }, quantity: 1 }],
-    }));
-    const firstProcess = await processEvent(posted.body.data.eventId);
-    expect((testEnv.sqliteDb.prepare("SELECT last_error_code FROM inbound_events WHERE id = ?").get(posted.body.data.eventId) as any).last_error_code)
-      .toBe("BILLING_PROVIDER_API_AUTH_INVALID");
-    expect(firstProcess.status).toBe("pending");
-    let issue = testEnv.sqliteDb.prepare(
-      "SELECT id, updated_at FROM system_issues WHERE account_id = ? AND billing_provider_id = ?",
-    ).get(accountId, providerId) as { id: string; updated_at: string };
-    const stillUnauthorized = vi.fn(async () => new Response(JSON.stringify({
-      error: { code: "forbidden", detail: "customer.read is still missing" },
-    }), {
-      status: 403,
-      headers: { "content-type": "application/json", "request-id": "req_still_forbidden" },
-    }));
-    await expect(resolveSystemIssue({
-      db: testEnv.d1,
-      env: testEnv.env,
-      accountId,
-      issueId: issue.id,
-      userId: "usr_system_fix",
-      resolutionNote: "First attempted fix.",
-      retryAffectedEvents: true,
-      expectedUpdatedAt: issue.updated_at,
-      fetchImpl: stillUnauthorized as typeof fetch,
-      now: new Date(Date.now() + 3_000),
-    })).rejects.toMatchObject({ code: "SYSTEM_ISSUE_VERIFICATION_FAILED", status: 409 });
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT status, occurrence_count FROM system_issues WHERE id = ?",
-    ).get(issue.id)).toEqual({ status: "open", occurrence_count: 2 });
-    issue = testEnv.sqliteDb.prepare(
-      "SELECT id, updated_at FROM system_issues WHERE account_id = ? AND billing_provider_id = ?",
-    ).get(accountId, providerId) as { id: string; updated_at: string };
-    const verification = vi.fn(async () => new Response(JSON.stringify({ data: [], meta: { request_id: "req_capability_ok" } }), {
-      status: 200,
-      headers: { "content-type": "application/json", "request-id": "req_capability_ok" },
-    }));
-    const resolvedAt = new Date(Date.now() + 5_000);
-    const result = await resolveSystemIssue({
-      db: testEnv.d1,
-      env: testEnv.env,
-      accountId,
-      issueId: issue.id,
-      userId: "usr_system_fix",
-      resolutionNote: "Replaced API key and granted customer.read.",
-      retryAffectedEvents: true,
-      expectedUpdatedAt: issue.updated_at,
-      fetchImpl: verification as typeof fetch,
-      now: resolvedAt,
-    });
-    expect(verification).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      id: issue.id,
-      status: "resolved",
-      retryAffectedEvents: true,
-      retriedEventCount: 1,
-      skippedAffectedEventCount: 0,
-    });
-    const event = testEnv.sqliteDb.prepare(
-      `SELECT status, next_attempt_at, last_error_code, blocking_system_issue_id
-       FROM inbound_events WHERE id = ?`,
-    ).get(posted.body.data.eventId) as any;
-    expect(event).toEqual({
-      status: "pending",
-      next_attempt_at: resolvedAt.toISOString(),
-      last_error_code: "BILLING_PROVIDER_API_AUTH_INVALID",
-      blocking_system_issue_id: null,
-    });
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT count(*) AS count FROM audit_logs WHERE action = 'system_issue.resolve' AND resource_id = ?",
-    ).get(issue.id)).toEqual({ count: 1 });
-
-    const eventCustomerRead = vi.fn(async (url: string | URL | Request) => {
-      expect(String(url)).toContain("/customers/ctm_resolveauth");
-      return new Response(JSON.stringify({
-        data: {
-          id: "ctm_resolveauth",
-          email: "resolved-customer@example.test",
-          name: "Resolved Customer",
-          status: "active",
-          created_at: nowIso,
-          updated_at: "2026-09-19T08:02:00.000Z",
-        },
-        meta: { request_id: "req_event_customer_ok" },
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json", "request-id": "req_event_customer_ok" },
-      });
-    });
-    vi.stubGlobal("fetch", eventCustomerRead);
-    expect((await processEvent(posted.body.data.eventId, new Date(resolvedAt.getTime() + 1_000))).status)
-      .toBe("processed");
-    expect(eventCustomerRead).toHaveBeenCalledTimes(1);
-    expect(testEnv.sqliteDb.prepare(
-      `SELECT status, result_type, last_error_code, blocking_system_issue_id
-       FROM inbound_events WHERE id = ?`,
-    ).get(posted.body.data.eventId)).toEqual({
-      status: "processed",
-      result_type: "license_issued",
-      last_error_code: null,
-      blocking_system_issue_id: null,
-    });
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT count(*) AS count FROM licenses WHERE source_external_transaction_id = 'txn_resolve_auth'",
-    ).get()).toEqual({ count: 1 });
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT count(*) AS count FROM outbound_deliveries WHERE event_type = 'customer.license_issued'",
-    ).get()).toEqual({ count: 1 });
-
-    const billingCustomer = testEnv.sqliteDb.prepare(
-      "SELECT id FROM billing_customers WHERE account_id = ? AND external_customer_id = 'ctm_resolveauth'",
-    ).get(accountId) as { id: string };
-    await expect(reconcileBillingCustomer({
-      db: testEnv.d1,
-      env: testEnv.env,
-      accountId,
-      billingCustomerId: billingCustomer.id,
-      fetchImpl: vi.fn(async () => new Response(JSON.stringify({
-        error: { code: "authentication_error", detail: "Rotated key is invalid again" },
-      }), { status: 401, headers: { "content-type": "application/json" } })) as typeof fetch,
-      now: new Date(resolvedAt.getTime() + 2_000),
-    })).rejects.toMatchObject({ code: "BILLING_PROVIDER_API_AUTH_INVALID" });
-    const reopened = testEnv.sqliteDb.prepare(
-      "SELECT id, status, occurrence_count FROM system_issues WHERE account_id = ? AND billing_provider_id = ?",
-    ).all(accountId, providerId);
-    expect(reopened).toEqual([{ id: issue.id, status: "open", occurrence_count: 3 }]);
-  });
-
-  it("records manual reconcile auth failure as the same provider issue without inventing an inbound event", async () => {
+  it("records manual billing API failures without creating or linking an inbound Event", async () => {
     await configureProviderApiKey();
     seedLinkedCustomer("ctm_reconcile1", "reconcile@example.test");
     const rejected = vi.fn(async () => new Response(JSON.stringify({
@@ -832,6 +823,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       status: 401,
       headers: { "content-type": "application/json", "request-id": "req_reconcile_auth" },
     }));
+
     await expect(reconcileBillingCustomer({
       db: testEnv.d1,
       env: testEnv.env,
@@ -840,197 +832,25 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       fetchImpl: rejected as typeof fetch,
       now: new Date(Date.now() + 1_000),
     })).rejects.toMatchObject({ code: "BILLING_PROVIDER_API_AUTH_INVALID" });
-    expect(rejected).toHaveBeenCalledTimes(1);
-    const issue = testEnv.sqliteDb.prepare(
-      `SELECT capability, issue_code, occurrence_count
-       FROM system_issues WHERE account_id = ? AND billing_provider_id = ?`,
-    ).get(accountId, providerId);
-    expect(issue).toEqual({
-      capability: "customer_read",
-      issue_code: "BILLING_PROVIDER_API_AUTH_INVALID",
+
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT category, source_type, source_id, operation, error_code, occurrence_count
+       FROM system_issues WHERE account_id = ?`,
+    ).get(accountId)).toEqual({
+      category: "billing",
+      source_type: "billing_provider",
+      source_id: providerId,
+      operation: "customer_read",
+      error_code: "BILLING_PROVIDER_API_AUTH_INVALID",
       occurrence_count: 1,
     });
-    expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM system_issue_inbound_events").get())
-      .toEqual({ count: 0 });
     expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM inbound_events").get())
       .toEqual({ count: 0 });
   });
 
-  it("does not resolve when the same issue recurs within the updated_at millisecond", async () => {
-    await configureProviderApiKey();
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-       VALUES ('usr_same_ms_fix', ?, 'same-ms-fixer@example.test', 'hash', 'Same Millisecond Fixer',
-         'owner', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
-    const occurredAt = new Date("2026-09-19T08:05:00.123Z");
-    const first = await recordProviderSystemIssue({
-      db: testEnv.d1,
-      accountId,
-      billingProviderId: providerId,
-      capability: "customer_read",
-      issueCode: "BILLING_PROVIDER_API_AUTH_INVALID",
-      providerError: {
-        provider: "paddle",
-        operation: "customers.list",
-        httpStatus: 403,
-        providerCode: "forbidden",
-        requestId: "req_same_ms_first",
-        retryAfter: null,
-        message: "customer.read is missing",
-      },
-      now: occurredAt,
-    });
-    const issue = testEnv.sqliteDb.prepare(
-      "SELECT id, updated_at FROM system_issues WHERE id = ?",
-    ).get(first.issueId) as { id: string; updated_at: string };
-    const verification = vi.fn(async () => {
-      await recordProviderSystemIssue({
-        db: testEnv.d1,
-        accountId,
-        billingProviderId: providerId,
-        capability: "customer_read",
-        issueCode: "BILLING_PROVIDER_API_AUTH_INVALID",
-        providerError: {
-          provider: "paddle",
-          operation: "customers.get",
-          httpStatus: 403,
-          providerCode: "forbidden",
-          requestId: "req_same_ms_second",
-          retryAfter: null,
-          message: "A concurrent request still observed the missing permission",
-        },
-        now: occurredAt,
-      });
-      return new Response(JSON.stringify({ data: [], meta: { request_id: "req_probe_ok" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    });
-
-    await expect(resolveSystemIssue({
-      db: testEnv.d1,
-      env: testEnv.env,
-      accountId,
-      issueId: issue.id,
-      userId: "usr_same_ms_fix",
-      resolutionNote: "The configured key now passes the probe.",
-      retryAffectedEvents: false,
-      expectedUpdatedAt: issue.updated_at,
-      fetchImpl: verification as typeof fetch,
-      now: new Date("2026-09-19T08:05:01.000Z"),
-    })).rejects.toMatchObject({ code: "SYSTEM_ISSUE_STALE", status: 409 });
-    expect(verification).toHaveBeenCalledTimes(1);
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT status, occurrence_count, updated_at FROM system_issues WHERE id = ?",
-    ).get(issue.id)).toEqual({
-      status: "open",
-      occurrence_count: 2,
-      updated_at: occurredAt.toISOString(),
-    });
-  });
-
-  it("can explicitly retry a resolved issue after Paddle replay restores an expired payload", async () => {
-    await configureProviderApiKey();
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-       VALUES ('usr_deferred_retry', ?, 'deferred-retry@example.test', 'hash', 'Deferred Retry',
-         'owner', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      error: { code: "forbidden", detail: "customer.read is missing" },
-    }), {
-      status: 403,
-      headers: { "content-type": "application/json", "request-id": "req_deferred_auth" },
-    })));
-    const rawPayload = eventPayload("evt_deferred_retry", "transaction.completed", {
-      id: "txn_deferred_retry",
-      customer_id: "ctm_deferredretry",
-      items: [{ price: { id: "pri_one123" }, quantity: 1 }],
-    });
-    const posted = await postEvent(rawPayload);
-    expect((await processEvent(posted.body.data.eventId)).status).toBe("pending");
-    const openIssue = testEnv.sqliteDb.prepare(
-      "SELECT id, updated_at FROM system_issues WHERE account_id = ? AND billing_provider_id = ?",
-    ).get(accountId, providerId) as { id: string; updated_at: string };
-    const resolvedAt = new Date(Date.now() + 2_000);
-    await resolveSystemIssue({
-      db: testEnv.d1,
-      env: testEnv.env,
-      accountId,
-      issueId: openIssue.id,
-      userId: "usr_deferred_retry",
-      resolutionNote: "Permission repaired; defer event processing.",
-      retryAffectedEvents: false,
-      expectedUpdatedAt: openIssue.updated_at,
-      fetchImpl: vi.fn(async () => new Response(JSON.stringify({ data: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof fetch,
-      now: resolvedAt,
-    });
-    const resolvedIssue = testEnv.sqliteDb.prepare(
-      "SELECT id, status, updated_at FROM system_issues WHERE id = ?",
-    ).get(openIssue.id) as { id: string; status: string; updated_at: string };
-    expect(resolvedIssue.status).toBe("resolved");
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT blocking_system_issue_id FROM inbound_events WHERE id = ?",
-    ).get(posted.body.data.eventId)).toEqual({ blocking_system_issue_id: openIssue.id });
-
-    testEnv.sqliteDb.prepare(
-      "UPDATE inbound_events SET payload_expires_at = ? WHERE id = ?",
-    ).run(new Date(resolvedAt.getTime() + 1_000).toISOString(), posted.body.data.eventId);
-    await expect(clearExpiredInboundEventPayloads(testEnv.d1, {
-      now: new Date(resolvedAt.getTime() + 2_000),
-    })).resolves.toEqual({ cleared: 1 });
-    const nothingReady = await retryResolvedSystemIssueEvents({
-      db: testEnv.d1,
-      accountId,
-      issueId: openIssue.id,
-      userId: "usr_deferred_retry",
-      expectedUpdatedAt: resolvedIssue.updated_at,
-      now: new Date(resolvedAt.getTime() + 3_000),
-    });
-    expect(nothingReady).toMatchObject({ retriedEventCount: 0, skippedAffectedEventCount: 1 });
-
-    const replay = await postEvent(rawPayload);
-    expect(replay.body.data).toMatchObject({
-      eventId: posted.body.data.eventId,
-      duplicate: true,
-      payloadRefreshed: true,
-    });
-    expect(testEnv.sqliteDb.prepare(
-      "SELECT blocking_system_issue_id FROM inbound_events WHERE id = ?",
-    ).get(posted.body.data.eventId)).toEqual({ blocking_system_issue_id: openIssue.id });
-
-    const retriedAt = new Date(resolvedAt.getTime() + 5_000);
-    const retried = await retryResolvedSystemIssueEvents({
-      db: testEnv.d1,
-      accountId,
-      issueId: openIssue.id,
-      userId: "usr_deferred_retry",
-      expectedUpdatedAt: resolvedIssue.updated_at,
-      now: retriedAt,
-    });
-    expect(retried).toMatchObject({ retriedEventCount: 1, skippedAffectedEventCount: 0 });
-    expect(testEnv.sqliteDb.prepare(
-      `SELECT status, next_attempt_at, last_error_code, blocking_system_issue_id
-       FROM inbound_events WHERE id = ?`,
-    ).get(posted.body.data.eventId)).toEqual({
-      status: "pending",
-      next_attempt_at: retriedAt.toISOString(),
-      last_error_code: "BILLING_PROVIDER_API_AUTH_INVALID",
-      blocking_system_issue_id: null,
-    });
-  });
-
-  it("records and verifies a customer portal auth issue without replaying a short-lived request", async () => {
+  it("records a customer portal API failure as a passive billing issue", async () => {
     await configureProviderApiKey();
     seedLinkedCustomer("ctm_portal1", "portal@example.test");
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-       VALUES ('usr_portal_fix', ?, 'portal-fixer@example.test', 'hash', 'Portal Fixer', 'owner', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
          id, account_id, slug, name, billing_environment, status, created_at, updated_at
@@ -1078,7 +898,6 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       status: 403,
       headers: { "content-type": "application/json", "request-id": "req_portal_forbidden" },
     }));
-    const failedAt = new Date(Date.now() + 1_000);
     await expect(createCustomerPortalSession({
       db: testEnv.d1,
       env: testEnv.env,
@@ -1086,71 +905,19 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       customerId: "cus_buyer",
       licenseId: "lic_portal1",
       fetchImpl: rejected as typeof fetch,
-      now: failedAt,
+      now: new Date(Date.now() + 1_000),
     })).rejects.toMatchObject({ code: "BILLING_PROVIDER_API_AUTH_INVALID", status: 502 });
-    expect(rejected).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(rejected.mock.calls[0]?.[1]?.body))).toEqual({ subscription_ids: ["sub_portal1"] });
 
-    const issue = testEnv.sqliteDb.prepare(
-      `SELECT id, capability, issue_code, status, occurrence_count, updated_at
-       FROM system_issues WHERE account_id = ? AND billing_provider_id = ?`,
-    ).get(accountId, providerId) as any;
-    expect(issue).toMatchObject({
-      capability: "customer_portal_session",
-      issue_code: "BILLING_PROVIDER_API_AUTH_INVALID",
-      status: "open",
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT category, source_type, source_id, operation, error_code, occurrence_count
+       FROM system_issues WHERE account_id = ?`,
+    ).get(accountId)).toEqual({
+      category: "billing",
+      source_type: "billing_provider",
+      source_id: providerId,
+      operation: "customer_portal_session",
+      error_code: "BILLING_PROVIDER_API_AUTH_INVALID",
       occurrence_count: 1,
-    });
-    expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM system_issue_inbound_events").get())
-      .toEqual({ count: 0 });
-    expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM inbound_events").get())
-      .toEqual({ count: 0 });
-
-    const forbiddenRetryProbe = vi.fn();
-    await expect(resolveSystemIssue({
-      db: testEnv.d1,
-      env: testEnv.env,
-      accountId,
-      issueId: issue.id,
-      userId: "usr_portal_fix",
-      resolutionNote: "Portal permission restored.",
-      retryAffectedEvents: true,
-      expectedUpdatedAt: issue.updated_at,
-      fetchImpl: forbiddenRetryProbe as typeof fetch,
-      now: new Date(failedAt.getTime() + 1_000),
-    })).rejects.toMatchObject({ code: "SYSTEM_ISSUE_RETRY_NOT_APPLICABLE", status: 409 });
-    expect(forbiddenRetryProbe).not.toHaveBeenCalled();
-
-    const verification = vi.fn(async () => new Response(JSON.stringify({
-      data: {
-        urls: { general: { overview: "https://sandbox-customer-portal.paddle.com/session/test" } },
-        expires_at: "2026-09-19T08:15:00.000Z",
-      },
-      meta: { request_id: "req_portal_verified" },
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json", "request-id": "req_portal_verified" },
-    }));
-    const resolved = await resolveSystemIssue({
-      db: testEnv.d1,
-      env: testEnv.env,
-      accountId,
-      issueId: issue.id,
-      userId: "usr_portal_fix",
-      resolutionNote: "Portal permission restored.",
-      retryAffectedEvents: false,
-      expectedUpdatedAt: issue.updated_at,
-      fetchImpl: verification as typeof fetch,
-      now: new Date(failedAt.getTime() + 2_000),
-    });
-    expect(verification).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(verification.mock.calls[0]?.[1]?.body))).toEqual({ subscription_ids: ["sub_portal1"] });
-    expect(resolved).toMatchObject({
-      id: issue.id,
-      status: "resolved",
-      retryAffectedEvents: false,
-      retriedEventCount: 0,
-      skippedAffectedEventCount: 0,
     });
   });
 });

@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowUpRight, CheckCircle2, CircleDollarSign, KeyRound, Package, RefreshCw, Send } from "lucide-react";
-import { api, type BillingOffer, type InboundEvent, type License, type OutboundDelivery, type Product, type SystemIssue } from "../../lib/api-client";
-import { Button, Card, EmptyState, ErrorPanel, LoadingState, PageHeader, StatusBadge, formatDate } from "../../components/ui";
+import { api, type BillingOffer, type EmailDelivery, type InboundEvent, type License, type Product, type SystemIssue } from "../../lib/api-client";
+import { Badge, Button, Card, EmptyState, ErrorPanel, LoadingState, PageHeader, StatusBadge, formatDate } from "../../components/ui";
 
 export function OverviewView() {
   const [products, setProducts] = useState<Product[]>([]);
   const [licenses, setLicenses] = useState<License[]>([]);
   const [offers, setOffers] = useState<BillingOffer[]>([]);
   const [events, setEvents] = useState<InboundEvent[]>([]);
-  const [deliveries, setDeliveries] = useState<OutboundDelivery[]>([]);
+  const [deliveries, setDeliveries] = useState<EmailDelivery[]>([]);
   const [issues, setIssues] = useState<SystemIssue[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -21,7 +21,7 @@ export function OverviewView() {
       api.admin.licenses.list({ limit: 50 }),
       api.admin.billing.offers.list(),
       api.admin.billing.events.list(),
-      api.admin.outbound.deliveries.list(),
+      api.admin.emailDeliveries.list(),
       api.admin.system.issues.list(),
     ]);
     if (results[0].status === "fulfilled") setProducts(results[0].value.items);
@@ -37,10 +37,7 @@ export function OverviewView() {
 
   useEffect(() => { void load() }, []);
   const attentionEvents = events.filter((item) => item.status === "needs_attention" || item.status === "failed");
-  const deliveryProblems = deliveries.filter((item) => ["failed", "blocked_configuration", "payload_expired"].includes(item.status));
-  const actionableIssues = issues.filter((item) =>
-    item.status === "open" || item.recoveryPreview.retryableEventCount > 0
-  );
+  const deliveryProblems = deliveries.filter((item) => ["failed", "waiting_configuration", "expired"].includes(item.status));
   const activeOffers = offers.filter((item) => item.status === "active");
   const checkoutReady = activeOffers.filter((item) => item.readiness?.checkoutAvailable === true);
 
@@ -54,7 +51,7 @@ export function OverviewView() {
             <Card className="metric-card"><Package /><span>Product</span><strong>{products.length}</strong><small>{products.filter((item) => item.status === "active").length} active</small></Card>
             <Card className="metric-card"><KeyRound /><span>License</span><strong>{licenses.length}</strong><small>{licenses.filter((item) => item.status === "active").length} active</small></Card>
             <Card className="metric-card"><CircleDollarSign /><span>收款可用 Offer</span><strong>{checkoutReady.length}/{activeOffers.length}</strong><small>仅统计服务端 readiness</small></Card>
-            <Card className={actionableIssues.length + attentionEvents.length + deliveryProblems.length ? "metric-card metric-alert" : "metric-card"}><AlertTriangle /><span>待处理</span><strong>{actionableIssues.length + attentionEvents.length + deliveryProblems.length}</strong><small>系统 {actionableIssues.length} · 事件 {attentionEvents.length} · 投递 {deliveryProblems.length}</small></Card>
+            <Card className={attentionEvents.length + deliveryProblems.length ? "metric-card metric-alert" : "metric-card"}><AlertTriangle /><span>待处理</span><strong>{attentionEvents.length + deliveryProblems.length}</strong><small>事件 {attentionEvents.length} · 投递 {deliveryProblems.length}</small></Card>
           </section>
           <section className="overview-grid">
             <Card>
@@ -62,14 +59,14 @@ export function OverviewView() {
               {offers.length === 0 ? <EmptyState title="还没有 Offer" description="先配置 Product、授权方案和 Paddle Provider。" /> : <div className="stack-list">{offers.slice(0, 6).map((offer) => <div className="stack-row" key={offer.id}><div className="grow"><strong>{offer.productName || offer.productId}</strong><span>{offer.licensePlanName || offer.licensePlanId} · {offer.purchaseType}</span></div><StatusBadge status={offer.status} /><StatusBadge status={offer.readiness?.checkoutAvailable ? "ready" : "not_ready"} /></div>)}</div>}
             </Card>
             <Card>
-              <div className="card-header"><div><p className="eyebrow">Operations</p><h2>最近待处理项</h2><p>共享 System Issue、单条 Inbound Event 与 Delivery 错误分别保留。</p></div><Send className="size-5" /></div>
-              {actionableIssues.length + attentionEvents.length + deliveryProblems.length === 0 ? <div className="healthy-state"><CheckCircle2 className="size-6" /><strong>当前没有待处理项</strong><span>这不替代外部服务的独立健康检查。</span></div> : (
+              <div className="card-header"><div><p className="eyebrow">Operations</p><h2>待处理与最近错误</h2><p>待处理数量来自 Event 和 Delivery 当前状态；System Issue 只按发生时间展示。</p></div><Send className="size-5" /></div>
+              {attentionEvents.length + deliveryProblems.length === 0 ? <div className="healthy-state"><CheckCircle2 className="size-6" /><strong>当前没有待处理项</strong><span>历史错误提示不代表问题仍未恢复。</span></div> : (
                 <div className="stack-list">
-                  {actionableIssues.slice(0, 4).map((issue) => <div className="stack-row" key={issue.id}><AlertTriangle className="size-5 text-rose-400" /><div className="grow"><strong>{issue.issueCode}</strong><span>{issue.provider} · {issue.environment} · {issue.capability}{issue.status === "resolved" ? ` · ${issue.recoveryPreview.retryableEventCount} 条待重新处理` : ""}</span></div><StatusBadge status={issue.status} /></div>)}
                   {attentionEvents.slice(0, 4).map((event) => <div className="stack-row" key={event.id}><AlertTriangle className="size-5 text-amber-400" /><div className="grow"><strong>{event.eventType}</strong><span>{event.externalEventId} · {formatDate(event.receivedAt)}</span></div><StatusBadge status={event.status} /></div>)}
-                  {deliveryProblems.slice(0, 4).map((delivery) => <div className="stack-row" key={delivery.id}><ArrowUpRight className="size-5 text-rose-400" /><div className="grow"><strong>{delivery.type}</strong><span>{delivery.id} · {formatDate(delivery.createdAt)}</span></div><StatusBadge status={delivery.status} /></div>)}
+                  {deliveryProblems.slice(0, 4).map((delivery) => <div className="stack-row" key={delivery.id}><ArrowUpRight className="size-5 text-rose-400" /><div className="grow"><strong>{delivery.notificationType}</strong><span>{delivery.id} · {formatDate(delivery.createdAt)}</span></div><StatusBadge status={delivery.status} /></div>)}
                 </div>
               )}
+              {issues.length > 0 ? <div className="stack-list"><p className="eyebrow">最近错误记录</p>{issues.slice(0, 4).map((issue) => <div className="stack-row" key={issue.id}><AlertTriangle className="size-5 text-rose-400" /><div className="grow"><strong>{issue.errorCode}</strong><span>{issue.category} · {issue.operation} · {formatDate(issue.lastSeenAt)}</span></div><StatusBadge status={issue.status} label={issue.status === "pending" ? "待处理" : "已处理"} /><Badge tone="warning">{issue.occurrenceCount} 次</Badge></div>)}</div> : null}
             </Card>
           </section>
         </>

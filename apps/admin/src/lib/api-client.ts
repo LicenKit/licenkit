@@ -173,7 +173,7 @@ export interface LicenseTerms {
   updatesUntil: IsoDateTime | null; signedTokenTtlSeconds: number; paymentGraceSeconds: number;
   sourceLicensePlanId: Identifier; sourceLicensePlanRevision: number;
 }
-export type DeliveryStatus = "blocked_configuration" | "pending" | "processing" | "accepted" | "failed" | "payload_expired";
+export type DeliveryStatus = "pending" | "processing" | "waiting_configuration" | "retry_scheduled" | "accepted" | "failed" | "expired" | "cancelled";
 export interface DeliveryReference { id: Identifier; status: DeliveryStatus }
 export interface License {
   id: Identifier; productId: Identifier; productName?: string; customerId: Identifier; customerEmail?: string;
@@ -240,125 +240,112 @@ export interface InboundEvent {
   eventType: string; status: "pending" | "processing" | "processed" | "needs_attention" | "failed";
   externalCustomerId?: string | null; externalTransactionId?: string | null; externalSubscriptionId?: string | null;
   externalAdjustmentId?: string | null; lastError?: ErrorSnapshot | null; lastErrorCode?: string | null; lastErrorDetail?: unknown;
-  blockingSystemIssueId?: Identifier | null;
   receivedAt: IsoDateTime; processedAt?: IsoDateTime | null;
-}
-export interface SystemIssueRecoveryPreview {
-  affectedEventCount: number;
-  blockedEventCount: number;
-  retryableEventCount: number;
 }
 export interface SystemIssue {
   id: Identifier;
-  billingProviderId: Identifier;
-  provider: "paddle";
-  environment: BillingEnvironment;
-  capability: "customer_read" | "customer_portal_session";
-  issueCode: string;
-  severity: "warning" | "error" | "critical";
-  status: "open" | "resolved";
+  category: "billing" | "webhook" | "email";
+  sourceType: string;
+  sourceId: Identifier | string;
+  operation: string;
+  errorCode: string;
+  status: "pending" | "processed";
   occurrenceCount: number;
   firstSeenAt: IsoDateTime;
   lastSeenAt: IsoDateTime;
-  lastError: Record<string, unknown>;
-  resolvedAt?: IsoDateTime | null;
-  resolvedByUserId?: Identifier | null;
-  resolutionNote?: string | null;
-  updatedAt: IsoDateTime;
-  recoveryPreview: SystemIssueRecoveryPreview;
+  processedAt?: IsoDateTime | null;
+  processedByUserId?: Identifier | null;
+  error: Record<string, unknown>;
 }
-export interface SystemIssueAffectedEvent {
+export interface EmailDelivery {
   id: Identifier;
-  externalEventId: string;
-  eventType: string;
-  externalCustomerId?: string | null;
-  externalTransactionId?: string | null;
-  status: InboundEvent["status"];
-  lastErrorCode?: string | null;
+  customerId: Identifier;
+  notificationType: string;
+  contractVersion: number;
+  recipientEmail: string;
+  sendExpiresAt?: IsoDateTime | null;
+  variablesExpiresAt?: IsoDateTime | null;
+  status: DeliveryStatus;
+  attemptCount: number;
+  nextAttemptAt?: IsoDateTime | null;
+  providerMessageId?: string | null;
   lastError?: Record<string, unknown> | null;
-  currentlyBlocked: boolean;
-  retryable: boolean;
-  skipReason?: string | null;
-  resultType?: string | null;
-  resultReferenceId?: string | null;
-  occurrenceCount: number;
-  firstSeenAt: IsoDateTime;
-  lastSeenAt: IsoDateTime;
-  receivedAt: IsoDateTime;
+  acceptedAt?: IsoDateTime | null;
+  createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
-}
-export interface SystemIssueDetail extends SystemIssue {
-  affectedEvents: SystemIssueAffectedEvent[];
-  affectedEventsTruncated: boolean;
-}
-export interface SystemIssueResolutionResult {
-  id: Identifier;
-  status: "resolved";
-  resolvedAt: IsoDateTime;
-  retryAffectedEvents: boolean;
-  retriedEventCount: number;
-  skippedAffectedEventCount: number;
-}
-export interface SystemIssueRetryResult {
-  id: Identifier;
-  status: "resolved";
-  retriedEventCount: number;
-  skippedAffectedEventCount: number;
-}
-export interface DeliveryAttempt { id: Identifier; source: "initial" | "automatic_retry" | "manual_retry"; sequence: number; httpStatus?: number | null; error?: ErrorSnapshot | null; attemptedAt: IsoDateTime }
-export interface OutboundDelivery {
-  id: Identifier; type: string; recipient?: { email?: string } | null; status: DeliveryStatus; endpointId?: Identifier | null;
-  attemptCount?: number; automaticAttemptCount: number; maxAutomaticAttempts: number; payloadExpiresAt?: IsoDateTime | null;
-  lastError?: ErrorSnapshot | null; lastErrorCode?: string | null; lastErrorDetail?: unknown;
-  attempts?: DeliveryAttempt[]; createdAt: IsoDateTime; acceptedAt?: IsoDateTime | null;
-}
-export interface OutboundEndpoint {
-  id: Identifier; endpointType: "notification_gateway" | "event_subscriber"; name?: string; url: string; subscribedEvents: string[];
-  status: "active" | "disabled"; timeoutMs: number; maxAutomaticAttempts: number; lastTestStatus?: "accepted" | "failed" | null;
-  lastTestedAt?: IsoDateTime | null; createdAt?: IsoDateTime;
 }
 export interface KeyRotationResponse { license: License; licenseKey: string; delivery: DeliveryReference | null }
 
-interface OutboundDeliveryTransport extends Omit<OutboundDelivery, "type" | "recipient" | "attempts"> {
-  eventType?: string;
-  recipientEmail?: string | null;
+export interface EmailVariableDescriptor {
+  name: string;
+  type: "string" | "number";
+  required: boolean;
+  sensitive: boolean;
+  format?: "email" | "uri" | "date-time";
+  enumValues?: Array<string | number>;
+  pattern?: string;
+  minLength?: number;
+  maxLength?: number;
+  integer?: boolean;
+  minimum?: number;
+  maximum?: number;
+  description: string;
+  example: string | number;
 }
 
-interface DeliveryAttemptTransport {
-  id: string;
-  attemptNumber: number;
-  attemptSource: "initial" | "automatic_retry" | "manual_retry";
-  outcome?: string | null;
+export interface EmailTemplateContract {
+  notificationType: string;
+  version: number;
+  name: string;
+  description: string;
+  variables: EmailVariableDescriptor[];
+}
+
+export interface EmailProviderTemplateExample {
+  provider: string;
+  notificationType: string;
+  contractVersion: number;
+  fileName: string;
+  subject: string;
+  html: string;
+  text: string;
+  placeholderSyntax: string;
+}
+
+export interface EmailIntegration {
+  id: Identifier;
+  provider: string;
+  name: string;
+  defaultFromEmail: string;
+  defaultFromName?: string | null;
+  replyToEmail?: string | null;
+  maxAutomaticAttempts: number;
+  status: "active" | "disabled";
+  credentialConfigured: boolean;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export interface EmailTemplateBinding {
+  id: Identifier;
+  emailIntegrationId: Identifier;
+  notificationType: string;
+  contractVersion: number;
+  providerTemplateRef: string;
+  status: "active" | "disabled";
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export interface EmailConfigurationTestResult {
+  provider: string;
+  providerTemplateRef: string;
+  recipientEmail: string;
+  providerAccepted: boolean;
+  providerMessageId?: string | null;
+  providerRequestId?: string | null;
   httpStatus?: number | null;
-  responseBodyRedacted?: string | null;
-  transportErrorCode?: string | null;
-  transportErrorDetail?: string | null;
-  startedAt: string;
-  completedAt?: string | null;
-}
-
-function normalizeDelivery(delivery: OutboundDeliveryTransport, attempts?: DeliveryAttemptTransport[]): OutboundDelivery {
-  return {
-    ...delivery,
-    type: delivery.eventType || "unknown",
-    recipient: delivery.recipientEmail ? { email: delivery.recipientEmail } : null,
-    lastError: delivery.lastError ?? (delivery.lastErrorCode || delivery.lastErrorDetail ? {
-      code: delivery.lastErrorCode,
-      details: delivery.lastErrorDetail,
-    } : null),
-    attempts: attempts?.map((attempt) => ({
-      id: attempt.id,
-      source: attempt.attemptSource,
-      sequence: attempt.attemptNumber,
-      httpStatus: attempt.httpStatus,
-      attemptedAt: attempt.startedAt,
-      error: attempt.transportErrorCode || attempt.transportErrorDetail || attempt.responseBodyRedacted ? {
-        code: attempt.transportErrorCode,
-        message: attempt.transportErrorDetail,
-        details: { outcome: attempt.outcome, responseBodyRedacted: attempt.responseBodyRedacted },
-      } : null,
-    })),
-  };
+  error?: Record<string, unknown> | null;
 }
 
 export const api = {
@@ -427,6 +414,42 @@ export const api = {
       enable: (id: string) => request<Customer>(`/admin/customers/${encodeURIComponent(id)}/enable`, { method: "POST", scope: "admin" }),
       revokeSessions: (id: string) => request<{ revoked: number }>(`/admin/customers/${encodeURIComponent(id)}/sessions/revoke`, { method: "POST", scope: "admin" }),
     },
+    emailTemplateContracts: {
+      list: () => request<ListResponse<EmailTemplateContract>>("/admin/email-template-contracts", { scope: "admin" }),
+      example: (provider: string, notificationType: string, contractVersion: number) =>
+        request<EmailProviderTemplateExample>(`/admin/email-template-contracts/${encodeURIComponent(notificationType)}/versions/${contractVersion}/examples/${encodeURIComponent(provider)}`, { scope: "admin" }),
+    },
+    emailIntegrations: {
+      list: () => request<ListResponse<EmailIntegration>>("/admin/email-integrations", { scope: "admin" }),
+      create: (body: {
+        provider: string; name: string; apiKey: string; defaultFromEmail: string; defaultFromName?: string;
+        replyToEmail?: string; maxAutomaticAttempts: number;
+      }) => request<EmailIntegration>("/admin/email-integrations", { method: "POST", body, scope: "admin" }),
+      update: (id: string, body: {
+        name?: string; defaultFromEmail?: string; defaultFromName?: string | null;
+        replyToEmail?: string | null; maxAutomaticAttempts?: number;
+      }) => request<EmailIntegration>(`/admin/email-integrations/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
+      rotateCredential: (id: string, apiKey: string) => request<{ id: Identifier; credentialConfigured: true }>(`/admin/email-integrations/${encodeURIComponent(id)}/rotate-credential`, { method: "POST", body: { apiKey }, scope: "admin" }),
+      disable: (id: string) => request<{ id: Identifier; status: "disabled" }>(`/admin/email-integrations/${encodeURIComponent(id)}/disable`, { method: "POST", scope: "admin" }),
+      enable: (id: string) => request<{ id: Identifier; status: "active" }>(`/admin/email-integrations/${encodeURIComponent(id)}/enable`, { method: "POST", scope: "admin" }),
+      bindings: {
+        list: (integrationId: string) => request<ListResponse<EmailTemplateBinding>>(`/admin/email-integrations/${encodeURIComponent(integrationId)}/template-bindings`, { scope: "admin" }),
+        upsert: (integrationId: string, notificationType: string, body: { contractVersion: number; providerTemplateRef: string }) =>
+          request<EmailTemplateBinding>(`/admin/email-integrations/${encodeURIComponent(integrationId)}/template-bindings/${encodeURIComponent(notificationType)}`, { method: "PUT", body, scope: "admin" }),
+        disable: (integrationId: string, notificationType: string) => request<{ id: Identifier; status: "disabled" }>(`/admin/email-integrations/${encodeURIComponent(integrationId)}/template-bindings/${encodeURIComponent(notificationType)}/disable`, { method: "POST", scope: "admin" }),
+        enable: (integrationId: string, notificationType: string) => request<{ id: Identifier; status: "active" }>(`/admin/email-integrations/${encodeURIComponent(integrationId)}/template-bindings/${encodeURIComponent(notificationType)}/enable`, { method: "POST", scope: "admin" }),
+        test: (integrationId: string, notificationType: string, body: { recipientEmail: string }) =>
+          request<EmailConfigurationTestResult>(`/admin/email-integrations/${encodeURIComponent(integrationId)}/template-bindings/${encodeURIComponent(notificationType)}/test`, { method: "POST", body, scope: "admin" }),
+        retryWaiting: (integrationId: string, notificationType: string) =>
+          request<{ queuedCount: number }>(`/admin/email-integrations/${encodeURIComponent(integrationId)}/template-bindings/${encodeURIComponent(notificationType)}/retry-waiting`, { method: "POST", scope: "admin" }),
+      },
+    },
+    emailDeliveries: {
+      list: (status?: DeliveryStatus) => request<ListResponse<EmailDelivery>>(`/admin/email-deliveries${queryString({ status })}`, { scope: "admin" }),
+      get: (id: string) => request<EmailDelivery>(`/admin/email-deliveries/${encodeURIComponent(id)}`, { scope: "admin" }),
+      retry: (id: string, confirmPossibleDuplicate = false) => request<EmailDelivery>(`/admin/email-deliveries/${encodeURIComponent(id)}/retry`, { method: "POST", body: { confirmPossibleDuplicate }, scope: "admin" }),
+      cancel: (id: string) => request<EmailDelivery>(`/admin/email-deliveries/${encodeURIComponent(id)}/cancel`, { method: "POST", scope: "admin" }),
+    },
     billing: {
       providers: {
         list: () => request<ListResponse<BillingProvider>>("/admin/billing/providers", { scope: "admin" }),
@@ -452,34 +475,10 @@ export const api = {
         replay: (id: string) => request<InboundEvent>(`/admin/billing/events/${encodeURIComponent(id)}/replay`, { method: "POST", scope: "admin" }),
       },
     },
-    outbound: {
-      endpoints: {
-        list: () => request<ListResponse<OutboundEndpoint>>("/admin/outbound/endpoints", { scope: "admin" }),
-        create: (body: { endpointType: "notification_gateway" | "event_subscriber"; name: string; url: string; subscribedEvents: string[]; timeoutMs: number; maxAutomaticAttempts: number }) => request<OutboundEndpoint & { signingSecret?: string }>("/admin/outbound/endpoints", { method: "POST", body, scope: "admin" }),
-        test: (id: string) => request<{ status: "accepted" | "failed"; error?: ErrorSnapshot }>(`/admin/outbound/endpoints/${encodeURIComponent(id)}/test`, { method: "POST", scope: "admin" }),
-        disable: (id: string) => request<OutboundEndpoint>(`/admin/outbound/endpoints/${encodeURIComponent(id)}/disable`, { method: "POST", scope: "admin" }),
-      },
-      deliveries: {
-        list: async () => {
-          const result = await request<ListResponse<OutboundDeliveryTransport>>("/admin/outbound/deliveries", { scope: "admin" });
-          return { ...result, items: result.items.map((item) => normalizeDelivery(item)) };
-        },
-        get: async (id: string) => {
-          const result = await request<{ delivery: OutboundDeliveryTransport; attempts: DeliveryAttemptTransport[] }>(`/admin/outbound/deliveries/${encodeURIComponent(id)}`, { scope: "admin" });
-          return normalizeDelivery(result.delivery, result.attempts);
-        },
-        retry: (id: string) => request<OutboundDelivery>(`/admin/outbound/deliveries/${encodeURIComponent(id)}/retry`, { method: "POST", scope: "admin" }),
-        resume: (id: string) => request<OutboundDelivery>(`/admin/outbound/deliveries/${encodeURIComponent(id)}/resume-after-configuration`, { method: "POST", scope: "admin" }),
-      },
-    },
     system: {
       issues: {
         list: () => request<ListResponse<SystemIssue>>("/admin/system/issues", { scope: "admin" }),
-        get: (id: string) => request<SystemIssueDetail>(`/admin/system/issues/${encodeURIComponent(id)}`, { scope: "admin" }),
-        resolve: (id: string, body: { resolutionNote: string; retryAffectedEvents: boolean; expectedUpdatedAt: string }) =>
-          request<SystemIssueResolutionResult>(`/admin/system/issues/${encodeURIComponent(id)}/resolve`, { method: "POST", body, scope: "admin" }),
-        retryAffectedEvents: (id: string, body: { expectedUpdatedAt: string }) =>
-          request<SystemIssueRetryResult>(`/admin/system/issues/${encodeURIComponent(id)}/retry-affected-events`, { method: "POST", body, scope: "admin" }),
+        process: (id: string) => request<{ id: Identifier; status: "processed"; processedAt: IsoDateTime }>(`/admin/system/issues/${encodeURIComponent(id)}/process`, { method: "POST", scope: "admin" }),
       },
     },
   },

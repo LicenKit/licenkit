@@ -111,10 +111,33 @@ function revokeCustomerAccessStatements(
 ): D1PreparedStatement[] {
   return [
     db.prepare(
-      `UPDATE outbound_deliveries
-       SET status = CASE WHEN status = 'accepted' THEN status ELSE 'payload_expired' END,
-           payload_ciphertext = NULL, payload_cleared_at = COALESCE(payload_cleared_at, ?1),
-           next_attempt_at = NULL, updated_at = ?1
+      `UPDATE email_deliveries
+       SET send_expires_at = CASE
+             WHEN status IN ('accepted', 'cancelled') THEN send_expires_at
+             ELSE ?1
+           END,
+           status = CASE
+             WHEN status IN ('accepted', 'cancelled') THEN status
+             WHEN status = 'processing' AND locked_until > ?1 THEN status
+             ELSE 'expired'
+           END,
+           variables_ciphertext = CASE
+             WHEN status = 'processing' AND locked_until > ?1 THEN variables_ciphertext
+             ELSE NULL
+           END,
+           next_attempt_at = CASE
+             WHEN status = 'processing' AND locked_until > ?1 THEN next_attempt_at
+             ELSE NULL
+           END,
+           locked_by = CASE
+             WHEN status = 'processing' AND locked_until > ?1 THEN locked_by
+             ELSE NULL
+           END,
+           locked_until = CASE
+             WHEN status = 'processing' AND locked_until > ?1 THEN locked_until
+             ELSE NULL
+           END,
+           updated_at = ?1
        WHERE account_id = ?2
          AND id IN (
            SELECT delivery_id FROM customer_login_challenges

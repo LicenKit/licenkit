@@ -271,6 +271,20 @@ td code { color: #bdc6ff; font-size: .66rem; }
 .entity-card > header > div { min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
 .entity-card > header strong { font-size: .82rem; }
 .entity-card > header span { overflow: hidden; color: var(--faint); font-family: ui-monospace, monospace; font-size: .62rem; text-overflow: ellipsis; }
+.email-contract-list { display: flex; flex-direction: column; gap: .8rem; margin-top: 1rem; }
+.email-contract { min-width: 0; padding: 1rem; border: 1px solid rgba(48,69,99,.75); border-radius: 11px; background: rgba(7,14,25,.35); }
+.email-contract > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.email-contract > header > div:first-child { min-width: 0; }
+.email-contract h3 { font-size: .9rem; }
+.email-contract > header code { display: inline-block; margin-top: .45rem; color: #bdc6ff; font-size: .67rem; overflow-wrap: anywhere; }
+.email-contract > header p { margin-top: .35rem; color: var(--muted); font-size: .74rem; line-height: 1.5; }
+.email-contract-detail { margin-top: .8rem; border-top: 1px solid var(--line); }
+.email-contract-detail > summary { padding: .8rem 0 0; color: #bfcaff; font-size: .72rem; font-weight: 680; cursor: pointer; }
+.email-contract-detail > section { display: flex; flex-direction: column; gap: .75rem; padding-top: 1rem; }
+.email-contract-detail > section + section { margin-top: 1rem; border-top: 1px solid var(--line); }
+.email-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.email-section-heading h4 { font-size: .82rem; }
+.email-section-heading p { margin-top: .25rem; color: var(--muted); font-size: .69rem; line-height: 1.5; }
 .readiness-summary { display: flex; flex-wrap: wrap; gap: .4rem; }
 .readiness-summary > span { display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .45rem; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: .62rem; }
 .readiness-summary svg { width: .78rem; height: .78rem; color: var(--success); }
@@ -319,6 +333,8 @@ td code { color: #bdc6ff; font-size: .66rem; }
   .admin-sidebar.open { transform: translateX(0); }
   .mobile-scrim { position: fixed; z-index: 55; inset: 0; display: block; border: 0; background: rgba(2,7,14,.65); }
   .mobile-only { display: inline-grid; }
+  .email-contract > header, .email-section-heading { flex-direction: column; }
+  .email-contract > header > .button-row { width: 100%; }
   .collapse-button { display: none; }
   .admin-content { padding-inline: 1rem; }
   .admin-topbar { padding-inline: 1rem; }

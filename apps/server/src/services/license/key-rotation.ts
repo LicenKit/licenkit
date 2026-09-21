@@ -1,7 +1,7 @@
 import { ulid } from "ulid";
 import { generateLicenseKey, hashLicenseKey } from "../../infra/crypto";
 import { AppError, NotFoundError } from "../../middleware/error";
-import { prepareNotificationDelivery } from "../delivery/outbox";
+import { prepareEmailNotificationDelivery } from "../delivery/outbox";
 import { prepareLicenseAudit, type LicenseActor } from "./audit";
 import { firstD1 } from "./d1";
 
@@ -66,25 +66,24 @@ export async function prepareLicenseKeyRotation(input: {
   const eventType = securityReset
     ? "customer.license_security_reset"
     : "customer.license_recovered";
-  const delivery = await prepareNotificationDelivery({
+  const delivery = await prepareEmailNotificationDelivery({
     db: input.db,
     env: input.env,
     accountId: input.accountId,
     customerId: license.customer_id,
-    licenseId: license.id,
-    eventType,
+    notificationType: eventType,
+    contractVersion: 1,
     recipientEmail: license.customer_email,
-    payload: {
+    variables: {
       product_id: license.product_id,
       product_name: license.product_name,
       license_id: license.id,
       license_key: licenseKey,
       license_model: license.license_model,
-      expires_at: license.expires_at,
-      updates_until: license.updates_until,
       key_version: nextKeyVersion,
+      ...(license.expires_at ? { expires_at: license.expires_at } : {}),
+      ...(license.updates_until ? { updates_until: license.updates_until } : {}),
     },
-    idempotencyKey: `${eventType}:${license.id}:key-version:${nextKeyVersion}`,
     now,
   });
 

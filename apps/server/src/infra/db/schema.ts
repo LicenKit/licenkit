@@ -11,6 +11,7 @@ import {
   unique,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import type { SQLiteTableExtraConfigValue } from "drizzle-orm/sqlite-core";
 
 const accountReference = { onDelete: "restrict" as const };
 const nocaseText = customType<{ data: string }>({
@@ -383,78 +384,65 @@ export const systemIssues = sqliteTable(
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, accountReference),
-    billingProviderId: text("billing_provider_id").notNull(),
-    capability: text("capability").notNull(),
-    issueCode: text("issue_code").notNull(),
-    severity: text("severity").notNull().default("error"),
-    status: text("status").notNull().default("open"),
+    category: text("category").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceId: text("source_id").notNull(),
+    operation: text("operation").notNull(),
+    errorCode: text("error_code").notNull(),
+    errorDetailJson: text("error_detail_json").notNull(),
+    status: text("status").notNull().default("pending"),
     occurrenceCount: integer("occurrence_count").notNull().default(1),
     firstSeenAt: text("first_seen_at").notNull(),
     lastSeenAt: text("last_seen_at").notNull(),
-    lastErrorDetailJson: text("last_error_detail_json").notNull().default("{}"),
-    resolvedAt: text("resolved_at"),
-    resolvedByUserId: text("resolved_by_user_id"),
-    resolutionNote: text("resolution_note"),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    processedAt: text("processed_at"),
+    processedByUserId: text("processed_by_user_id"),
   },
   (table) => [
     unique("uq_system_issues_account_id").on(table.accountId, table.id),
     unique("uq_system_issues_identity").on(
       table.accountId,
-      table.billingProviderId,
-      table.capability,
-      table.issueCode,
+      table.category,
+      table.sourceType,
+      table.sourceId,
+      table.operation,
+      table.errorCode,
     ),
-    foreignKey({
-      name: "fk_system_issues_provider",
-      columns: [table.accountId, table.billingProviderId],
-      foreignColumns: [billingProviders.accountId, billingProviders.id],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_system_issues_resolved_by",
-      columns: [table.accountId, table.resolvedByUserId],
-      foreignColumns: [users.accountId, users.id],
-    }).onDelete("restrict"),
-    index("idx_system_issues_status").on(
+    index("idx_system_issues_recent").on(
       table.accountId,
       table.status,
-      table.severity,
-      sql`${table.lastSeenAt} desc`,
+      table.lastSeenAt,
     ),
-    index("idx_system_issues_provider_capability").on(
+    index("idx_system_issues_source").on(
       table.accountId,
-      table.billingProviderId,
-      table.capability,
-      table.status,
+      table.category,
+      table.sourceType,
+      table.sourceId,
     ),
     check(
-      "ck_system_issues_capability",
-      sql`${table.capability} in ('customer_read', 'customer_portal_session')`,
+      "ck_system_issues_category",
+      sql`${table.category} in ('billing', 'webhook', 'email')`,
     ),
-    check(
-      "ck_system_issues_severity",
-      sql`${table.severity} in ('warning', 'error', 'critical')`,
-    ),
-    check("ck_system_issues_status", sql`${table.status} in ('open', 'resolved')`),
+    check("ck_system_issues_status", sql`${table.status} in ('pending', 'processed')`),
     check("ck_system_issues_occurrence_count", sql`${table.occurrenceCount} >= 1`),
     check("ck_system_issues_seen_order", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
     check(
       "ck_system_issues_error_detail_json",
-      sql`json_valid(${table.lastErrorDetailJson}) and json_type(${table.lastErrorDetailJson}) = 'object'`,
+      sql`json_valid(${table.errorDetailJson}) and json_type(${table.errorDetailJson}) = 'object'`,
     ),
     check(
-      "ck_system_issues_resolution",
-      sql`(${table.status} = 'open'
-          and ${table.resolvedAt} is null
-          and ${table.resolvedByUserId} is null
-          and ${table.resolutionNote} is null)
-        or (${table.status} = 'resolved'
-          and ${table.resolvedAt} is not null
-          and ${table.resolvedByUserId} is not null
-          and ${table.resolutionNote} is not null
-          and length(trim(${table.resolutionNote})) > 0)`,
+      "ck_system_issues_processing",
+      sql`(${table.status} = 'pending'
+          and ${table.processedAt} is null
+          and ${table.processedByUserId} is null)
+        or (${table.status} = 'processed'
+          and ${table.processedAt} is not null
+          and ${table.processedByUserId} is not null)`,
     ),
+    foreignKey({
+      name: "fk_system_issues_processed_by",
+      columns: [table.accountId, table.processedByUserId],
+      foreignColumns: [users.accountId, users.id],
+    }).onDelete("restrict"),
   ],
 );
 
@@ -1031,7 +1019,6 @@ export const inboundEvents = sqliteTable(
     resultReferenceId: text("result_reference_id"),
     lastErrorCode: text("last_error_code"),
     lastErrorDetail: text("last_error_detail"),
-    blockingSystemIssueId: text("blocking_system_issue_id"),
     receivedAt: text("received_at").notNull(),
     processedAt: text("processed_at"),
     updatedAt: text("updated_at").notNull(),
@@ -1043,11 +1030,6 @@ export const inboundEvents = sqliteTable(
       name: "fk_inbound_events_provider",
       columns: [table.accountId, table.billingProviderId],
       foreignColumns: [billingProviders.accountId, billingProviders.id],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_inbound_events_blocking_issue",
-      columns: [table.accountId, table.blockingSystemIssueId],
-      foreignColumns: [systemIssues.accountId, systemIssues.id],
     }).onDelete("restrict"),
     index("idx_inbound_events_status_schedule").on(
       table.accountId,
@@ -1094,14 +1076,6 @@ export const inboundEvents = sqliteTable(
         sql`${table.receivedAt} desc`,
       )
       .where(sql`${table.externalAdjustmentId} is not null`),
-    index("idx_inbound_events_blocking_issue")
-      .on(
-        table.accountId,
-        table.blockingSystemIssueId,
-        table.status,
-        table.receivedAt,
-      )
-      .where(sql`${table.blockingSystemIssueId} is not null`),
     index("idx_inbound_events_payload_retention")
       .on(table.payloadExpiresAt, table.id)
       .where(sql`${table.payloadCiphertext} is not null`),
@@ -1113,191 +1087,181 @@ export const inboundEvents = sqliteTable(
   ],
 );
 
-export const systemIssueInboundEvents = sqliteTable(
-  "system_issue_inbound_events",
-  {
-    accountId: text("account_id")
-      .notNull()
-      .references(() => accounts.id, accountReference),
-    systemIssueId: text("system_issue_id").notNull(),
-    inboundEventId: text("inbound_event_id").notNull(),
-    occurrenceCount: integer("occurrence_count").notNull().default(1),
-    firstSeenAt: text("first_seen_at").notNull(),
-    lastSeenAt: text("last_seen_at").notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.systemIssueId, table.inboundEventId] }),
-    foreignKey({
-      name: "fk_system_issue_inbound_events_issue",
-      columns: [table.accountId, table.systemIssueId],
-      foreignColumns: [systemIssues.accountId, systemIssues.id],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_system_issue_inbound_events_event",
-      columns: [table.accountId, table.inboundEventId],
-      foreignColumns: [inboundEvents.accountId, inboundEvents.id],
-    }).onDelete("restrict"),
-    index("idx_system_issue_inbound_events_issue").on(
-      table.accountId,
-      table.systemIssueId,
-      sql`${table.lastSeenAt} desc`,
-    ),
-    index("idx_system_issue_inbound_events_event").on(
-      table.accountId,
-      table.inboundEventId,
-    ),
-    check(
-      "ck_system_issue_inbound_events_occurrence_count",
-      sql`${table.occurrenceCount} >= 1`,
-    ),
-    check(
-      "ck_system_issue_inbound_events_seen_order",
-      sql`${table.lastSeenAt} >= ${table.firstSeenAt}`,
-    ),
-  ],
-);
-
-export const outboundEndpoints = sqliteTable(
-  "outbound_endpoints",
+export const emailIntegrations = sqliteTable(
+  "email_integrations",
   {
     id: text("id").primaryKey(),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, accountReference),
-    endpointType: text("endpoint_type").notNull(),
+    provider: text("provider").notNull(),
     name: text("name").notNull(),
-    url: text("url").notNull(),
-    signingSecretCiphertext: text("signing_secret_ciphertext").notNull(),
-    subscribedEventsJson: text("subscribed_events_json").notNull().default("[]"),
-    timeoutMs: integer("timeout_ms").notNull().default(10000),
+    credentialCiphertext: text("credential_ciphertext").notNull(),
+    defaultFromEmail: nocaseText("default_from_email").notNull(),
+    defaultFromName: text("default_from_name"),
+    replyToEmail: nocaseText("reply_to_email"),
     maxAutomaticAttempts: integer("max_automatic_attempts").notNull().default(4),
     status: text("status").notNull().default("active"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_outbound_endpoints_account_id").on(table.accountId, table.id),
-    index("idx_outbound_endpoints_account_type").on(
-      table.accountId,
-      table.endpointType,
-      table.status,
-    ),
-    uniqueIndex("uq_outbound_active_notification_gateway")
-      .on(table.accountId, table.endpointType)
-      .where(sql`${table.endpointType} = 'notification_gateway' and ${table.status} = 'active'`),
+    unique("uq_email_integrations_account_id").on(table.accountId, table.id),
+    uniqueIndex("uq_email_integrations_active_account")
+      .on(table.accountId)
+      .where(sql`${table.status} = 'active'`),
+    index("idx_email_integrations_account_status").on(table.accountId, table.status),
+    check("ck_email_integrations_provider", sql`${table.provider} = 'resend'`),
     check(
-      "ck_outbound_endpoints_type",
-      sql`${table.endpointType} in ('notification_gateway', 'event_subscriber')`,
-    ),
-    check(
-      "ck_outbound_endpoints_events_json",
-      sql`json_valid(${table.subscribedEventsJson}) and json_type(${table.subscribedEventsJson}) = 'array'`,
-    ),
-    check("ck_outbound_endpoints_timeout", sql`${table.timeoutMs} between 1000 and 30000`),
-    check(
-      "ck_outbound_endpoints_attempts",
+      "ck_email_integrations_max_attempts",
       sql`${table.maxAutomaticAttempts} between 1 and 20`,
     ),
-    check("ck_outbound_endpoints_status", sql`${table.status} in ('active', 'disabled')`),
+    check("ck_email_integrations_status", sql`${table.status} in ('active', 'disabled')`),
   ],
 );
 
-export const outboundDeliveries = sqliteTable(
-  "outbound_deliveries",
+export const emailTemplateBindings = sqliteTable(
+  "email_template_bindings",
   {
     id: text("id").primaryKey(),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, accountReference),
-    endpointId: text("endpoint_id"),
-    customerId: text("customer_id"),
-    licenseId: text("license_id"),
-    eventType: text("event_type").notNull(),
-    recipientEmail: nocaseText("recipient_email"),
-    idempotencyKey: text("idempotency_key").notNull(),
-    targetUrl: text("target_url"),
-    signingSecretCiphertext: text("signing_secret_ciphertext"),
-    payloadCiphertext: text("payload_ciphertext"),
-    payloadExpiresAt: text("payload_expires_at"),
+    emailIntegrationId: text("email_integration_id").notNull(),
+    notificationType: text("notification_type").notNull(),
+    contractVersion: integer("contract_version").notNull(),
+    providerTemplateRef: text("provider_template_ref").notNull(),
+    status: text("status").notNull().default("active"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table): SQLiteTableExtraConfigValue[] => [
+    unique("uq_email_template_bindings_account_id").on(table.accountId, table.id),
+    unique("uq_email_template_bindings_integration_id").on(
+      table.accountId,
+      table.emailIntegrationId,
+      table.id,
+    ),
+    unique("uq_email_template_bindings_contract").on(
+      table.accountId,
+      table.emailIntegrationId,
+      table.notificationType,
+    ),
+    foreignKey({
+      name: "fk_email_template_bindings_integration",
+      columns: [table.accountId, table.emailIntegrationId],
+      foreignColumns: [emailIntegrations.accountId, emailIntegrations.id],
+    }).onDelete("restrict"),
+    index("idx_email_template_bindings_lookup").on(
+      table.accountId,
+      table.emailIntegrationId,
+      table.notificationType,
+      table.contractVersion,
+      table.status,
+    ),
+    check("ck_email_template_bindings_contract_version", sql`${table.contractVersion} >= 1`),
+    check(
+      "ck_email_template_bindings_template_ref",
+      sql`length(trim(${table.providerTemplateRef})) > 0`,
+    ),
+    check("ck_email_template_bindings_status", sql`${table.status} in ('active', 'disabled')`),
+  ],
+);
+
+export const emailDeliveries = sqliteTable(
+  "email_deliveries",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, accountReference),
+    customerId: text("customer_id").notNull(),
+    notificationType: text("notification_type").notNull(),
+    contractVersion: integer("contract_version").notNull(),
+    recipientEmail: nocaseText("recipient_email").notNull(),
+    variablesCiphertext: text("variables_ciphertext"),
+    sendExpiresAt: text("send_expires_at"),
+    variablesExpiresAt: text("variables_expires_at"),
     status: text("status").notNull().default("pending"),
     attemptCount: integer("attempt_count").notNull().default(0),
-    automaticAttemptCount: integer("automatic_attempt_count").notNull().default(0),
-    maxAutomaticAttempts: integer("max_automatic_attempts").notNull(),
     nextAttemptAt: text("next_attempt_at"),
+    providerMessageId: text("provider_message_id"),
+    lastErrorJson: text("last_error_json"),
     lockedBy: text("locked_by"),
     lockedUntil: text("locked_until"),
-    lastErrorCode: text("last_error_code"),
-    lastErrorDetail: text("last_error_detail"),
     acceptedAt: text("accepted_at"),
-    payloadClearedAt: text("payload_cleared_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_outbound_deliveries_account_id").on(table.accountId, table.id),
-    unique("uq_outbound_deliveries_customer_id").on(table.accountId, table.customerId, table.id),
-    unique("uq_outbound_deliveries_license_id").on(table.accountId, table.licenseId, table.id),
-    unique("uq_outbound_deliveries_idempotency").on(table.accountId, table.idempotencyKey),
+    unique("uq_email_deliveries_account_id").on(table.accountId, table.id),
+    unique("uq_email_deliveries_customer_id").on(table.accountId, table.customerId, table.id),
     foreignKey({
-      name: "fk_outbound_deliveries_endpoint",
-      columns: [table.accountId, table.endpointId],
-      foreignColumns: [outboundEndpoints.accountId, outboundEndpoints.id],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_outbound_deliveries_customer",
+      name: "fk_email_deliveries_customer",
       columns: [table.accountId, table.customerId],
       foreignColumns: [customers.accountId, customers.id],
     }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_outbound_deliveries_license",
-      columns: [table.accountId, table.licenseId],
-      foreignColumns: [licenses.accountId, licenses.id],
-    }).onDelete("restrict"),
-    index("idx_outbound_deliveries_status_schedule").on(
+    index("idx_email_deliveries_status_schedule").on(
       table.accountId,
       table.status,
       table.nextAttemptAt,
       table.lockedUntil,
       table.createdAt,
     ),
-    index("idx_outbound_deliveries_license").on(
-      table.accountId,
-      table.licenseId,
-      sql`${table.createdAt} desc`,
-    ),
-    index("idx_outbound_deliveries_customer").on(
+    index("idx_email_deliveries_customer").on(
       table.accountId,
       table.customerId,
       sql`${table.createdAt} desc`,
     ),
+    check("ck_email_deliveries_contract_version", sql`${table.contractVersion} >= 1`),
     check(
-      "ck_outbound_deliveries_status",
+      "ck_email_deliveries_status",
       sql`${table.status} in (
-        'blocked_configuration', 'pending', 'processing', 'accepted',
-        'retry_scheduled', 'failed', 'payload_expired'
+        'pending', 'processing', 'waiting_configuration', 'retry_scheduled',
+        'accepted', 'failed', 'expired', 'cancelled'
       )`,
     ),
-    check("ck_outbound_deliveries_attempt_count", sql`${table.attemptCount} >= 0`),
+    check("ck_email_deliveries_attempt_count", sql`${table.attemptCount} >= 0`),
     check(
-      "ck_outbound_deliveries_automatic_attempt_count",
-      sql`${table.automaticAttemptCount} >= 0`,
+      "ck_email_deliveries_last_error_json",
+      sql`${table.lastErrorJson} is null
+        or (json_valid(${table.lastErrorJson}) and json_type(${table.lastErrorJson}) = 'object')`,
     ),
     check(
-      "ck_outbound_deliveries_max_attempts",
-      sql`${table.maxAutomaticAttempts} between 1 and 20`,
+      "ck_email_deliveries_lock",
+      sql`(${table.status} = 'processing'
+          and ${table.lockedBy} is not null
+          and ${table.lockedUntil} is not null)
+        or (${table.status} <> 'processing'
+          and ${table.lockedBy} is null
+          and ${table.lockedUntil} is null)`,
     ),
     check(
-      "ck_outbound_deliveries_attempt_budget",
-      sql`${table.automaticAttemptCount} <= ${table.attemptCount}
-        and ${table.automaticAttemptCount} <= ${table.maxAutomaticAttempts}`,
+      "ck_email_deliveries_acceptance",
+      sql`(${table.status} = 'accepted'
+          and ${table.providerMessageId} is not null
+          and ${table.acceptedAt} is not null
+          and ${table.lastErrorJson} is null)
+        or (${table.status} <> 'accepted'
+          and ${table.providerMessageId} is null
+          and ${table.acceptedAt} is null)`,
     ),
     check(
-      "ck_outbound_deliveries_target",
-      sql`${table.status} in ('blocked_configuration', 'payload_expired')
-        or (${table.endpointId} is not null
-          and ${table.targetUrl} is not null
-          and ${table.signingSecretCiphertext} is not null)`,
+      "ck_email_deliveries_variables",
+      sql`(${table.status} in ('expired', 'cancelled') and ${table.variablesCiphertext} is null)
+        or (${table.status} in (
+          'pending', 'processing', 'waiting_configuration', 'retry_scheduled', 'failed'
+        ) and ${table.variablesCiphertext} is not null)
+        or (${table.status} = 'accepted')`,
     ),
+    check(
+      "ck_email_deliveries_retention",
+      sql`(${table.status} = 'accepted' and ${table.variablesExpiresAt} is not null)
+        or (${table.status} <> 'accepted' and ${table.variablesExpiresAt} is null)`,
+    ),
+    index("idx_email_deliveries_payload_retention")
+      .on(table.variablesExpiresAt, table.id)
+      .where(sql`${table.status} = 'accepted' and ${table.variablesCiphertext} is not null`),
   ],
 );
 
@@ -1334,9 +1298,9 @@ export const customerLoginChallenges = sqliteTable(
       name: "fk_customer_login_challenges_delivery",
       columns: [table.accountId, table.customerId, table.deliveryId],
       foreignColumns: [
-        outboundDeliveries.accountId,
-        outboundDeliveries.customerId,
-        outboundDeliveries.id,
+        emailDeliveries.accountId,
+        emailDeliveries.customerId,
+        emailDeliveries.id,
       ],
     }).onDelete("restrict"),
     index("idx_customer_login_challenges_customer").on(
@@ -1436,12 +1400,8 @@ export const licenseKeyRotations = sqliteTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_license_key_rotations_delivery",
-      columns: [table.accountId, table.licenseId, table.deliveryId],
-      foreignColumns: [
-        outboundDeliveries.accountId,
-        outboundDeliveries.licenseId,
-        outboundDeliveries.id,
-      ],
+      columns: [table.accountId, table.deliveryId],
+      foreignColumns: [emailDeliveries.accountId, emailDeliveries.id],
     }).onDelete("restrict"),
     index("idx_license_key_rotations_license").on(
       table.accountId,
@@ -1506,12 +1466,8 @@ export const billingCheckoutVerifications = sqliteTable(
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_checkout_verifications_delivery",
-      columns: [table.accountId, table.licenseId, table.deliveryId],
-      foreignColumns: [
-        outboundDeliveries.accountId,
-        outboundDeliveries.licenseId,
-        outboundDeliveries.id,
-      ],
+      columns: [table.accountId, table.deliveryId],
+      foreignColumns: [emailDeliveries.accountId, emailDeliveries.id],
     }).onDelete("restrict"),
     index("idx_billing_checkout_verifications_status_expiry").on(
       table.accountId,
@@ -1525,7 +1481,7 @@ export const billingCheckoutVerifications = sqliteTable(
     ),
     check(
       "ck_billing_checkout_verifications_status",
-      sql`${table.status} in ('pending', 'delivery_pending', 'completed', 'needs_attention', 'expired')`,
+      sql`${table.status} in ('pending', 'delivery_pending', 'completed', 'needs_attention', 'expired', 'cancelled')`,
     ),
     check(
       "ck_billing_checkout_verifications_expiry",
@@ -1542,64 +1498,6 @@ export const billingCheckoutVerifications = sqliteTable(
       "ck_billing_checkout_verifications_completed",
       sql`(${table.status} = 'completed' and ${table.completedAt} is not null)
         or (${table.status} <> 'completed' and ${table.completedAt} is null)`,
-    ),
-    check(
-      "ck_billing_checkout_verifications_expired",
-      sql`${table.status} <> 'expired'
-        or (${table.externalTransactionId} is null
-          and ${table.licenseId} is null
-          and ${table.deliveryId} is null)`,
-    ),
-  ],
-);
-
-export const outboundAttempts = sqliteTable(
-  "outbound_attempts",
-  {
-    id: text("id").primaryKey(),
-    accountId: text("account_id")
-      .notNull()
-      .references(() => accounts.id, accountReference),
-    deliveryId: text("delivery_id").notNull(),
-    attemptNumber: integer("attempt_number").notNull(),
-    attemptSource: text("attempt_source").notNull(),
-    outcome: text("outcome").notNull(),
-    httpStatus: integer("http_status"),
-    responseBodyRedacted: text("response_body_redacted"),
-    transportErrorCode: text("transport_error_code"),
-    transportErrorDetail: text("transport_error_detail"),
-    startedAt: text("started_at").notNull(),
-    completedAt: text("completed_at").notNull(),
-    durationMs: integer("duration_ms").notNull(),
-  },
-  (table) => [
-    unique("uq_outbound_attempts_account_id").on(table.accountId, table.id),
-    unique("uq_outbound_attempts_delivery_number").on(table.deliveryId, table.attemptNumber),
-    foreignKey({
-      name: "fk_outbound_attempts_delivery",
-      columns: [table.accountId, table.deliveryId],
-      foreignColumns: [outboundDeliveries.accountId, outboundDeliveries.id],
-    }).onDelete("restrict"),
-    index("idx_outbound_attempts_delivery").on(
-      table.accountId,
-      table.deliveryId,
-      table.attemptNumber,
-    ),
-    check("ck_outbound_attempts_number", sql`${table.attemptNumber} >= 1`),
-    check(
-      "ck_outbound_attempts_source",
-      sql`${table.attemptSource} in ('initial', 'automatic_retry', 'manual_retry')`,
-    ),
-    check(
-      "ck_outbound_attempts_outcome",
-      sql`${table.outcome} in ('accepted', 'http_error', 'transport_error', 'timeout')`,
-    ),
-    check("ck_outbound_attempts_duration", sql`${table.durationMs} >= 0`),
-    check(
-      "ck_outbound_attempts_sequence",
-      sql`(${table.attemptNumber} = 1 and ${table.attemptSource} = 'initial')
-        or (${table.attemptNumber} > 1
-          and ${table.attemptSource} in ('automatic_retry', 'manual_retry'))`,
     ),
   ],
 );

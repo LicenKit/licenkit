@@ -41,6 +41,51 @@ function writeGuards() {
   return [requireExactOrigin, customerCsrf, requireRecentCustomerAuth] as const;
 }
 
+function triggerCustomerDeliveryInBackground(c: any, input: {
+  accountId: string;
+  deliveryId: string;
+}): void {
+  const reportRegistrationFailure = (error: unknown) => {
+    // The committed Delivery remains pending for the shared Scheduler. Do not
+    // log the error message because a runtime implementation could include the
+    // encrypted email command or its sensitive License variables.
+    console.error("Customer email Delivery background trigger could not be registered", {
+      code: "EMAIL_DELIVERY_BACKGROUND_TRIGGER_FAILED",
+      accountId: input.accountId,
+      deliveryId: input.deliveryId,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+  };
+  let executionContext: ExecutionContext;
+  try {
+    executionContext = c.executionCtx;
+  } catch (error) {
+    reportRegistrationFailure(error);
+    return;
+  }
+  const dispatch = dispatchDelivery({
+    db: c.env.DB,
+    env: c.env,
+    accountId: input.accountId,
+    deliveryId: input.deliveryId,
+  }).then(() => undefined);
+  try {
+    executionContext.waitUntil(dispatch);
+  } catch (error) {
+    // Avoid an unhandled rejection if a non-conforming runtime rejects
+    // waitUntil after the dispatch Promise has already been created.
+    void dispatch.catch((dispatchError) => {
+      console.error("Customer email Delivery background dispatch failed", {
+        code: "EMAIL_DELIVERY_BACKGROUND_DISPATCH_FAILED",
+        accountId: input.accountId,
+        deliveryId: input.deliveryId,
+        errorType: dispatchError instanceof Error ? dispatchError.name : typeof dispatchError,
+      });
+    });
+    reportRegistrationFailure(error);
+  }
+}
+
 customerRouter.get("/me", async (c) => {
   const accountId = c.get("accountId")!;
   const id = customerId(c);
@@ -217,23 +262,16 @@ async function rotateFromCustomer(c: any, reason: "recovery" | "security_reset")
     ip: requestIp(c) ?? undefined,
     userAgent: c.req.header("user-agent"),
   });
-  let notification: { id: string; status: string } = result.delivery;
   if (result.delivery.status === "pending") {
-    const dispatched = await dispatchDelivery({
-      db: c.env.DB,
-      env: c.env,
+    triggerCustomerDeliveryInBackground(c, {
       accountId,
       deliveryId: result.delivery.id,
     });
-    notification = {
-      id: result.delivery.id,
-      status: dispatched.status ?? result.delivery.status,
-    };
   }
   c.header("Cache-Control", "no-store");
   return c.json({
     success: true,
-    data: { license: result.license, licenseKey: result.licenseKey, delivery: notification },
+    data: { license: result.license, licenseKey: result.licenseKey, delivery: result.delivery },
   });
 }
 

@@ -29,6 +29,12 @@ function redact(value: unknown): unknown {
   );
 }
 
+export function serializeRedactedAuditDetails(
+  details: Record<string, unknown>,
+): string {
+  return JSON.stringify(redact(details));
+}
+
 export function prepareAuditInsert(input: {
   db: D1Database;
   accountId: string;
@@ -64,7 +70,7 @@ export function prepareAuditInsert(input: {
       input.resourceType,
       input.resourceId ?? null,
       input.requestId ?? null,
-      JSON.stringify(redact(input.details ?? {})),
+      serializeRedactedAuditDetails(input.details ?? {}),
       input.ip?.slice(0, 45) ?? null,
       input.userAgent?.slice(0, 255) ?? null,
       input.now ?? new Date().toISOString()

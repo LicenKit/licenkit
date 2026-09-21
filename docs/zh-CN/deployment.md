@@ -48,7 +48,7 @@ pnpm exec wrangler d1 create licenkit-db
 | Secret | 用途 |
 | --- | --- |
 | `INITIAL_SETUP_TOKEN` | 首次 Setup 使用的一次性高熵令牌。初始化完成后移除。 |
-| `STORAGE_ENCRYPTION_KEY` | 加密支付凭证、签名私钥、通知签名 Secret 和敏感 Delivery 负载。 |
+| `STORAGE_ENCRYPTION_KEY` | 加密支付/邮件 Provider 凭证、签名私钥和 Email Delivery 敏感变量。 |
 | `TURNSTILE_SECRET_KEY` | 服务端验证 Customer Magic Link 请求。 |
 
 在仓库根目录写入 Secret，例如：
@@ -75,7 +75,16 @@ pnpm db:migrate:local
 pnpm db:migrate:remote
 ```
 
-首次部署使用空数据库执行当前迁移。不要通过删除 `system_settings` 绕过已完成的 Setup；需要重新初始化测试实例时，应明确重建测试数据库。
+首次部署使用空数据库执行当前全部迁移。不要通过删除 `system_settings` 绕过已完成的 Setup；需要重新初始化测试实例时，应明确重建测试数据库。
+
+邮件重构通过 `0001_email_delivery_schema.sql` 追加，不重写 `0000_v1_initial.sql`。已确认本次改造尚未部署，因此 `0001` 直接删除未使用的 Outbound 表并建立邮件专用结构，不迁移旧 Outbound 数据。在目标库执行前仍先查询：
+
+```bash
+pnpm exec wrangler d1 migrations list DB --remote
+pnpm exec wrangler d1 execute DB --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+```
+
+仅在确认绑定的 `DB` 就是目标库、现有 migration 历史与备份已记录后，才执行 `pnpm db:migrate:remote`。应用后重新列出 migration，并 readback `email_integrations`、`email_template_bindings`、`email_deliveries` 和 `system_issues`，同时确认三个旧 Outbound 表、`system_issue_inbound_events` 及 `inbound_events.blocking_system_issue_id` 已删除。本文档不表示任何远程 D1 已经应用 `0001` 或 `0002`。
 
 ## 6. 部署与首次 Setup
 
@@ -104,11 +113,17 @@ Setup 成功后会永久关闭初始化入口。确认 Owner 可以登录后，�
 
 在 Admin 中继续配置：
 
-1. Notification Gateway，用于发送注册码和 Magic Link；
-2. Paddle Billing Provider、Webhook Secret 和公开 Client-side Token；
-3. Product、License Plan、Offer Mapping 和 Product Release；
-4. 需要本地签名凭据时配置 Product Signing Key；
-5. 只有启用 Paddle Customer 读穿、对账或支付平台门户时，才配置具备对应最小权限的 Paddle API Key。
+1. Email Integration：V1 选择 Resend，配置 API Key、From/Reply-To 和重试预算；API Key 只在写入时提交，之后不返回明文；
+2. 在 Resend 创建并发布四个外部模板，将 Template ID/Alias 绑定到四个 V1 邮件合同，逐个执行配置测试；
+3. Paddle Billing Provider、Webhook Secret 和公开 Client-side Token；
+4. Product、License Plan、Offer Mapping 和 Product Release；
+5. 需要本地签名凭据时配置 Product Signing Key；
+6. 只有启用 Paddle Customer 读穿、对账或支付平台门户时，才配置具备对应最小权限的 Paddle API Key；
+7. 若需要客户系统接收 License/订阅等业务事件，另行创建 `event_subscriber` Endpoint。它不发送邮件。
+
+每个 Template Binding 的测试成功只证明 Resend Send API 返回 Message ID（Provider 已接收），不证明最终送达。没有真实 API Key、已发布 Template ID/Alias 和测试收件地址时，不得将 Resend E2E 写成已完成。
+
+四种邮件合同分别测试并展示状态；Offer 激活只要求购买闭环直接依赖的 `customer.license_issued@1` Binding 当前测试通过。找回、安全重置和 Magic Link 未就绪不会阻止 Offer 激活，但会使对应客户服务能力保持未就绪。
 
 产品页直接使用 Paddle.js，不调用 LicenKit Checkout API。Paddle Price ID 必须在 LicenKit Offer 中映射到明确的 Product 和 License Plan。
 
@@ -134,6 +149,8 @@ Setup 成功后会永久关闭初始化入口。确认 Owner 可以登录后，�
 3. 对目标 D1 执行远程迁移；
 4. 部署 Worker 与 Admin；
 5. 检查线上状态、Scheduled Worker、待处理 Inbound Event 和 Delivery；
-6. 用独立请求验证 Admin、API、支付 Webhook 和 Notification Gateway 的实际环境。
+6. 重新查询目标 D1 migration 历史和关键表/列，确认 `0001` 已在正确数据库生效；
+7. 用独立请求验证 Admin、API、支付 Webhook 和 Email Provider 的实际环境；
+8. 逐个检查四个 Template Binding 的当前 revision 测试，确认返回 Provider Message ID；最终送达状态仍以 Provider 管理界面/事件为准。
 
 本地命令成功不等于线上升级完成；必须对部署目标执行独立 readback。

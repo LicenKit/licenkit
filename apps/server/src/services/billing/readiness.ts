@@ -5,6 +5,9 @@ import type {
   ReadinessCheck,
 } from "../../infra/billing/types";
 import { assertPaddleClientToken } from "../../infra/billing/paddle";
+import { EMAIL_NOTIFICATION_CONTRACTS } from "../../domain/email/contracts";
+import { decryptEnvelopeV1, type DeliveryCryptoEnv } from "../../infra/delivery/crypto";
+import { getEmailProviderAdapter } from "../../infra/email/provider";
 import { readSchedulerHealth } from "../runtime/scheduler-health";
 
 export interface BillingOfferReadinessRow {
@@ -78,30 +81,100 @@ async function getReceivedRequiredEventTypes(
   return new Set(result.results.map((row) => row.external_event_type));
 }
 
-async function notificationGatewayReady(db: D1Database, accountId: string): Promise<{ ready: boolean; endpointId?: string }> {
-  const row = await db.prepare(
-    `SELECT endpoint.id
-     FROM outbound_endpoints AS endpoint
-     WHERE endpoint.account_id = ?1
-       AND endpoint.endpoint_type = 'notification_gateway'
-       AND endpoint.status = 'active'
-       AND EXISTS (
-         SELECT 1 FROM outbound_deliveries AS delivery
-         WHERE delivery.account_id = endpoint.account_id
-           AND delivery.endpoint_id = endpoint.id
-           AND delivery.event_type = 'endpoint.test'
-           AND delivery.status = 'accepted'
-           AND delivery.accepted_at IS NOT NULL
-           AND delivery.created_at >= endpoint.updated_at
-       )
+interface EmailDeliveryReadinessRow {
+  integration_id: string;
+  provider: string;
+  credential_ciphertext: string;
+  active_binding_count: number;
+}
+
+const LICENSE_ISSUED_EMAIL_CONTRACT = EMAIL_NOTIFICATION_CONTRACTS.find(
+  (contract) => contract.notificationType === "customer.license_issued",
+);
+if (!LICENSE_ISSUED_EMAIL_CONTRACT) {
+  throw new Error("The customer.license_issued Email contract must be registered.");
+}
+const OFFER_ACTIVATION_EMAIL_CONTRACTS = Object.freeze([{
+  notificationType: LICENSE_ISSUED_EMAIL_CONTRACT.notificationType,
+  contractVersion: LICENSE_ISSUED_EMAIL_CONTRACT.version,
+}]);
+
+async function emailDeliveryReadiness(
+  db: D1Database,
+  env: DeliveryCryptoEnv,
+  accountId: string,
+): Promise<{
+  integrationReady: boolean;
+  credentialReady: boolean;
+  bindingsReady: boolean;
+  integrationId?: string;
+  credentialErrorCode?: string;
+  activeBindingCount: number;
+}> {
+  const contractPredicate = (alias: string) => OFFER_ACTIVATION_EMAIL_CONTRACTS
+    .map((_, index) => `(${alias}.notification_type = ?${index * 2 + 2} AND ${alias}.contract_version = ?${index * 2 + 3})`)
+    .join(" OR ");
+  const bindings = OFFER_ACTIVATION_EMAIL_CONTRACTS.flatMap((contract) => [
+    contract.notificationType,
+    contract.contractVersion,
+  ]);
+  const result = await db.prepare(
+    `SELECT integration.id AS integration_id, integration.provider,
+            integration.credential_ciphertext,
+            COUNT(DISTINCT binding.notification_type || '@' || binding.contract_version) AS active_binding_count
+     FROM email_integrations AS integration
+     LEFT JOIN email_template_bindings AS binding
+       ON binding.account_id = integration.account_id
+      AND binding.email_integration_id = integration.id
+      AND binding.status = 'active'
+      AND (${contractPredicate("binding")})
+     WHERE integration.account_id = ?1
+       AND integration.status = 'active'
+     GROUP BY integration.id, integration.provider, integration.credential_ciphertext
      LIMIT 1`,
-  ).bind(accountId).first<{ id: string }>();
-  return row ? { ready: true, endpointId: row.id } : { ready: false };
+  ).bind(accountId, ...bindings).all<EmailDeliveryReadinessRow>();
+  const row = result.results[0];
+  if (!row) {
+    return {
+      integrationReady: false,
+      credentialReady: false,
+      bindingsReady: false,
+      activeBindingCount: 0,
+    };
+  }
+
+  let credentialReady = false;
+  let credentialErrorCode: string | undefined;
+  try {
+    const serialized = await decryptEnvelopeV1(row.credential_ciphertext, env, {
+      accountId,
+      table: "email_integrations",
+      rowId: row.integration_id,
+      field: "credential_ciphertext",
+    });
+    const envelope = JSON.parse(serialized) as unknown;
+    getEmailProviderAdapter(row.provider).validateCredentialEnvelope(envelope);
+    credentialReady = true;
+  } catch (error) {
+    credentialErrorCode = error instanceof SyntaxError
+      ? "EMAIL_PROVIDER_CREDENTIAL_ENVELOPE_INVALID"
+      : "EMAIL_PROVIDER_CREDENTIAL_UNAVAILABLE";
+  }
+
+  const requiredCount = OFFER_ACTIVATION_EMAIL_CONTRACTS.length;
+  return {
+    integrationReady: true,
+    credentialReady,
+    bindingsReady: Number(row.active_binding_count) === requiredCount,
+    integrationId: row.integration_id,
+    ...(credentialErrorCode ? { credentialErrorCode } : {}),
+    activeBindingCount: Number(row.active_binding_count),
+  };
 }
 
 async function processingBacklogHealthy(db: D1Database, accountId: string, now: Date): Promise<boolean> {
   const staleBefore = new Date(now.getTime() - 5 * 60_000).toISOString();
-  const row = await db.prepare(
+  const result = await db.prepare(
     `SELECT 1 AS unavailable
      FROM inbound_events
      WHERE account_id = ?1
@@ -110,15 +183,15 @@ async function processingBacklogHealthy(db: D1Database, accountId: string, now: 
          OR (status = 'processing' AND locked_until < ?3)
        )
      LIMIT 1`,
-  ).bind(accountId, staleBefore, now.toISOString()).first<{ unavailable: number }>();
-  return !row;
+  ).bind(accountId, staleBefore, now.toISOString()).all<{ unavailable: number }>();
+  return !result.results[0];
 }
 
 async function checkoutVerificationReady(
   db: D1Database,
   row: BillingOfferReadinessRow,
 ): Promise<boolean> {
-  const match = await db.prepare(
+  const result = await db.prepare(
     `SELECT verification.id
      FROM billing_checkout_verifications AS verification
      JOIN billing_offers AS evidence_offer
@@ -136,14 +209,14 @@ async function checkoutVerificationReady(
      ORDER BY verification.completed_at DESC
      LIMIT 1`,
   ).bind(row.account_id, row.product_id, row.license_plan_id, row.purchase_type)
-    .first<{ id: string }>();
-  return Boolean(match);
+    .all<{ id: string }>();
+  return Boolean(result.results[0]);
 }
 
 export async function evaluateBillingOfferReadiness(
   db: D1Database,
   row: BillingOfferReadinessRow,
-  options: { now?: Date; activation?: boolean } = {},
+  options: { env: DeliveryCryptoEnv; now?: Date; activation?: boolean },
 ): Promise<CheckoutReadiness> {
   const now = options.now ?? new Date();
   const checks: ReadinessCheck[] = [];
@@ -185,9 +258,28 @@ export async function evaluateBillingOfferReadiness(
     { missingEventTypes: missingEvents },
   ));
 
-  const gateway = await notificationGatewayReady(db, row.account_id);
-  checks.push(check("notification_gateway", gateway.ready, "CHECKOUT_NOTIFICATION_UNAVAILABLE"));
-
+  const email = await emailDeliveryReadiness(db, options.env, row.account_id);
+  checks.push(check(
+    "email_integration",
+    email.integrationReady,
+    "CHECKOUT_NOTIFICATION_UNAVAILABLE",
+    email.integrationId ? { integrationId: email.integrationId } : undefined,
+  ));
+  checks.push(check(
+    "email_provider_credential",
+    email.credentialReady,
+    "CHECKOUT_NOTIFICATION_UNAVAILABLE",
+    email.credentialReady ? undefined : { errorCode: email.credentialErrorCode ?? "EMAIL_INTEGRATION_NOT_CONFIGURED" },
+  ));
+  checks.push(check(
+    "email_template_bindings",
+    email.bindingsReady,
+    "CHECKOUT_NOTIFICATION_UNAVAILABLE",
+    {
+      requiredCount: OFFER_ACTIVATION_EMAIL_CONTRACTS.length,
+      activeCount: email.activeBindingCount,
+    },
+  ));
   const processingReady = await processingBacklogHealthy(db, row.account_id, now);
   checks.push(check("processing_backlog", processingReady, "CHECKOUT_PROCESSING_UNAVAILABLE"));
   const schedulerHealth = await readSchedulerHealth(db, now);

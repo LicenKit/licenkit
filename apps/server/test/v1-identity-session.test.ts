@@ -15,7 +15,7 @@ import {
   CUSTOMER_CSRF_COOKIE,
   CUSTOMER_SESSION_COOKIE,
 } from "../src/services/identity/session";
-import { decryptEnvelopeV1, encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
+import { decryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 
 function cookieValue(response: Response, name: string): string {
   const header = response.headers.get("set-cookie") ?? "";
@@ -235,13 +235,6 @@ describe("V1 identity and sessions", () => {
     const now = new Date().toISOString();
     const accountId = "acc_identity";
     const customerId = "cus_identity";
-    const endpointId = "oep_identity";
-    const endpointSecret = await encryptEnvelopeV1("test-signing-secret", testEnv.env, {
-      accountId,
-      table: "outbound_endpoints",
-      rowId: endpointId,
-      field: "signing_secret_ciphertext",
-    });
     testEnv.sqliteDb.prepare(
       `INSERT INTO system_settings (id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at)
        VALUES ('current', 'Identity', 'https://license.example.test', 'https://license.example.test/site', 'https://license.example.test/api/v1', ?, ?)`
@@ -298,21 +291,6 @@ describe("V1 identity and sessions", () => {
        ) VALUES ('act_other', ?, 'lic_other', 'fp_other', 'mt_other',
          'Other Mac', 'macos', 'active', ?, ?)`
     ).run(accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO outbound_endpoints (
-         id, account_id, endpoint_type, name, url, signing_secret_ciphertext,
-         subscribed_events_json, timeout_ms, max_automatic_attempts, status, created_at, updated_at
-       ) VALUES (?, ?, 'notification_gateway', 'Gateway', 'https://notify.example.test/hooks', ?, ?, 10000, 4, 'active', ?, ?)`
-    ).run(endpointId, accountId, endpointSecret, JSON.stringify(["customer.portal_access_requested"]), now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO outbound_deliveries (
-         id, account_id, endpoint_id, event_type, idempotency_key, target_url,
-         signing_secret_ciphertext, status, attempt_count, automatic_attempt_count,
-         max_automatic_attempts, accepted_at, created_at, updated_at
-       ) VALUES ('dly_endpoint_test', ?, ?, 'endpoint.test', 'endpoint.test:identity',
-         'https://notify.example.test/hooks', 'snapshot', 'accepted', 1, 1, 4, ?, ?, ?)`
-    ).run(accountId, endpointId, now, now, now);
-
     const unknown = await app.request(
       "https://license.example.test/api/v1/customer/auth/magic-link",
       {
@@ -350,16 +328,16 @@ describe("V1 identity and sessions", () => {
     ).get(accountId) as any;
     expect(challenge.token_hash).toMatch(/^[0-9a-f]{64}$/);
     const delivery = testEnv.sqliteDb.prepare(
-      "SELECT payload_ciphertext, status FROM outbound_deliveries WHERE account_id = ? AND id = ?"
+      "SELECT variables_ciphertext, status FROM email_deliveries WHERE account_id = ? AND id = ?"
     ).get(accountId, challenge.delivery_id) as any;
-    expect(delivery.status).toBe("pending");
-    const payload = JSON.parse(await decryptEnvelopeV1(delivery.payload_ciphertext, testEnv.env, {
+    expect(delivery.status).toBe("waiting_configuration");
+    const variables = JSON.parse(await decryptEnvelopeV1(delivery.variables_ciphertext, testEnv.env, {
       accountId,
-      table: "outbound_deliveries",
+      table: "email_deliveries",
       rowId: challenge.delivery_id,
-      field: "payload_ciphertext",
+      field: "variables_ciphertext",
     }));
-    const accessUrl = new URL(payload.data.access_url);
+    const accessUrl = new URL(variables.access_url);
     expect(accessUrl.pathname).toBe("/site/customer/identity/auth");
     const token = accessUrl.hash.slice("#token=".length);
 

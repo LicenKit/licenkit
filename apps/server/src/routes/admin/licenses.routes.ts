@@ -6,6 +6,7 @@ import { getTenantDB } from "../../infra/db";
 import { activations, customers, licensePlans, licenses, products } from "../../infra/db/schema";
 import { requireRole } from "../../middleware/auth";
 import { AppError, NotFoundError } from "../../middleware/error";
+import { dispatchDelivery } from "../../infra/delivery/dispatcher";
 import { issueManualLicense } from "../../services/license/issue";
 import { rotateLicenseKey } from "../../services/license/key-rotation";
 import { prepareLicenseAudit } from "../../services/license/audit";
@@ -128,8 +129,21 @@ adminLicensesRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     actor: { type: "user", id: c.get("userId")! },
     ...metadata,
   });
+  let deliveryStatus: string = result.delivery.status;
+  if (result.delivery.status === "pending") {
+    const dispatched = await dispatchDelivery({
+      db: c.env.DB,
+      env: c.env,
+      accountId: c.get("accountId")!,
+      deliveryId: result.delivery.id,
+    });
+    if (dispatched.status) deliveryStatus = dispatched.status;
+  }
   c.header("Cache-Control", "no-store");
-  return c.json({ success: true, data: result }, 201);
+  return c.json({
+    success: true,
+    data: { ...result, delivery: { ...result.delivery, status: deliveryStatus } },
+  }, 201);
 });
 
 adminLicensesRouter.get("/:licenseId", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
@@ -218,8 +232,21 @@ async function rotate(c: any, reason: "recovery" | "security_reset") {
     reason,
     ...metadata,
   });
+  let deliveryStatus: string = result.delivery.status;
+  if (result.delivery.status === "pending") {
+    const dispatched = await dispatchDelivery({
+      db: c.env.DB,
+      env: c.env,
+      accountId: c.get("accountId")!,
+      deliveryId: result.delivery.id,
+    });
+    if (dispatched.status) deliveryStatus = dispatched.status;
+  }
   c.header("Cache-Control", "no-store");
-  return c.json({ success: true, data: result });
+  return c.json({
+    success: true,
+    data: { ...result, delivery: { ...result.delivery, status: deliveryStatus } },
+  });
 }
 
 adminLicensesRouter.post("/:licenseId/recover-key", requireRole(["owner", "admin"]), (c) => rotate(c, "recovery"));

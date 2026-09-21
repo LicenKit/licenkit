@@ -19,10 +19,10 @@ flowchart LR
     ProductPage[静态产品页] --> Payment
     Billing --> LicenseCore
     SDK[Swift SDK] --> Activation
-    Billing --> Outbound[出站投递]
-    LicenseCore --> Outbound
-    Outbound --> Notify[客户通知 Webhook]
-    Outbound --> Events[业务事件 Webhook]
+    Billing --> EmailDelivery[邮件投递]
+    LicenseCore --> EmailDelivery
+    CustomerAccess --> EmailDelivery
+    EmailDelivery --> Email[邮件 Provider API]
 ```
 
 ## 2. 模块职责
@@ -60,7 +60,7 @@ Setup 是否可用必须同时满足 `system_settings`、Account 和 User 均为
 - 普通找回与安全重置；
 - 显式权益迁移。
 
-License 核心不直接发送 HTTP Webhook，只在事务中创建 Outbound Delivery。
+License 核心不直接调用邮件 Provider，只在事务中创建 Email Delivery。
 
 ### M04 激活、试用与验证
 
@@ -85,7 +85,7 @@ Trial Claim 不复用 License 或 Activation 状态机。它只表示无需支�
 - Adjustment 状态映射、自动暂停和管理员处置；
 - Paddle 要求支付方式的免费订阅试用，以及 `trialing` 到 `active`/`past_due` 的转换；
 - 为已授权 Customer 创建支付平台托管的客户门户会话；
-- 把 Provider 共享能力故障去重为 System Issue，并保持与单个 Inbound Event 错误的关联；
+- 把支付、回调和邮件错误去重为可人工标记待处理/已处理的 System Issue 提示；
 - 失败重放和乱序事件保护。
 
 每个支付平台使用 Adapter 将原始事件转换为内部语义。Adapter 不直接写 License，统一 Fulfillment Service 执行领域动作。
@@ -94,7 +94,7 @@ Customer Webhook 和 Paddle Get Customer API 必须进入同一个 `BillingCusto
 
 `BillingCustomerSyncService` 是跨 Adapter 的领域服务，不是 Paddle 专用表访问层。Adapter 必须传入当前 Account、已解析的 Billing Provider 连接、外部 Customer ID 和受信 Customer 快照；服务只用 `account_id + billing_provider_id + external_customer_id` 查询映射。Provider ID 同时隔离平台、环境和账户，因此 Paddle、未来 Stripe 及 sandbox/live 的外部 ID 不会互相碰撞。领域服务不得从所有 Billing Customer 载入内存后按 ID 或邮箱扫描。
 
-Provider API 的 `401/403` 同时产生事件级错误和 Provider 能力级 System Issue。事件保存本次 HTTP 状态、Provider 原始错误码、request ID 与 message；System Issue 以账户、Provider、能力和问题代码去重。Scheduler 跳过 `blocking_system_issue_id` 非空的事件；管理员验证配置修复后，可以选择是否解除这些事件的阻塞并把仍可重放的记录重新排入完整状态机。仅解决 Issue 不能隐式唤醒事件、清空事件错误或调用发码服务。
+Provider API 的 `401/403` 同时产生事件级错误和一条被动 System Issue 提示。事件保存本次 HTTP 状态、Provider 原始错误码、request ID 与 message，并进入 `needs_attention`；Scheduler 只按 Event 状态决定是否领取。管理员可以把提示标为已处理；同一错误再次发生会重新变为待处理。修复 Provider 配置后仍从原 Event 执行 Replay，重新进入完整状态机，Issue 状态不控制 Event。
 
 Paddle Provider 必须保存与环境匹配的 Client-side Token 和加密 Webhook Secret。Client-side Token 是 Paddle.js 的公开受限凭证，静态产品页可以直接配置同一个值；Webhook Secret 只能在服务端验签。Paddle API Key 是可选的服务端凭证，加密保存在 `billing_providers.api_secret_ciphertext`：启用 Get Customer/对账需要 `customer.read`，启用托管客户门户需要 `customer_portal_session.write`。它不能发送到浏览器或通知接收方。未配置 API Key 时，购买事件等待 Customer Webhook 后重试；配置后的 API 读穿发生在 Webhook 已持久化并返回 2xx 之后，超时或限流只让 Inbound Event 保持 `pending`。
 
@@ -104,17 +104,24 @@ Billing 模块只能推进 `renewal_mode=billing` 的 License，并要求存在�
 
 V1 只要求 Paddle Adapter 完成真实 Sandbox 闭环。Adapter 注册表对未实现的 provider 默认拒绝；后续支付平台只能增加 Adapter，不能增加第二套履约状态机。
 
-### M06 出站投递
+### M06 邮件投递
 
-负责通知 Webhook 和业务事件 Webhook：
+负责邮件 Provider 投递：
 
-- Endpoint 配置与 HMAC Secret；
-- Delivery 持久化；
-- Attempt 记录；
-- 自动重试和人工 retry；
-- 敏感负载加密和到期清理。
+- Email Integration、加密 Provider 凭证、发件身份与重试预算；
+- 四个稳定邮件合同及其 Provider Template Binding；
+- Email Delivery、租约、总尝试次数、自动重试和 Scheduled Worker；
+- 最近一次邮件 Provider 原始响应、request ID、错误码、Retry-After 与字段级脱敏详情；
+- 向统一 System Issue 收件箱写入被动邮件错误提示；
+- 事件变量加密和到期清理。
 
-LicenKit 不包含 Resend、SMTP 或特定邮件服务商客户端。Magic Link 邮件同样通过 Notification Gateway 投递。
+V1 只注册 `resend` Adapter，由 Worker 直接调用 Resend Email API。邮件主题、HTML、文本和正式版本由 Provider 中的外部模板拥有；LicenKit 保存当前 Template ID/Alias 映射、代码合同版本，以及 Delivery 创建时的加密事件变量。未注册 Provider 必须 fail-fast。
+
+Adapter Registry、邮件合同和 Dispatcher 为第二个 Provider 保留核心演进边界，但 V1 的数据库 Provider 约束、`apiKey` 凭证 DTO 和管理页面仍是 Resend 专用。增加第二个 Provider 需要受控扩展 Schema、API、UI 与测试策略，不是只注册一个 Adapter。
+
+邮件合同 V1 为 `customer.license_issued@1`、`customer.license_recovered@1`、`customer.license_security_reset@1` 和 `customer.portal_access_requested@1`。`account_name` 由服务端统一注入；收件地址只使用 Delivery 的 `recipient_email`，不再复制成模板变量。配置测试直接发送测试数据并即时返回结果，不保存测试证据，也不参与业务发送门禁。
+
+缺少 Integration/Binding 或真实请求缺少合同变量时，业务事务仍保留 `waiting_configuration` Email Delivery。修复后由管理员显式重排；发送时总是读取最新 Integration/Binding。Provider 明确给出可重试结果才进入自动重试；超时或传输中断等结果未知时停止自动重发，管理员确认可能重复后才能人工重发。
 
 ### M07 客户身份与访问
 
@@ -123,7 +130,7 @@ LicenKit 不包含 Resend、SMTP 或特定邮件服务商客户端。Magic Link 
 - 支付履约或人工签发时创建或匹配 Customer；
 - 在 Magic Link 请求查询 Customer 前完成 Turnstile 服务端验证；
 - 使用现有 Login Challenge 的创建时间在 D1 中执行重复请求冷却；
-- 创建一次性登录 Challenge 和通知 Delivery；
+- 创建一次性登录 Challenge 和 Email Delivery；
 - 原子消费 Magic Link 并创建可吊销会话；
 - 按当前 Customer 限定 License、Subscription 和 Activation 查询；
 - 执行客户设备释放、注册码找回、安全重置和支付平台门户跳转。
@@ -169,7 +176,7 @@ Customer Portal 属于使用方 Site。LicenKit 不提供 Portal、Magic Link �
 
 - License 或 Billing Subscription 的变更；
 - Inbound Event 的最终处理状态；
-- 需要发送的 Outbound Delivery；
+- 需要发送的 Email Delivery；
 - 必要的审计记录。
 
 禁止先创建 License，再在事务外创建发码任务。否则进程中断会产生无法补发的注册码。
@@ -203,7 +210,7 @@ Paddle 的订阅创建相关事件可能乱序到达。Fulfillment 使用 Inboun
 请求 Magic Link 时先验证 Turnstile Token、固定 action 和 `site_url` hostname。验证失败时在 Customer 查询之前拒绝；验证成功后，只有在 active Customer 存在且最近一条 Challenge 已超过默认 60 秒冷却期时，才在一个 D1 原子批次中创建：
 
 - 只保存 Token 哈希的 Login Challenge；
-- 包含一次性访问 URL 密文的 Notification Delivery；
+- 包含一次性访问 URL 密文的 Email Delivery；
 - 必要的审计事实。
 
 公开接口无论 Customer 是否存在都返回相同的接受语义。不存在的邮箱不能隐式注册 Customer。
@@ -223,9 +230,9 @@ D1 不提供让应用任意停留在事务中间的交互式事务。所有需�
 - 激活数上限由数据库 Trigger 在插入或重新激活前检查，不能仅依赖应用层计数；
 - 后台任务通过带状态和租约条件的单条 `UPDATE` 领取，并检查实际受影响行数。
 
-## 4. D1 Outbox 与 Scheduled Worker
+## 4. D1 持久任务与 Scheduled Worker
 
-D1 中的 `inbound_events` 和 `outbound_deliveries` 是后台任务的事实来源。V1 不使用 Cloudflare Queues，也不依赖进程内任务列表。
+D1 中的 `inbound_events` 和 `email_deliveries` 是后台任务的事实来源。V1 不使用 Cloudflare Queues，也不依赖进程内任务列表。
 
 ```text
 请求持久化 pending 记录
@@ -250,7 +257,7 @@ HTTP Handler 可以通过 Worker 请求上下文启动一次即时处理，但�
 Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，再对每个 Account 使用带 `account_id` 的有界索引查询：
 
 - 到达 `next_attempt_at` 的待履约 Inbound Event；
-- 到达 `next_attempt_at` 的待发送 Delivery；
+- 到达 `next_attempt_at` 的待发送 Email Delivery；
 - `locked_until` 已过期但仍处于 processing 的任务。
 
 查询必须使用状态、调度时间和租约索引下推到 D1，不允许加载全表后在内存筛选。
@@ -262,13 +269,14 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 租约不能提供 exactly-once。外部接收方可能已经成功接受请求，而 LicenKit 在写回 `accepted` 前中断，因此：
 
 - 履约动作必须受事件唯一约束和领域幂等键保护；
-- 出站接收方必须按 Delivery ID 幂等；
-- 每次 HTTP 尝试都写入独立 Attempt；
-- 重试复用同一个 Delivery ID 和加密负载。
-- Delivery 创建时固化目标 URL 和加密签名 Secret；Endpoint 或 Secret 后续轮换只影响新 Delivery。
-- Delivery 默认最多 4 次自动 HTTP Attempt，即首次请求加 3 次自动重试；凭证或负载到期可以提前结束。
-- Attempt 明确记录 `initial`、`automatic_retry` 或 `manual_retry`；人工 retry 只追加一次请求，不重置 Delivery 的自动预算。
-- Notification Gateway 返回 2xx 后立即清除敏感负载；未成功负载按 Delivery 固化的截止时间清理，默认最长 24 小时，Magic Link 以 Challenge 的更早到期时间为上限。
+- 邮件请求使用 Delivery ID 与当前请求内容派生 Provider 幂等键；
+- 每次调用 Provider 前增加同一 Delivery 的 `attempt_count`，只保存最近一次完整诊断，不创建 Attempt 子记录；
+- 重发复用同一个 Delivery ID 和加密事件变量，但读取最新 Integration/Binding；
+- Provider 明确返回可重试结果时，默认自动调用总数最多为 4 次，达到上限后进入 `failed`；Magic Link 到期可以提前结束；
+- 超时或连接中断等结果未知时不自动重发，管理员确认可能重复后才允许人工重发；
+- Provider Send API 成功且返回有效 Provider Message ID 后，邮件 Delivery 才进入 `accepted`，并从该时间开始计算敏感变量清理期限；普通未成功邮件保留密文供管理员重发或取消，Magic Link 仍受 Challenge 业务期限约束。
+- 到期扫描不能抢占仍持有有效处理锁的发送任务；管理员取消尚未发送的 Delivery 时进入 `cancelled` 并立即清除密文。
+- 当前一期把 Provider `accepted` 定义为“已发送”，不追踪 bounce、complaint、suppression、进入收件箱或已读。
 
 ## 5. 事件顺序与并发
 
@@ -305,16 +313,16 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - 对外响应可以脱敏，但内部事件保留可回溯的原始错误；
 - 支付平台错误、HTTP 状态、数据库错误和业务拒绝不能被统一压缩成一个错误码；
 - 敏感字段按字段过滤，不隐藏整个原始包体；
-- Inbound Event 错误描述单个事件，System Issue 描述多个任务共享的配置或外部能力故障；两者都必须保留，不能互相覆盖；
-- 同一 System Issue 按账户、资源、能力和错误代码去重，request ID 与 message 只作为最近诊断，不参与去重；
-- 关闭 System Issue 不自动修改关联任务；管理端必须明确展示是否重新处理、可处理数量和跳过原因；
+- Inbound Event 与 Email Delivery 保存可处理对象自己的状态和错误；System Issue 只是管理员错误收件箱，不能互相覆盖；
+- 同一 System Issue 按账户、类别、来源、操作和错误代码去重，request ID 与 message 只作为最近诊断，不参与去重；
+- 重试只能从原 Event 或 Delivery 发起；System Issue 只提供待处理/已处理提示，不提供恢复或重试动作；
 - 所有异步失败都必须能从控制台查询，并只对仍满足前置条件的原始工作单元执行受控重试。
 
 ## 7. 配置模型
 
 ### 7.1 环境 Secrets
 
-- `STORAGE_ENCRYPTION_KEY`：保护支付 Secret、出站 HMAC Secret、签名私钥和敏感 Delivery 负载；
+- `STORAGE_ENCRYPTION_KEY`：保护支付 Secret、邮件 Provider 凭证、签名私钥和敏感 Delivery 变量；
 - `INITIAL_SETUP_TOKEN`：独立部署首次初始化的高熵一次性 Secret；完成 Setup 后不再读取；
 - `TURNSTILE_SITE_KEY`：Customer Portal Magic Link 请求页使用的公开 Widget Sitekey；
 - `TURNSTILE_SECRET_KEY`：Worker 调用 Siteverify 的服务端 Secret，不进入浏览器、日志或数据库；
@@ -326,7 +334,8 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - Billing Provider：支付平台类型、环境、公开 Client-side Token、加密 Webhook Secret、可选服务端 API 凭证和启用状态；
 - Paddle API Key 仅用于显式启用的 Customer 读穿、定期对账和托管 Customer Portal 会话；它不是 Webhook Secret，也不能暴露给前端；
 - Offer Mapping：外部价格与授权方案映射；默认 `draft`，通过收款就绪检查后才能显式激活；
-- Outbound Endpoint：通知或事件 Webhook URL、Secret 和事件范围；
+- Email Integration：Provider、加密 API 凭证、From/Reply-To、自动重试预算和启用状态；
+- Email Template Binding：邮件类型/合同版本到 Provider Template ID/Alias 的当前映射；
 - Account Settings：包括默认 5 天的订阅支付宽限期；创建订阅授权方案时把该默认值解析并保存为方案实际值，不存放支付渠道混合 JSON。
 
 独立表的原因是这些配置需要唯一约束、索引、状态和审计，继续放在 `accounts.payment_configs` JSON 中会使查询和局部更新不可验证。
@@ -339,7 +348,7 @@ Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，
 - 支付 Adapter；
 - Fulfillment Service；
 - License 和 Subscription 状态机；
-- Outbound Delivery 和重试流程；
+- Email Delivery 和重试流程；
 - SDK 接口和验证路径。
 
 只允许以下配置不同：
@@ -391,14 +400,14 @@ Readiness 至少覆盖：
 - `STORAGE_ENCRYPTION_KEY` 可解密一条健康检查样本；
 - 启用中的 Billing Provider 配置可解密；
 - 使用 `signed` 凭证模式的 Product 存在可用签名密钥；
-- 通知功能启用时存在有效 Notification Gateway；
-- 部署 Customer Portal 时存在有效 Notification Gateway；
+- 存在一条 active Email Integration，Provider 已注册且加密凭证可解密并通过 Adapter 校验；
+- 四种 Email Template Binding 各自是否 active；配置测试由管理员按需即时执行，结果不持久化；
 - active Paddle Provider 的 Client-side Token、Webhook Secret 和环境匹配，最小事件合同完整；
 - 启用了 Customer API 读穿、定期对账或托管客户门户时，对应 Paddle API Key 可解密、环境和最小权限匹配；
 - Turnstile Sitekey/Secret 已配置，Siteverify 可用且 Widget hostname 与 `site_url` 一致；
 - 部署检查确认上述 Zone 级 WAF Rate Limiting Rules 已配置；Worker 运行时无法在不引入额外 Cloudflare 管理凭证的情况下自行读取该控制面事实，因此 `/system/readiness` 不伪造这一检查；
-- open System Issue 数量、最早发生时间、受影响且仍阻塞的 Inbound Event 数量；
-- 每个 active Offer 的 Provider/Product 环境一致性、Notification Gateway 最近测试、真实 Sandbox 端到端验收和当前 Checkout Readiness 状态；
+- 最近 System Issue 的类别、来源、错误码、次数和最新诊断；它只提示，不进入 Readiness；
+- 每个 active Offer 的 Provider/Product 环境一致性、`customer.license_issued@1` 当前 Binding、真实 Sandbox 端到端验收和 Checkout Readiness 状态；找回、安全重置和 Magic Link 状态独立展示，不进入 Offer 门禁；
 - 待处理或失败事件没有超过告警阈值。
 
 健康检查只报告能力状态，不读取或返回明文 Secret。

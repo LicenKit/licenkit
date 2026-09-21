@@ -21,14 +21,19 @@ import { adminProductsRouter } from "./routes/admin/products.routes";
 import { adminLicensePlansRouter } from "./routes/admin/license-plans.routes";
 import { adminLicensesRouter } from "./routes/admin/licenses.routes";
 import { adminBillingRouter } from "./routes/admin/billing.routes";
-import { adminOutboundRouter } from "./routes/admin/webhooks.routes";
 import { adminCustomersRouter } from "./routes/customer-admin.routes";
 import { adminStatsRouter } from "./routes/admin/stats.routes";
 import { adminAuditRouter } from "./routes/admin/audit.routes";
 import { adminSystemIssuesRouter } from "./routes/admin/system-issues.routes";
+import {
+  adminEmailIntegrationsRouter,
+  adminEmailDeliveriesRouter,
+  adminEmailTemplateContractsRouter,
+} from "./routes/admin/email.routes";
 import { webhookRouter } from "./routes/webhook.routes";
 import { processDueBillingInboundEvents } from "./services/billing/fulfillment";
 import { runDeliveryScheduler } from "./services/delivery/scheduler";
+import { clearExpiredAcceptedEmailPayloads } from "./services/delivery/retention";
 import { recordSchedulerSuccess } from "./services/runtime/scheduler-health";
 import { clearExpiredInboundEventPayloads } from "./services/runtime/retention";
 
@@ -108,11 +113,13 @@ admin.route("/products", adminProductsRouter);
 admin.route("/license-plans", adminLicensePlansRouter);
 admin.route("/licenses", adminLicensesRouter);
 admin.route("/billing", adminBillingRouter);
-admin.route("/outbound", adminOutboundRouter);
 admin.route("/customers", adminCustomersRouter);
 admin.route("/stats", adminStatsRouter);
 admin.route("/audit-logs", adminAuditRouter);
 admin.route("/system", adminSystemIssuesRouter);
+admin.route("/email-template-contracts", adminEmailTemplateContractsRouter);
+admin.route("/email-integrations", adminEmailIntegrationsRouter);
+admin.route("/email-deliveries", adminEmailDeliveriesRouter);
 api.route("/admin", admin);
 
 app.route("/api/v1", api);
@@ -136,7 +143,10 @@ export default {
           processDueBillingInboundEvents(env),
           runDeliveryScheduler(env),
         ]);
-        await clearExpiredInboundEventPayloads(env.DB);
+        await Promise.all([
+          clearExpiredInboundEventPayloads(env.DB),
+          clearExpiredAcceptedEmailPayloads(env.DB),
+        ]);
         await recordSchedulerSuccess(env.DB, startedAt);
       })(),
     );

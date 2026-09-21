@@ -10,9 +10,11 @@ import {
   requireExactOrigin,
 } from "../middleware/auth";
 import {
-  prepareNotificationDelivery,
-  validateNotificationDeliveryConfiguration,
+  prepareEmailNotificationDelivery,
+  validateEmailDeliveryConfiguration,
 } from "../services/delivery/outbox";
+import { dispatchDelivery } from "../infra/delivery/dispatcher";
+import { buildCustomerPortalAccessUrl } from "../domain/email/contracts";
 import { prepareAuditInsert } from "../services/identity/audit";
 import { verifyCustomerMagicLinkTurnstile } from "../services/identity/turnstile";
 import {
@@ -115,14 +117,24 @@ customerAuthRouter.post(
       .all<{ id: string; slug: string }>();
     const account = accountResult.results[0];
     if (account) {
-      // Validate shared gateway crypto before looking up the private email so
-      // a broken endpoint cannot turn the public response into an oracle.
-      await validateNotificationDeliveryConfiguration({
+      // Validate shared Provider crypto before looking up the private email so
+      // a broken Integration cannot turn the public response into an oracle.
+      await validateEmailDeliveryConfiguration({
         db: c.env.DB,
         env: c.env,
         accountId: account.id,
-        eventType: "customer.portal_access_requested",
+        notificationType: "customer.portal_access_requested",
+        contractVersion: 1,
       });
+    }
+
+    // Register immediate dispatch when the runtime provides an ExecutionContext.
+    // Every environment keeps the same Outbox + Scheduler fallback when it does not.
+    let executionContext: { waitUntil(promise: Promise<unknown>): void } | undefined;
+    try {
+      executionContext = c.executionCtx;
+    } catch {
+      executionContext = undefined;
     }
 
     const customerResult = account
@@ -145,18 +157,21 @@ customerAuthRouter.post(
       const challengeId = `clg_${ulid().toLowerCase()}`;
       const token = randomToken("mlk");
       const tokenHash = await sha256Hex(token);
-      const baseUrl = siteUrl.replace(/\/+$/, "");
-      const accessUrl = `${baseUrl}/customer/${encodeURIComponent(account.slug)}/auth#token=${encodeURIComponent(token)}`;
-      const delivery = await prepareNotificationDelivery({
+      const accessUrl = buildCustomerPortalAccessUrl({
+        trustedSiteUrl: siteUrl,
+        accountSlug: account.slug,
+        oneTimeToken: token,
+      });
+      const delivery = await prepareEmailNotificationDelivery({
         db: c.env.DB,
-        env: c.env as any,
+        env: c.env,
         accountId: account.id,
         customerId: customer.customer_id,
-        eventType: "customer.portal_access_requested",
+        notificationType: "customer.portal_access_requested",
+        contractVersion: 1,
         recipientEmail: customer.email,
-        payload: { customer_id: customer.customer_id, access_url: accessUrl, expires_at: expiresAt },
-        payloadExpiresAt: expiresAt,
-        idempotencyKey: `customer.portal_access_requested:${challengeId}`,
+        variables: { access_url: accessUrl, expires_at: expiresAt },
+        sendExpiresAt: expiresAt,
         now,
       });
       const auditId = `aud_${ulid().toLowerCase()}`;
@@ -187,9 +202,29 @@ customerAuthRouter.post(
           ),
         c.env.DB
           .prepare(
-            `UPDATE outbound_deliveries
-             SET status = 'payload_expired', payload_ciphertext = NULL,
-                 payload_cleared_at = ?1, next_attempt_at = NULL, updated_at = ?1
+            `UPDATE email_deliveries
+             SET send_expires_at = ?1,
+                 status = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN status
+                   ELSE 'expired'
+                 END,
+                 variables_ciphertext = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN variables_ciphertext
+                   ELSE NULL
+                 END,
+                 next_attempt_at = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN next_attempt_at
+                   ELSE NULL
+                 END,
+                 locked_by = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN locked_by
+                   ELSE NULL
+                 END,
+                 locked_until = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN locked_until
+                   ELSE NULL
+                 END,
+                 updated_at = ?1
              WHERE account_id = ?2
                AND id IN (
                  SELECT delivery_id FROM customer_login_challenges
@@ -201,7 +236,7 @@ customerAuthRouter.post(
                  SELECT 1 FROM customer_login_challenges
                  WHERE account_id = ?2 AND id = ?4
                )
-               AND status NOT IN ('accepted', 'payload_expired')`
+               AND status NOT IN ('accepted', 'expired', 'cancelled')`
           )
           .bind(nowIso, account.id, customer.customer_id, challengeId),
         c.env.DB
@@ -246,7 +281,7 @@ customerAuthRouter.post(
           ),
         c.env.DB
           .prepare(
-            `DELETE FROM outbound_deliveries
+            `DELETE FROM email_deliveries
              WHERE account_id = ?1 AND id = ?2
                AND NOT EXISTS (
                  SELECT 1 FROM customer_login_challenges
@@ -255,7 +290,19 @@ customerAuthRouter.post(
           )
           .bind(account.id, delivery.deliveryId),
       ];
-      await c.env.DB.batch(statements);
+      const batchResults = await c.env.DB.batch(statements);
+      const challengeInserted = Number(
+        batchResults[delivery.statements.length]?.meta?.changes ?? 0,
+      ) === 1;
+      if (challengeInserted && delivery.status === "pending" && executionContext) {
+        executionContext.waitUntil(dispatchDelivery({
+          db: c.env.DB,
+          env: c.env,
+          accountId: account.id,
+          deliveryId: delivery.deliveryId,
+          workerId: `email_http_${ulid().toLowerCase()}`,
+        }).then(() => undefined));
+      }
     }
     await preserveEnumerationTiming(startedAt);
     c.header("Cache-Control", "no-store");
@@ -334,10 +381,33 @@ customerAuthRouter.post(
           .bind(nowIso, candidate.account_id, tokenHash, sessionId),
         c.env.DB
           .prepare(
-            `UPDATE outbound_deliveries
-             SET status = CASE WHEN status = 'accepted' THEN status ELSE 'payload_expired' END,
-                 payload_ciphertext = NULL, payload_cleared_at = COALESCE(payload_cleared_at, ?1),
-                 next_attempt_at = NULL, updated_at = ?1
+            `UPDATE email_deliveries
+             SET send_expires_at = CASE
+                   WHEN status IN ('accepted', 'cancelled') THEN send_expires_at
+                   ELSE ?1
+                 END,
+                 status = CASE
+                   WHEN status IN ('accepted', 'cancelled') THEN status
+                   WHEN status = 'processing' AND locked_until > ?1 THEN status
+                   ELSE 'expired'
+                 END,
+                 variables_ciphertext = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN variables_ciphertext
+                   ELSE NULL
+                 END,
+                 next_attempt_at = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN next_attempt_at
+                   ELSE NULL
+                 END,
+                 locked_by = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN locked_by
+                   ELSE NULL
+                 END,
+                 locked_until = CASE
+                   WHEN status = 'processing' AND locked_until > ?1 THEN locked_until
+                   ELSE NULL
+                 END,
+                 updated_at = ?1
              WHERE account_id = ?2 AND id = ?3`
           )
           .bind(nowIso, candidate.account_id, candidate.delivery_id),

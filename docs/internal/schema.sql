@@ -29,7 +29,6 @@ BEFORE DELETE ON system_settings
 BEGIN
     SELECT RAISE(ABORT, 'SYSTEM_SETUP_STATE_DELETE_FORBIDDEN');
 END;
-
 -- 用途：保存租户账户，是用户、客户、产品、授权和支付数据的最上层隔离边界。
 -- 机制：`slug` 全局唯一用于稳定定位账户；状态控制账户是否可继续提供服务，默认宽限期供订阅授权快照使用。
 CREATE TABLE accounts (
@@ -127,7 +126,7 @@ CREATE TABLE customer_login_challenges (
     FOREIGN KEY (account_id, customer_id)
         REFERENCES customers(account_id, id) ON DELETE RESTRICT,
     FOREIGN KEY (account_id, customer_id, delivery_id)
-        REFERENCES outbound_deliveries(account_id, customer_id, id) ON DELETE RESTRICT
+        REFERENCES email_deliveries(account_id, customer_id, id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_customer_login_challenges_customer
@@ -462,8 +461,8 @@ CREATE TABLE license_key_rotations (
         REFERENCES users(account_id, id) ON DELETE RESTRICT,
     FOREIGN KEY (account_id, initiated_by_customer_id)
         REFERENCES customers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, license_id, delivery_id)
-        REFERENCES outbound_deliveries(account_id, license_id, id) ON DELETE RESTRICT
+    FOREIGN KEY (account_id, delivery_id)
+        REFERENCES email_deliveries(account_id, id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_license_key_rotations_license
@@ -608,63 +607,42 @@ CREATE TABLE billing_providers (
 CREATE INDEX idx_billing_providers_account_status
     ON billing_providers(account_id, status);
 
--- 用途：保存需要管理员处理的系统能力故障；它描述 Provider 配置等共享依赖，不替代单个事件自己的错误。
--- 机制：同一账户、Provider、能力和错误码永远复用一行；重复发生只更新最近错误和次数，已解决后再次发生则重新打开同一行。
+-- 用途：给管理员展示支付、回调和邮件链路最近出现的错误信号。
+-- 机制：按来源和错误码去重并累加次数；管理员只能标记待处理/已处理，新错误会重新变为待处理；Issue 不控制重试、恢复或业务对象状态。
 CREATE TABLE system_issues (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    billing_provider_id TEXT NOT NULL,
-    capability TEXT NOT NULL
-        CHECK (capability IN ('customer_read', 'customer_portal_session')),
-    issue_code TEXT NOT NULL,
-    severity TEXT NOT NULL DEFAULT 'error'
-        CHECK (severity IN ('warning', 'error', 'critical')),
-    status TEXT NOT NULL DEFAULT 'open'
-        CHECK (status IN ('open', 'resolved')),
+    category TEXT NOT NULL CHECK (category IN ('billing', 'webhook', 'email')),
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    error_code TEXT NOT NULL,
+    error_detail_json TEXT NOT NULL
+        CHECK (json_valid(error_detail_json) AND json_type(error_detail_json) = 'object'),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'processed')),
     occurrence_count INTEGER NOT NULL DEFAULT 1
         CHECK (occurrence_count >= 1),
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    last_error_detail_json TEXT NOT NULL DEFAULT '{}'
-        CHECK (
-            json_valid(last_error_detail_json)
-            AND json_type(last_error_detail_json) = 'object'
-        ),
-    resolved_at TEXT,
-    resolved_by_user_id TEXT,
-    resolution_note TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
+    processed_at TEXT,
+    processed_by_user_id TEXT,
     UNIQUE (account_id, id),
-    UNIQUE (
-        account_id,
-        billing_provider_id,
-        capability,
-        issue_code
-    ),
+    UNIQUE (account_id, category, source_type, source_id, operation, error_code),
     CHECK (last_seen_at >= first_seen_at),
     CHECK (
-        (status = 'open'
-            AND resolved_at IS NULL
-            AND resolved_by_user_id IS NULL
-            AND resolution_note IS NULL)
-        OR (status = 'resolved'
-            AND resolved_at IS NOT NULL
-            AND resolved_by_user_id IS NOT NULL
-            AND resolution_note IS NOT NULL
-            AND length(trim(resolution_note)) > 0)
+        (status = 'pending' AND processed_at IS NULL AND processed_by_user_id IS NULL)
+        OR (status = 'processed' AND processed_at IS NOT NULL AND processed_by_user_id IS NOT NULL)
     ),
-    FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, resolved_by_user_id)
+    FOREIGN KEY (account_id, processed_by_user_id)
         REFERENCES users(account_id, id) ON DELETE RESTRICT
 );
 
-CREATE INDEX idx_system_issues_status
-    ON system_issues(account_id, status, severity, last_seen_at DESC);
+CREATE INDEX idx_system_issues_recent
+    ON system_issues(account_id, status, last_seen_at DESC);
 
-CREATE INDEX idx_system_issues_provider_capability
-    ON system_issues(account_id, billing_provider_id, capability, status);
+CREATE INDEX idx_system_issues_source
+    ON system_issues(account_id, category, source_type, source_id);
 
 -- 用途：保存支付平台 Customer 的本地镜像及其与内部 Customer 的稳定映射。
 -- 机制：外部 Customer ID 在同一 Provider 连接内唯一；Webhook/API/对账共用同一记录，并用 pending、linked、email_mismatch、needs_attention 表达链接是否可安全用于履约。
@@ -896,16 +874,13 @@ CREATE TABLE inbound_events (
     result_reference_id TEXT,
     last_error_code TEXT,
     last_error_detail TEXT,
-    blocking_system_issue_id TEXT,
     received_at TEXT NOT NULL,
     processed_at TEXT,
     updated_at TEXT NOT NULL,
     UNIQUE (account_id, id),
     UNIQUE (billing_provider_id, external_event_id),
     FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, blocking_system_issue_id)
-        REFERENCES system_issues(account_id, id) ON DELETE RESTRICT
+        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_inbound_events_status_schedule
@@ -930,52 +905,21 @@ CREATE INDEX idx_inbound_events_adjustment
     ON inbound_events(account_id, billing_provider_id, external_adjustment_id, received_at DESC)
     WHERE external_adjustment_id IS NOT NULL;
 
-CREATE INDEX idx_inbound_events_blocking_issue
-    ON inbound_events(account_id, blocking_system_issue_id, status, received_at)
-    WHERE blocking_system_issue_id IS NOT NULL;
-
 CREATE INDEX idx_inbound_events_payload_retention
     ON inbound_events(payload_expires_at, id)
     WHERE payload_ciphertext IS NOT NULL;
 
--- 用途：永久记录一条系统问题曾影响过哪些 Inbound Event，供管理端展示、恢复预览和审计。
--- 机制：同一 Issue/Event 只保留一行并累加问题观测次数；它不是执行 Attempt 记录，事件解除阻塞或处理完成后仍保留关联。
-CREATE TABLE system_issue_inbound_events (
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    system_issue_id TEXT NOT NULL,
-    inbound_event_id TEXT NOT NULL,
-    occurrence_count INTEGER NOT NULL DEFAULT 1
-        CHECK (occurrence_count >= 1),
-    first_seen_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL,
-    PRIMARY KEY (system_issue_id, inbound_event_id),
-    CHECK (last_seen_at >= first_seen_at),
-    FOREIGN KEY (account_id, system_issue_id)
-        REFERENCES system_issues(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, inbound_event_id)
-        REFERENCES inbound_events(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_system_issue_inbound_events_issue
-    ON system_issue_inbound_events(account_id, system_issue_id, last_seen_at DESC);
-
-CREATE INDEX idx_system_issue_inbound_events_event
-    ON system_issue_inbound_events(account_id, inbound_event_id);
-
--- 用途：保存 Notification Gateway 或业务事件订阅方的出站目标配置。
--- 机制：签名 Secret 保存密文，超时和自动尝试上限随端点配置；每个账户最多一个 active Notification Gateway，业务事件订阅端点可有多个。
-CREATE TABLE outbound_endpoints (
+-- 用途：保存 Account 的邮件供应商连接和共享发件配置。
+-- 机制：凭证只保存密文；V1 明确拒绝未注册 Provider；条件唯一索引保证每个 Account 最多一个 active Integration。
+CREATE TABLE email_integrations (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    endpoint_type TEXT NOT NULL
-        CHECK (endpoint_type IN ('notification_gateway', 'event_subscriber')),
+    provider TEXT NOT NULL CHECK (provider = 'resend'),
     name TEXT NOT NULL,
-    url TEXT NOT NULL,
-    signing_secret_ciphertext TEXT NOT NULL,
-    subscribed_events_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(subscribed_events_json) AND json_type(subscribed_events_json) = 'array'),
-    timeout_ms INTEGER NOT NULL DEFAULT 10000 CHECK (timeout_ms BETWEEN 1000 AND 30000),
-    -- Initial request plus three automatic retries by default.
+    credential_ciphertext TEXT NOT NULL,
+    default_from_email TEXT NOT NULL COLLATE NOCASE,
+    default_from_name TEXT,
+    reply_to_email TEXT COLLATE NOCASE,
     max_automatic_attempts INTEGER NOT NULL DEFAULT 4
         CHECK (max_automatic_attempts BETWEEN 1 AND 20),
     status TEXT NOT NULL DEFAULT 'active'
@@ -985,84 +929,116 @@ CREATE TABLE outbound_endpoints (
     UNIQUE (account_id, id)
 );
 
-CREATE INDEX idx_outbound_endpoints_account_type
-    ON outbound_endpoints(account_id, endpoint_type, status);
+CREATE UNIQUE INDEX uq_email_integrations_active_account
+    ON email_integrations(account_id)
+    WHERE status = 'active';
 
-CREATE UNIQUE INDEX uq_outbound_active_notification_gateway
-    ON outbound_endpoints(account_id, endpoint_type)
-    WHERE endpoint_type = 'notification_gateway' AND status = 'active';
+CREATE INDEX idx_email_integrations_account_status
+    ON email_integrations(account_id, status);
 
--- 用途：保存一次待发送的通知或业务事件任务，是 D1 中的持久化 Outbox。
--- 机制：业务幂等键防止重复创建；创建时固化目标和签名配置，敏感负载加密且有期限，Worker 通过状态、调度时间和租约重试，2xx accepted 后清除负载。
-CREATE TABLE outbound_deliveries (
+-- 用途：把代码中预定义的 LicenKit 邮件合同绑定到外部模板引用。
+-- 机制：合同键在 Integration 内唯一；配置测试只即时返回结果，不保存 revision 或测试证据。
+CREATE TABLE email_template_bindings (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    endpoint_id TEXT,
-    customer_id TEXT,
-    license_id TEXT,
-    event_type TEXT NOT NULL,
-    recipient_email TEXT COLLATE NOCASE,
-    idempotency_key TEXT NOT NULL,
-    target_url TEXT,
-    signing_secret_ciphertext TEXT,
-    payload_ciphertext TEXT,
-    payload_expires_at TEXT,
+    email_integration_id TEXT NOT NULL,
+    notification_type TEXT NOT NULL,
+    contract_version INTEGER NOT NULL CHECK (contract_version >= 1),
+    provider_template_ref TEXT NOT NULL CHECK (length(trim(provider_template_ref)) > 0),
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'disabled')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, id),
+    UNIQUE (account_id, email_integration_id, id),
+    UNIQUE (account_id, email_integration_id, notification_type),
+    FOREIGN KEY (account_id, email_integration_id)
+        REFERENCES email_integrations(account_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_email_template_bindings_lookup
+    ON email_template_bindings(
+        account_id, email_integration_id, notification_type, contract_version, status
+    );
+
+-- 用途：保存一封业务邮件的事件变量、唯一收件地址和当前发送状态。
+-- 机制：事件变量加密保存，发送时读取最新 Integration/Binding；业务发送期限与 accepted 后的敏感变量清理期限分离；只保存总尝试次数和最近一次完整诊断，不建立逐次 Attempt 表。
+CREATE TABLE email_deliveries (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    customer_id TEXT NOT NULL,
+    notification_type TEXT NOT NULL,
+    contract_version INTEGER NOT NULL CHECK (contract_version >= 1),
+    recipient_email TEXT NOT NULL COLLATE NOCASE,
+    variables_ciphertext TEXT,
+    send_expires_at TEXT,
+    variables_expires_at TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN (
-            'blocked_configuration',
             'pending',
             'processing',
-            'accepted',
+            'waiting_configuration',
             'retry_scheduled',
+            'accepted',
             'failed',
-            'payload_expired'
-    )),
+            'expired',
+            'cancelled'
+        )),
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-    automatic_attempt_count INTEGER NOT NULL DEFAULT 0
-        CHECK (automatic_attempt_count >= 0),
-    max_automatic_attempts INTEGER NOT NULL
-        CHECK (max_automatic_attempts BETWEEN 1 AND 20),
     next_attempt_at TEXT,
+    provider_message_id TEXT,
+    last_error_json TEXT CHECK (
+        last_error_json IS NULL
+        OR (json_valid(last_error_json) AND json_type(last_error_json) = 'object')
+    ),
     locked_by TEXT,
     locked_until TEXT,
-    last_error_code TEXT,
-    last_error_detail TEXT,
     accepted_at TEXT,
-    payload_cleared_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (account_id, id),
     UNIQUE (account_id, customer_id, id),
-    UNIQUE (account_id, license_id, id),
-    UNIQUE (account_id, idempotency_key),
     CHECK (
-        automatic_attempt_count <= attempt_count
-        AND automatic_attempt_count <= max_automatic_attempts
+        (status = 'processing'
+            AND locked_by IS NOT NULL
+            AND locked_until IS NOT NULL)
+        OR (status <> 'processing'
+            AND locked_by IS NULL
+            AND locked_until IS NULL)
     ),
     CHECK (
-        status IN ('blocked_configuration', 'payload_expired')
-        OR (
-            endpoint_id IS NOT NULL
-            AND target_url IS NOT NULL
-            AND signing_secret_ciphertext IS NOT NULL
-        )
+        (status = 'accepted'
+            AND provider_message_id IS NOT NULL
+            AND accepted_at IS NOT NULL
+            AND last_error_json IS NULL)
+        OR (status <> 'accepted'
+            AND provider_message_id IS NULL
+            AND accepted_at IS NULL)
     ),
-    FOREIGN KEY (account_id, endpoint_id)
-        REFERENCES outbound_endpoints(account_id, id) ON DELETE RESTRICT,
+    CHECK (
+        (status IN ('expired', 'cancelled') AND variables_ciphertext IS NULL)
+        OR (status IN (
+            'pending', 'processing', 'waiting_configuration', 'retry_scheduled', 'failed'
+        ) AND variables_ciphertext IS NOT NULL)
+        OR status = 'accepted'
+    ),
+    CHECK (
+        (status = 'accepted' AND variables_expires_at IS NOT NULL)
+        OR (status <> 'accepted' AND variables_expires_at IS NULL)
+    ),
     FOREIGN KEY (account_id, customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, license_id)
-        REFERENCES licenses(account_id, id) ON DELETE RESTRICT
+        REFERENCES customers(account_id, id) ON DELETE RESTRICT
 );
 
-CREATE INDEX idx_outbound_deliveries_status_schedule
-    ON outbound_deliveries(account_id, status, next_attempt_at, locked_until, created_at);
+CREATE INDEX idx_email_deliveries_status_schedule
+    ON email_deliveries(account_id, status, next_attempt_at, locked_until, created_at);
 
-CREATE INDEX idx_outbound_deliveries_license
-    ON outbound_deliveries(account_id, license_id, created_at DESC);
+CREATE INDEX idx_email_deliveries_customer
+    ON email_deliveries(account_id, customer_id, created_at DESC);
 
-CREATE INDEX idx_outbound_deliveries_customer
-    ON outbound_deliveries(account_id, customer_id, created_at DESC);
+CREATE INDEX idx_email_deliveries_payload_retention
+    ON email_deliveries(variables_expires_at, id)
+    WHERE status = 'accepted' AND variables_ciphertext IS NOT NULL;
 
 -- 用途：保存管理员在 Offer 激活前发起的真实 Sandbox Checkout 闭环验证。
 -- 机制：只保存一次性验证 Token 哈希并绑定 draft Sandbox Offer；已验签交易创建不可激活 License 和真实 Delivery，只有 Delivery accepted 才 completed，身份字段由 Trigger 禁止改绑或延长。
@@ -1081,7 +1057,8 @@ CREATE TABLE billing_checkout_verifications (
             'delivery_pending',
             'completed',
             'needs_attention',
-            'expired'
+            'expired',
+            'cancelled'
         )),
     external_transaction_id TEXT,
     license_id TEXT,
@@ -1107,22 +1084,14 @@ CREATE TABLE billing_checkout_verifications (
         (status = 'completed' AND completed_at IS NOT NULL)
         OR (status <> 'completed' AND completed_at IS NULL)
     ),
-    CHECK (
-        status <> 'expired'
-        OR (
-            external_transaction_id IS NULL
-            AND license_id IS NULL
-            AND delivery_id IS NULL
-        )
-    ),
     FOREIGN KEY (account_id, billing_offer_id)
         REFERENCES billing_offers(account_id, id) ON DELETE RESTRICT,
     FOREIGN KEY (account_id, requested_by_user_id)
         REFERENCES users(account_id, id) ON DELETE RESTRICT,
     FOREIGN KEY (account_id, license_id)
         REFERENCES licenses(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, license_id, delivery_id)
-        REFERENCES outbound_deliveries(account_id, license_id, id) ON DELETE RESTRICT
+    FOREIGN KEY (account_id, delivery_id)
+        REFERENCES email_deliveries(account_id, id) ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX uq_billing_checkout_verifications_transaction
@@ -1134,37 +1103,6 @@ CREATE INDEX idx_billing_checkout_verifications_status_expiry
 
 CREATE INDEX idx_billing_checkout_verifications_offer
     ON billing_checkout_verifications(account_id, billing_offer_id, completed_at DESC);
-
--- 用途：逐次记录 Outbound Delivery 的实际 HTTP 发送结果，提供可回溯的网络诊断历史。
--- 机制：同一 Delivery 的 Attempt 序号唯一且递增，区分首次、自动和人工重试；保留 HTTP 状态、脱敏响应或原始传输错误，不用汇总错误覆盖历史。
-CREATE TABLE outbound_attempts (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    delivery_id TEXT NOT NULL,
-    attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
-    attempt_source TEXT NOT NULL
-        CHECK (attempt_source IN ('initial', 'automatic_retry', 'manual_retry')),
-    outcome TEXT NOT NULL
-        CHECK (outcome IN ('accepted', 'http_error', 'transport_error', 'timeout')),
-    http_status INTEGER,
-    response_body_redacted TEXT,
-    transport_error_code TEXT,
-    transport_error_detail TEXT,
-    started_at TEXT NOT NULL,
-    completed_at TEXT NOT NULL,
-    duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
-    CHECK (
-        (attempt_number = 1 AND attempt_source = 'initial')
-        OR (attempt_number > 1 AND attempt_source IN ('automatic_retry', 'manual_retry'))
-    ),
-    UNIQUE (account_id, id),
-    UNIQUE (delivery_id, attempt_number),
-    FOREIGN KEY (account_id, delivery_id)
-        REFERENCES outbound_deliveries(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_outbound_attempts_delivery
-    ON outbound_attempts(account_id, delivery_id, attempt_number);
 
 -- 用途：记录管理员、Customer 和系统对安全或业务状态的关键操作。
 -- 机制：Actor 类型决定必须关联哪一种身份，资源和 request ID 串联调用链；详情只保存经过字段级脱敏的合法 JSON，服务层按只追加日志使用。
@@ -1285,6 +1223,39 @@ WHEN EXISTS (
 )
 BEGIN
     SELECT RAISE(ABORT, 'verified_billing_offer_mapping_immutable');
+END;
+
+CREATE TRIGGER trg_licenses_manual_issue_invariant
+BEFORE INSERT ON licenses
+WHEN NEW.source = 'manual'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM license_plans AS plan
+    JOIN products AS product
+      ON product.account_id = plan.account_id
+     AND product.id = plan.product_id
+    JOIN customers AS customer
+      ON customer.account_id = plan.account_id
+     AND customer.id = NEW.customer_id
+    WHERE plan.account_id = NEW.account_id
+      AND plan.id = NEW.plan_id
+      AND plan.product_id = NEW.product_id
+      AND plan.revision = NEW.plan_revision
+      AND plan.status = 'active'
+      AND product.status = 'active'
+      AND customer.status = 'active'
+      AND (
+        NEW.credential_mode <> 'signed'
+        OR EXISTS (
+          SELECT 1 FROM signing_keys AS signing_key
+          WHERE signing_key.account_id = NEW.account_id
+            AND signing_key.product_id = NEW.product_id
+            AND signing_key.status = 'active'
+        )
+      )
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'LICENSE_MANUAL_ISSUE_INVARIANT');
 END;
 
 CREATE TRIGGER trg_licenses_payment_environment_on_insert

@@ -234,26 +234,21 @@ Inbound Event 是支付平台发送的不可变事实。Fulfillment 是 LicenKit
 
 同一个支付事件可以被多次投递，但只能产生一次业务结果。接收路由先绑定具体 Billing Provider，事件幂等身份由 `billing_provider_id + external_event_id` 唯一确定；支付产生 License 时还使用 `billing_provider_id + external_transaction_id` 作为业务结果唯一键，防止不同事件重复履约同一交易。
 
-### 2.16 Outbound Endpoint、Delivery 与 Attempt
+### 2.16 Email Integration、Template Binding 与 Delivery
 
-- **Outbound Endpoint**：客户配置的 Webhook 接收地址；
-- **Delivery**：一条需要可靠送达的逻辑消息；
-- **Attempt**：Delivery 的一次 HTTP 请求尝试。
+- **Email Integration**：账户对邮件 Provider 的连接，保存加密凭证、默认发件人、重试预算和状态；V1 只支持 `resend`；
+- **Email Template Binding**：把代码中稳定的邮件类型与合同版本绑定到 Provider Template ID/Alias；
+- **Email Delivery**：一封业务邮件的收件人、加密事件变量、当前状态、总尝试次数和最近一次诊断。
 
-通知端点类型分为：
+V1 的邮件合同只有 `customer.license_issued@1`、`customer.license_recovered@1`、`customer.license_security_reset@1` 和 `customer.portal_access_requested@1`。正式主题、HTML、文本和模板版本归 Provider 所有；LicenKit 在代码中管理变量合同，在数据库中保存当前外部模板引用和可靠投递状态，不在运行时渲染正式邮件。
 
-- `notification_gateway`：请求外部系统发送发码、找回等客户邮件；
-- `event_subscriber`：把 License、激活或订阅事件广播给客户系统。
-
-V1 对每个账户只允许一个启用中的 `notification_gateway`，避免一次业务动作发送多封客户邮件；业务事件订阅端点可以有多个。
-
-一条 Delivery 默认最多执行 4 次 HTTP Attempt：首次请求加 3 次自动重试。2xx 表示接收方已可靠接管任务，此时立即清除敏感负载；未成功的敏感负载最长保留 24 小时，Magic Link 还受其更短的 Challenge 有效期限制。
+Email Delivery 创建时保存事件发生时才能确定的变量值；发送或重发时读取最新 Integration/Binding。Provider Send API 成功且返回有效 Message ID 后才标记 `accepted`；这只表示 Provider 接受了请求，不表示最终送达、进入收件箱或已读。每次发送结果不另建 Attempt 行。
 
 ### 2.17 System Issue（系统问题）
 
-System Issue 表示需要管理员处理、并可能同时影响多条任务的共享能力故障，例如某个 Billing Provider 的 `customer_read` API Key 无效或缺少权限。它不是异常日志，也不替代 Inbound Event：事件仍保存自己的状态、原始错误和业务结果，System Issue 只提供去重后的当前告警、受影响事件集合和修复入口。
+System Issue 是按 Account 隔离、按来源和错误码去重的被动错误收件箱。它展示 Billing、Webhook 和 Email 链路的最近诊断、发生次数与时间，并提供“待处理/已处理”的人工提示状态。这个状态不代表业务恢复；同一错误再次发生时会重新变为待处理。Issue 不关联处理任务，也不提供恢复或重试动作。
 
-同一账户、Billing Provider、能力和问题代码只存在一条 System Issue。重复 `401/403` 增加发生次数并更新最近诊断；管理员修复后标记 resolved；之后再次出现则重新打开同一行。管理员关闭 System Issue 不会删除或清空既有事件错误，是否重新处理受影响事件是独立、显式的选择。
+Inbound Event 和 Email Delivery 是各自处理状态的唯一权威：Event 失败后从 Event 页面 Replay，邮件失败后从 Delivery 或邮件配置页面 Retry。System Issue 的存在或不存在都不能阻止业务处理，也不能替代原对象保存的错误。邮件配置测试即时返回结果，不持久化为 Issue 或门禁。
 
 ## 3. 领域不变量
 
@@ -271,7 +266,7 @@ System Issue 表示需要管理员处理、并可能同时影响多条任务的�
 10. `fixed_term` 和 `subscription` 不使用 `updates_until` 叠加第二套版本期限。
 11. License 状态、到期时间、版本资格和最大激活数由服务端条款与 SDK 共同执行，客户端调用方不能自行扩大。
 12. 支付履约和客户通知是两个独立状态；授权创建成功不等于邮件已经送达。
-13. 出站 Webhook 返回 2xx 只表示接收方接受请求，不表示邮件进入收件箱。
+13. 邮件 Provider 返回有效 Message ID 只表示 Provider 接受请求，不表示邮件最终送达或进入收件箱。
 14. 所有失败必须保留原始渠道、事件 ID、HTTP 状态和可诊断错误，不得归一化成无来源的“处理失败”。
 15. 一个 Customer 只能访问 `customer_id` 属于自己的 License、Subscription、Activation 和相关操作。
 16. Magic Link 只能消费一次；过期、已消费、已吊销或 Customer 被禁用时不能建立 Customer Session。
@@ -293,13 +288,13 @@ System Issue 表示需要管理员处理、并可能同时影响多条任务的�
 32. 普通支付履约只接受一个 active Offer 的 Price，数量固定为 1；验签事件中的交易项目不满足该结构时进入 `needs_attention`，不得选择第一项或按总金额猜测授权。draft Sandbox Offer 只允许第 36 条定义的管理员验证例外。
 33. 参考产品页和用户自定义产品页静态维护展示内容、Client-side Token 与 Price ID，并直接调用 Paddle.js；Webhook Secret、API Key、通知地址和内部错误细节不能进入前端。
 34. 浏览器的 Checkout 完成事件和成功跳转只表示界面流程完成，不能作为创建 Customer、License、Subscription 或 Delivery 的事实来源；只有已验签并持久化的支付事件可以履约。
-35. Offer 激活是 LicenKit 自动履约门禁：Notification Gateway、最小 Paddle 事件合同、调度器、需要的签名密钥和真实 Sandbox 端到端验收未通过时不能激活；静态产品页不读取运行期门禁，异常付款必须进入可诊断、可恢复状态。
+35. Offer 激活是 LicenKit 自动履约门禁：active Email Integration、`customer.license_issued@1` 当前 Binding、最小 Paddle 事件合同、调度器、需要的签名密钥和真实 Sandbox 端到端验收未通过时不能激活；即时邮件配置测试帮助管理员验证设置，但不作为持久化门禁。找回、安全重置和 Magic Link Binding 各自可测试并展示状态，但不参与该门禁。静态产品页不读取运行期门禁，异常付款必须进入可诊断、可恢复状态。
 36. Product 只有一个公开收款环境。普通支付的 Provider 环境必须与 Product 一致且命中 active Offer；唯一例外是持有未过期、未消费管理员验证令牌的 draft Sandbox Offer，且该路径只能生成永久不可激活的验证 License。
 37. `is_checkout_verification=1` 的 License 不能激活、恢复或转为普通 License；后续订阅事件也不能把它变为 active。测试证据不能成为客户权益，测试卡不能产生正式可用授权。
 38. Magic Link 请求必须先完成 Turnstile 服务端校验；客户端 Widget 成功不能单独放行请求。
 39. Magic Link 冷却命中时不得创建新 Challenge/Delivery，也不得吊销上一条仍有效链接；冷却判断和创建必须通过 D1 条件写入原子完成。
-40. Inbound Event 的错误和 System Issue 是两层事实；解决共享问题不得覆盖、删除或伪造单个事件的处理结果。
-41. “自动重试受影响事件”只能把仍可重放的原始 Inbound Event 重新交给完整状态机；不能直接发码，也不能把单次 Provider API 读取成功当作履约完成。
+40. Inbound Event、Email Delivery 和 System Issue 是三类不同事实；System Issue 只提示，不得覆盖、删除或控制原对象的状态和错误。
+41. Event Replay 与 Delivery Retry 必须从原对象重新进入各自完整状态机；不能从 System Issue 直接发码、发邮件或批量改变任务状态。
 
 ## 4. 状态所有权
 
@@ -315,7 +310,7 @@ System Issue 表示需要管理员处理、并可能同时影响多条任务的�
 | Customer 是否可以访问某份 License | License 的 `customer_id` 与当前 Customer Session |
 | 自动续费、取消和支付方式 | 支付平台；LicenKit 只创建托管页面会话并接收后续 Webhook |
 | 本地签名授权是否可用 | `signed` 模式下客户端对 Signed License Token 的签名、设备和有效期验证 |
-| 邮件请求是否被接收 | Notification Webhook HTTP 响应与 Delivery 记录 |
+| 邮件请求是否被接收 | Email Provider Send API 返回的 Message ID 与 Email Delivery 记录 |
 | 邮件是否最终投递到邮箱 | 外部邮件系统；V1 不宣称掌握该状态 |
 
 ## 5. 显式操作与普通编辑

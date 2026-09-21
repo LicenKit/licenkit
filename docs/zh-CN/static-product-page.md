@@ -31,7 +31,7 @@ VITE_PADDLE_ENVIRONMENT=live
 VITE_PADDLE_CLIENT_SIDE_TOKEN=live_...
 ```
 
-`accountSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中显式填写的 `siteUrl` 用于生成邮件 Magic Link；当前要求它与 LicenKit `appUrl` 同源，站点通过相对路径 `/api/v1` 使用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Notification Gateway Secret 和验证令牌不能进入源码、静态构建产物、日志或分析事件。
+`accountSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中显式填写的 `siteUrl` 用于生成邮件 Magic Link；当前要求它与 LicenKit `appUrl` 同源，站点通过相对路径 `/api/v1` 使用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断、Delivery 敏感负载和验证令牌不能进入源码、静态构建产物、日志或分析事件。
 
 同一个 Paddle Price ID 必须在 LicenKit Admin 中创建 Billing Offer，关联唯一 Billing Provider、Product、License Plan 和购买类型。前端不需要 LicenKit Offer ID、Product ID 或 License Plan ID；后端从已验签 Webhook 中取得 Price ID 后执行关联。
 
@@ -73,10 +73,10 @@ Sandbox 与 Live 必须分别设置 Paddle Default Payment Link。Live 产品页
 - Webhook 接收端先验签并持久化事件，再返回 2xx；
 - 暂时依赖失败保持 `pending` 并由 Scheduled Worker 重试；
 - 合同不满足进入 `needs_attention`，保留完整诊断；
-- License 已创建但通知未配置时创建 `blocked_configuration` Delivery；
+- License 已创建但 Email Integration/Binding 未就绪时创建 `waiting_configuration` Email Delivery；
 - 管理端必须提供告警、诊断和显式恢复动作。
 
-Offer 激活仍要求完整 Readiness，用于证明首次上线前 Product/Plan/Provider、事件合同、通知、调度器、签名密钥和真实 Sandbox 闭环均已就绪；激活状态不代表静态页面能够感知之后的运行期退化。
+Offer 激活仍要求购买闭环 Readiness，用于证明首次上线前 Product/Plan/Provider、Paddle 事件合同、active Email Integration、`customer.license_issued@1` 当前 Binding、调度器、签名密钥和真实 Sandbox 闭环均已就绪。邮件配置测试是管理员即时操作，结果和 System Issue 都不形成持久化门禁。找回、安全重置和 Magic Link Binding 可分别测试并在管理端展示状态，但不参与 Offer 激活门禁；激活状态不代表静态页面能够感知之后的运行期退化。
 
 ## 5. Admin Sandbox 验证
 
@@ -104,7 +104,7 @@ customData: {
 2. 产品与方案来自静态源码，点击购买使用对应 Paddle Price ID；
 3. Sandbox 与 Live Token/环境不匹配时 fail-fast；
 4. 每次 Checkout 只包含一个 Price、数量 1；
-5. API Key、Webhook Secret 和验证令牌不进入产品页构建产物；
+5. Paddle API Key、Webhook Secret、Email Provider API Key 和验证令牌不进入产品页构建产物；
 6. Admin 验证只接受服务端返回的单个 draft Sandbox Price，并在打开后清除内存令牌；
 7. Webhook 对多行、多数量、未知 Price、draft Offer、环境不一致和重复 Transaction 均拒绝发正式 License；
 8. 静态页面在 LicenKit 暂时不可用时产生的付款能够通过 Paddle 重试、事件持久化或管理员重放进入同一恢复链路；

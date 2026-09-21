@@ -62,13 +62,13 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
 export function statusTone(status?: string): "success" | "warning" | "danger" | "info" | "neutral" {
   if (!status) return "neutral";
   if (["active", "ready", "accepted", "processed", "completed", "linked"].includes(status)) return "success";
-  if (["draft", "pending", "processing", "past_due", "stale", "needs_attention", "open", "blocked_configuration"].includes(status)) return "warning";
-  if (["failed", "revoked", "disabled", "not_ready", "payload_expired", "configuration_error", "email_mismatch"].includes(status)) return "danger";
+  if (["draft", "pending", "processing", "retry_scheduled", "waiting_configuration", "past_due", "stale", "needs_attention", "open"].includes(status)) return "warning";
+  if (["failed", "expired", "cancelled", "revoked", "disabled", "not_ready", "configuration_error", "email_mismatch"].includes(status)) return "danger";
   return "info";
 }
 
-export function StatusBadge({ status }: { status?: string | null }) {
-  return <Badge tone={statusTone(status ?? undefined)}>{status || "—"}</Badge>;
+export function StatusBadge({ status, label }: { status?: string | null; label?: string }) {
+  return <Badge tone={statusTone(status ?? undefined)}>{label || status || "—"}</Badge>;
 }
 
 export function Modal({ open, title, description, children, onClose, wide = false }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean }) {

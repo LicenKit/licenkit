@@ -43,7 +43,8 @@ interface ReadinessRow {
   pending_deliveries: number;
   blocked_deliveries: number;
   active_providers: number;
-  active_notification_gateways: number;
+  active_email_integrations: number;
+  active_email_template_bindings: number;
 }
 
 systemRouter.get("/readiness", async (c) => {
@@ -56,10 +57,16 @@ systemRouter.get("/readiness", async (c) => {
            (SELECT COUNT(*) FROM system_settings WHERE id = 'current') AS initialized,
            (SELECT COUNT(*) FROM inbound_events WHERE status IN ('pending', 'processing')) AS pending_events,
            (SELECT COUNT(*) FROM inbound_events WHERE status = 'needs_attention') AS needs_attention_events,
-           (SELECT COUNT(*) FROM outbound_deliveries WHERE status IN ('pending', 'processing', 'retry_scheduled')) AS pending_deliveries,
-           (SELECT COUNT(*) FROM outbound_deliveries WHERE status IN ('blocked_configuration', 'failed', 'payload_expired')) AS blocked_deliveries,
+           (SELECT COUNT(*) FROM email_deliveries WHERE status IN ('pending', 'processing', 'retry_scheduled')) AS pending_deliveries,
+           (SELECT COUNT(*) FROM email_deliveries WHERE status IN ('waiting_configuration', 'failed', 'expired')) AS blocked_deliveries,
            (SELECT COUNT(*) FROM billing_providers WHERE status = 'active') AS active_providers,
-           (SELECT COUNT(*) FROM outbound_endpoints WHERE endpoint_type = 'notification_gateway' AND status = 'active') AS active_notification_gateways`,
+           (SELECT COUNT(*) FROM email_integrations WHERE status = 'active') AS active_email_integrations,
+           (SELECT COUNT(*)
+            FROM email_template_bindings AS binding
+            JOIN email_integrations AS integration
+              ON integration.account_id = binding.account_id
+             AND integration.id = binding.email_integration_id
+	            WHERE integration.status = 'active' AND binding.status = 'active') AS active_email_template_bindings`,
       )
       .all<ReadinessRow>();
     row = result.results[0];
@@ -119,7 +126,8 @@ systemRouter.get("/readiness", async (c) => {
         },
         capabilities: {
           activeBillingProviders: Number(row?.active_providers || 0),
-          activeNotificationGateways: Number(row?.active_notification_gateways || 0),
+          activeEmailIntegrations: Number(row?.active_email_integrations || 0),
+          activeEmailTemplateBindings: Number(row?.active_email_template_bindings || 0),
         },
       },
     },

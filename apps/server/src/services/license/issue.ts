@@ -3,7 +3,7 @@ import { AppError, NotFoundError } from "../../middleware/error";
 import { generateLicenseKey, hashLicenseKey } from "../../infra/crypto";
 import { normalizeCustomerEmail } from "../../domain/license/credentials";
 import { resolveManualTerms, type LicensePlanSnapshot } from "../../domain/license/terms";
-import { prepareNotificationDelivery } from "../delivery/outbox";
+import { prepareEmailNotificationDelivery } from "../delivery/outbox";
 import { prepareLicenseAudit, type LicenseActor } from "./audit";
 import { firstD1 } from "./d1";
 
@@ -104,24 +104,23 @@ export async function issueManualLicense(input: {
   const licenseId = `lic_${ulid().toLowerCase()}`;
   const licenseKey = generateLicenseKey("LK");
   const keyHash = await hashLicenseKey(licenseKey);
-  const delivery = await prepareNotificationDelivery({
+  const delivery = await prepareEmailNotificationDelivery({
     db: input.db,
     env: input.env,
     accountId: input.accountId,
     customerId,
-    licenseId,
-    eventType: "customer.license_issued",
+    notificationType: "customer.license_issued",
+    contractVersion: 1,
     recipientEmail: email,
-    payload: {
+    variables: {
       product_id: plan.product_id,
       product_name: plan.product_name,
       license_id: licenseId,
       license_key: licenseKey,
       license_model: terms.licenseModel,
-      expires_at: terms.expiresAt,
-      updates_until: terms.updatesUntil,
+      ...(terms.expiresAt ? { expires_at: terms.expiresAt } : {}),
+      ...(terms.updatesUntil ? { updates_until: terms.updatesUntil } : {}),
     },
-    idempotencyKey: `license-issued:${licenseId}:key-version:1`,
     now,
   });
 
@@ -141,29 +140,11 @@ export async function issueManualLicense(input: {
        source_external_transaction_id, is_checkout_verification, status,
        status_reason, expires_at, updates_until, suspended_at, revoked_at,
        created_at, updated_at
-     ) SELECT
+     ) VALUES (
        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
        1, NULL, 'manual', NULL, NULL, 0, 'active', NULL, ?15, ?16, NULL, NULL,
        ?17, ?17
-     FROM license_plans lp
-     JOIN products p ON p.account_id = lp.account_id AND p.id = lp.product_id
-     JOIN customers c ON c.account_id = lp.account_id AND c.id = ?3
-     WHERE lp.account_id = ?2
-       AND lp.id = ?5
-       AND lp.product_id = ?4
-       AND lp.revision = ?6
-       AND lp.status = 'active'
-       AND p.status = 'active'
-       AND c.status = 'active'
-       AND (
-         ?9 <> 'signed'
-         OR EXISTS (
-           SELECT 1 FROM signing_keys sk
-           WHERE sk.account_id = ?2
-             AND sk.product_id = ?4
-             AND sk.status = 'active'
-         )
-       )`
+     )`
   ).bind(
     licenseId,
     input.accountId,
@@ -209,7 +190,18 @@ export async function issueManualLicense(input: {
     now,
   }));
 
-  await input.db.batch(statements);
+  try {
+    await input.db.batch(statements);
+  } catch (error) {
+    if (String(error).includes("LICENSE_MANUAL_ISSUE_INVARIANT")) {
+      throw new AppError(
+        "LICENSE_MANUAL_ISSUE_STATE_CHANGED",
+        "The Product, License Plan, Customer, or signing-key state changed before issuance completed.",
+        409,
+      );
+    }
+    throw error;
+  }
   return {
     license: {
       id: licenseId,

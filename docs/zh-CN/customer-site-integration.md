@@ -32,7 +32,7 @@ LicenKit 根据 `siteUrl` 生成以下 Magic Link：
 | Customer Portal 首页 | 读取当前 Customer 和 License 列表；未认证时引导到 Magic Link 请求页。 |
 | License 详情页 | 展示 License 条款、Activation 和 Subscription；只显示服务端允许的动作。 |
 | 最近认证页面或状态 | 服务端返回 `CUSTOMER_RECENT_AUTH_REQUIRED` 时重新请求 Magic Link，不能用普通确认弹窗替代认证。 |
-| 敏感结果展示 | 注册码找回或安全重置成功后一次性展示新注册码，同时说明通知 Delivery 的当前状态；不得写入日志或浏览器持久存储。 |
+| 敏感结果展示 | 注册码找回或安全重置成功后一次性展示新注册码，同时说明 Email Delivery 的当前状态；`accepted` 只能表述为“邮件 Provider 已接收”，不能表述为“已送达”。不得写入日志或浏览器持久存储。 |
 
 支付方式、取消订阅和账单资料不在站点内编辑。页面只能请求 LicenKit 创建支付平台 Portal Session，然后跳转返回的短期 URL。
 
@@ -66,7 +66,7 @@ LicenKit 根据 `siteUrl` 生成以下 Magic Link：
 | 方法与路径 | 用途 |
 | --- | --- |
 | `POST /customer/licenses/:licenseId/activations/:activationId/deactivate` | 释放一个仍为 active 的设备席位。 |
-| `POST /customer/licenses/:licenseId/recover-key` | 轮换注册码但保留现有 Activation；响应一次性返回新注册码并创建通知 Delivery。 |
+| `POST /customer/licenses/:licenseId/recover-key` | 轮换注册码但保留现有 Activation；响应一次性返回新注册码并创建 Email Delivery。 |
 | `POST /customer/licenses/:licenseId/security-reset` | 轮换注册码并执行安全重置。 |
 | `POST /customer/licenses/:licenseId/subscription/portal-session` | 为支付平台管理的订阅创建短期 Portal URL。 |
 
@@ -99,8 +99,10 @@ Cookie 鉴权写操作必须把 CSRF Cookie 原值放入 `X-CSRF-Token` Header�
 5. Token、新注册码和完整 Portal URL 不写入日志、分析事件、localStorage 或 sessionStorage；
 6. 无效、过期、已消费和已吊销 Token 都按服务端原始错误处理，不在前端归一化成无法诊断的通用错误。
 
+Magic Link 请求的 anti-enumeration 边界也在服务端：Turnstile Siteverify 通过后、查询 Customer 前，服务端先解密并校验当前 active Email Integration 的 Provider 凭证。Customer 不存在、命中冷却、真实 Customer 产生 `waiting_configuration` Delivery 或成功创建新链接时，前端都只能收到相同的 `accepted=true` 公开语义，不能根据 Delivery 细节推断邮箱是否存在。
+
 ## 6. 产品页与 Checkout
 
-LicenKit 不提供 Public Checkout API 或 Web Checkout SDK。产品页静态维护 Paddle Client-side Token、环境和 Price ID，直接调用 Paddle.js。Client-side Token 和 Price ID 可以公开；Paddle API Key、Webhook Secret、Notification Gateway Secret 和验证令牌不能进入前端。
+LicenKit 不提供 Public Checkout API 或 Web Checkout SDK。产品页静态维护 Paddle Client-side Token、环境和 Price ID，直接调用 Paddle.js。Client-side Token 和 Price ID 可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断、Delivery 敏感负载和验证令牌不能进入前端。
 
-浏览器 Checkout 完成事件只用于页面反馈。只有 Paddle 已验签并持久化的 Webhook 可以创建或更新 Customer、License、Subscription 和通知 Delivery。详细规则见[静态产品页与 Paddle Checkout](./static-product-page.md)。
+浏览器 Checkout 完成事件只用于页面反馈。只有 Paddle 已验签并持久化的 Webhook 可以创建或更新 Customer、License、Subscription 和 Email Delivery。详细规则见[静态产品页与 Paddle Checkout](./static-product-page.md)。

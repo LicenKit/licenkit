@@ -19,6 +19,7 @@ import { reconcileBillingCustomer } from "../../services/billing/customer-sync";
 import { prepareLicenseKeyRotation } from "../../services/license/key-rotation";
 import { sha256Hex } from "../../infra/crypto";
 import { BillingProcessingError } from "../../infra/billing/errors";
+import { dispatchDelivery } from "../../infra/delivery/dispatcher";
 
 export const adminBillingRouter = new Hono<AppContext>();
 
@@ -422,6 +423,7 @@ adminBillingRouter.post("/offers/:offerId/activate", requireRole(["owner", "admi
     throw new AppError("BILLING_OFFER_NOT_DRAFT", "Only a draft Offer can be activated.", 409);
   }
   const readiness = await evaluateBillingOfferReadiness(c.env.DB, row, {
+    env: c.env,
     activation: true,
   });
   if (!readiness.ready) {
@@ -527,6 +529,7 @@ adminBillingRouter.post("/adjustments/:adjustmentId/resolve", requireRole(["owne
   }
   const now = new Date();
   const statements: D1PreparedStatement[] = [];
+  let rotationDelivery: { id: string; status: string } | null = null;
   if (adjustment.license_id && input.action === "reinstate") {
     statements.push(c.env.DB.prepare(
       `UPDATE licenses SET status = 'active', status_reason = NULL, suspended_at = NULL, updated_at = ?1
@@ -553,6 +556,7 @@ adminBillingRouter.post("/adjustments/:adjustmentId/resolve", requireRole(["owne
       now,
     });
     statements.push(...rotation.statements);
+    rotationDelivery = rotation.delivery;
   }
   statements.push(c.env.DB.prepare(
     `UPDATE billing_adjustments
@@ -564,6 +568,26 @@ adminBillingRouter.post("/adjustments/:adjustmentId/resolve", requireRole(["owne
     action: input.action, reason: input.reason, licenseId: adjustment.license_id,
   }));
   await c.env.DB.batch(statements);
+  if (rotationDelivery?.status === "pending") {
+    try {
+      await dispatchDelivery({
+        db: c.env.DB,
+        env: c.env,
+        accountId: account,
+        deliveryId: rotationDelivery.id,
+      });
+    } catch (error) {
+      // The Adjustment, key rotation, and pending Delivery are already durable.
+      // The shared Scheduler owns recovery; never turn a Provider-side failure
+      // into an apparent rollback of those committed facts.
+      console.error("Billing adjustment email Delivery immediate trigger failed", {
+        code: "EMAIL_DELIVERY_IMMEDIATE_TRIGGER_FAILED",
+        accountId: account,
+        deliveryId: rotationDelivery.id,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+    }
+  }
   return c.json({ success: true, data: { id: adjustment.id, reviewStatus: "resolved", resolutionAction: input.action } });
 });
 

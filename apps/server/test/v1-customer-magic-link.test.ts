@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { AppContext } from "../src/types";
 import { errorHandler } from "../src/middleware/error";
 import { customerAuthRouter } from "../src/routes/customer-auth.routes";
-import { decryptEnvelopeV1 } from "../src/infra/delivery/crypto";
+import { decryptEnvelopeV1, encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 function customerAuthApp() {
@@ -55,6 +55,7 @@ describe("V1 Customer Magic Link request contract", () => {
   async function requestMagicLink(
     email = "buyer@example.test",
     turnstileToken = `turnstile-${crypto.randomUUID()}`,
+    executionContext?: ExecutionContext,
   ): Promise<Response> {
     return customerAuthApp().request(
       "https://license.example.test/api/v1/customer/auth/magic-link",
@@ -68,7 +69,44 @@ describe("V1 Customer Magic Link request contract", () => {
         body: JSON.stringify({ accountSlug: "magic", email, turnstileToken }),
       },
       testEnv.env,
+      executionContext,
     );
+  }
+
+  async function configureReadyEmail(): Promise<{
+    integrationId: string;
+    bindingId: string;
+  }> {
+    const integrationId = "emi_magic";
+    const bindingId = "etb_magic";
+    const now = new Date().toISOString();
+    const credentialCiphertext = await encryptEnvelopeV1(
+      JSON.stringify({ version: 1, apiKey: "re_magic_secret" }),
+      testEnv.env,
+      {
+        accountId,
+        table: "email_integrations",
+        rowId: integrationId,
+        field: "credential_ciphertext",
+      },
+    );
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO email_integrations (
+         id, account_id, provider, name, credential_ciphertext,
+         default_from_email, default_from_name, max_automatic_attempts,
+         status, created_at, updated_at
+       ) VALUES (?, ?, 'resend', 'Primary', ?, 'licenses@example.test',
+         'Magic Link', 4, 'active', ?, ?)`,
+    ).run(integrationId, accountId, credentialCiphertext, now, now);
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO email_template_bindings (
+         id, account_id, email_integration_id, notification_type,
+         contract_version, provider_template_ref,
+         status, created_at, updated_at
+       ) VALUES (?, ?, ?, 'customer.portal_access_requested', 1,
+         'portal-access-v1', 'active', ?, ?)`,
+    ).run(bindingId, accountId, integrationId, now, now);
+    return { integrationId, bindingId };
   }
 
   function challengeRows(): any[] {
@@ -80,24 +118,24 @@ describe("V1 Customer Magic Link request contract", () => {
 
   function deliveryRows(): any[] {
     return testEnv.sqliteDb.prepare(
-      `SELECT id, status, payload_ciphertext, payload_cleared_at, created_at
-       FROM outbound_deliveries
-       WHERE event_type = 'customer.portal_access_requested'
+      `SELECT id, status, variables_ciphertext, created_at
+       FROM email_deliveries
+       WHERE notification_type = 'customer.portal_access_requested'
        ORDER BY created_at, id`
     ).all() as any[];
   }
 
   async function magicToken(deliveryId: string): Promise<string> {
     const row = testEnv.sqliteDb.prepare(
-      "SELECT payload_ciphertext FROM outbound_deliveries WHERE account_id = ? AND id = ?"
+      "SELECT variables_ciphertext FROM email_deliveries WHERE account_id = ? AND id = ?"
     ).get(accountId, deliveryId) as any;
-    const payload = JSON.parse(await decryptEnvelopeV1(row.payload_ciphertext, testEnv.env, {
+    const variables = JSON.parse(await decryptEnvelopeV1(row.variables_ciphertext, testEnv.env, {
       accountId,
-      table: "outbound_deliveries",
+      table: "email_deliveries",
       rowId: deliveryId,
-      field: "payload_ciphertext",
+      field: "variables_ciphertext",
     }));
-    return decodeURIComponent(new URL(payload.data.access_url).hash.slice("#token=".length));
+    return decodeURIComponent(new URL(variables.access_url).hash.slice("#token=".length));
   }
 
   it("returns the runtime Turnstile Sitekey without caching it", async () => {
@@ -183,6 +221,34 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(deliveryRows()).toEqual([]);
   });
 
+  it("keeps production responses uniform and leaves the Outbox pending without an ExecutionContext", async () => {
+    await configureReadyEmail();
+    (testEnv.env as any).ENVIRONMENT = "production";
+
+    const unknown = await requestMagicLink(
+      "unknown@example.test",
+      "turnstile-production-unknown",
+    );
+    const known = await requestMagicLink(
+      "buyer@example.test",
+      "turnstile-production-known",
+    );
+
+    expect(unknown.status).toBe(200);
+    expect(known.status).toBe(200);
+    expect(unknown.headers.get("cache-control")).toBe("no-store");
+    expect(known.headers.get("cache-control")).toBe("no-store");
+    expect(await unknown.json()).toEqual({ success: true, data: { accepted: true } });
+    expect(await known.json()).toEqual({ success: true, data: { accepted: true } });
+    expect(challengeRows()).toHaveLength(1);
+    expect(deliveryRows()).toHaveLength(1);
+    expect(deliveryRows()[0]).toMatchObject({
+      status: "pending",
+      variables_ciphertext: expect.any(String),
+    });
+    expect(siteverify).toHaveBeenCalledTimes(2);
+  });
+
   it("fails before email lookup when shared Magic Link timing configuration is invalid", async () => {
     (testEnv.env as any).CUSTOMER_MAGIC_LINK_COOLDOWN_SECONDS = "invalid";
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -196,39 +262,105 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("buyer@example.test");
   });
 
-  it("validates a configured Notification Gateway before email lookup", async () => {
-    const now = new Date().toISOString();
+  it("validates the shared email credential before the private email lookup", async () => {
+    const { integrationId } = await configureReadyEmail();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO outbound_endpoints (
-         id, account_id, endpoint_type, name, url, signing_secret_ciphertext,
-         subscribed_events_json, timeout_ms, max_automatic_attempts, status, created_at, updated_at
-       ) VALUES (
-         'oep_magic_broken', ?, 'notification_gateway', 'Broken Gateway',
-         'https://notify.example.test/hooks', 'not-an-envelope',
-         '["customer.portal_access_requested"]', 10000, 4, 'active', ?, ?
-       )`,
-    ).run(accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO outbound_deliveries (
-         id, account_id, endpoint_id, event_type, idempotency_key, target_url,
-         signing_secret_ciphertext, status, attempt_count, automatic_attempt_count,
-         max_automatic_attempts, accepted_at, created_at, updated_at
-       ) VALUES (
-         'dly_magic_endpoint_test', ?, 'oep_magic_broken', 'endpoint.test',
-         'endpoint.test:magic-broken', 'https://notify.example.test/hooks',
-         'snapshot', 'accepted', 1, 1, 4, ?, ?, ?
-       )`,
-    ).run(accountId, now, now, now);
+      "UPDATE email_integrations SET credential_ciphertext = 'not-an-envelope' WHERE id = ?",
+    ).run(integrationId);
+    const originalPrepare = testEnv.d1.prepare.bind(testEnv.d1);
+    let preflightQuerySeen = false;
+    testEnv.d1.prepare = (query: string) => {
+      if (query.includes("FROM email_integrations AS integration")) {
+        preflightQuerySeen = true;
+      }
+      if (query.includes("FROM customers")) {
+        expect(preflightQuerySeen).toBe(true);
+      }
+      return originalPrepare(query);
+    };
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    const known = await requestMagicLink("buyer@example.test", "turnstile-broken-gateway-known");
-    const unknown = await requestMagicLink("unknown@example.test", "turnstile-broken-gateway-unknown");
+    const known = await requestMagicLink("buyer@example.test", "turnstile-broken-email-known");
+    const unknown = await requestMagicLink("unknown@example.test", "turnstile-broken-email-unknown");
     expect(known.status).toBe(500);
     expect(unknown.status).toBe(500);
     expect((await known.json() as any).error.code).toBe((await unknown.json() as any).error.code);
     expect(challengeRows()).toEqual([]);
     expect(deliveryRows()).toEqual([]);
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("buyer@example.test");
+  });
+
+  it("persists Challenge and Delivery before waitUntil dispatches the Provider request", async () => {
+    await configureReadyEmail();
+    const originalBatch = testEnv.d1.batch.bind(testEnv.d1);
+    let committed = false;
+    testEnv.d1.batch = async (statements: any[]) => {
+      const result = await originalBatch(statements);
+      committed = true;
+      return result;
+    };
+    const providerCalls: Array<{ body: any; committed: boolean }> = [];
+    const requestFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("challenges.cloudflare.com")) {
+        return new Response(JSON.stringify({
+          success: true,
+          action: "customer_magic_link",
+          hostname: "license.example.test",
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      providerCalls.push({
+        body: JSON.parse(String(init?.body)),
+        committed,
+      });
+      return new Response(JSON.stringify({ id: "email_magic_business" }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", requestFetch);
+    const pending: Promise<unknown>[] = [];
+    const executionContext = {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
+      },
+      passThroughOnException() {},
+      props: {},
+    } as unknown as ExecutionContext;
+
+    const response = await requestMagicLink(
+      "buyer@example.test",
+      "turnstile-background-dispatch",
+      executionContext,
+    );
+    expect(response.status).toBe(200);
+    expect(pending).toHaveLength(1);
+    await Promise.all(pending);
+
+    expect(providerCalls).toHaveLength(1);
+    expect(providerCalls[0].committed).toBe(true);
+    expect(providerCalls[0].body.template).toMatchObject({
+      id: "portal-access-v1",
+      variables: {
+        account_name: "Magic Link",
+        expires_at: expect.stringMatching(/Z$/),
+        access_url: expect.stringMatching(
+          /^https:\/\/license\.example\.test\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
+        ),
+      },
+    });
+    expect(Object.keys(providerCalls[0].body.template.variables).sort()).toEqual([
+      "access_url",
+      "account_name",
+      "expires_at",
+    ]);
+    expect(JSON.stringify(providerCalls[0].body)).not.toContain(":null");
+    const acceptedDelivery = testEnv.sqliteDb.prepare(
+      `SELECT status, variables_ciphertext, variables_expires_at FROM email_deliveries
+       WHERE notification_type = 'customer.portal_access_requested'`,
+    ).get() as any;
+    expect(acceptedDelivery.status).toBe("accepted");
+    expect(acceptedDelivery.variables_ciphertext).toBeTruthy();
+    expect(acceptedDelivery.variables_expires_at).toBeTruthy();
   });
 
   it("keeps the current link and Delivery unchanged during the D1 cooldown", async () => {
@@ -240,8 +372,8 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(challengeRows()).toEqual([originalChallenge]);
     expect(deliveryRows()).toEqual([originalDelivery]);
     expect(challengeRows()[0].revoked_at).toBeNull();
-    expect(deliveryRows()[0].status).toBe("blocked_configuration");
-    expect(deliveryRows()[0].payload_ciphertext).toBeTruthy();
+    expect(deliveryRows()[0].status).toBe("waiting_configuration");
+    expect(deliveryRows()[0].variables_ciphertext).toBeTruthy();
   });
 
   it("allows only one concurrent replacement and revokes the old link after the winner exists", async () => {
@@ -264,11 +396,11 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(deliveries).toHaveLength(2);
     expect(challenges.find((row) => row.id === original.id)?.revoked_at).toBeTruthy();
     expect(deliveries.find((row) => row.id === original.delivery_id)).toMatchObject({
-      status: "payload_expired",
-      payload_ciphertext: null,
+      status: "expired",
+      variables_ciphertext: null,
     });
     expect(challenges.filter((row) => row.revoked_at === null)).toHaveLength(1);
-    expect(deliveries.filter((row) => row.status === "blocked_configuration")).toHaveLength(1);
+    expect(deliveries.filter((row) => row.status === "waiting_configuration")).toHaveLength(1);
 
     const consumeOld = await customerAuthApp().request(
       "https://license.example.test/api/v1/customer/auth/magic-link/consume",
@@ -306,9 +438,9 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(deliveryRows()).toHaveLength(1);
     expect(deliveryRows()[0]).toMatchObject({
       id: original.delivery_id,
-      status: "blocked_configuration",
+      status: "waiting_configuration",
     });
-    expect(deliveryRows()[0].payload_ciphertext).toBeTruthy();
+    expect(deliveryRows()[0].variables_ciphertext).toBeTruthy();
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("turnstile-failed-replacement");
 
     const consumeOld = await customerAuthApp().request(

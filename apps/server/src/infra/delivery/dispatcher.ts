@@ -1,24 +1,77 @@
 import { ulid } from "ulid";
-import { computeHmacSha256 } from "../crypto";
+import {
+  buildCustomerPortalAccessUrl,
+  getEmailNotificationContract,
+  validateEmailNotificationVariables,
+  type EmailVariableValue,
+} from "../../domain/email/contracts";
+import { sha256Hex } from "../crypto";
+import {
+  getEmailProviderAdapter,
+  type EmailProviderAdapter,
+  type EmailProviderErrorClassification,
+  type EmailProviderSendInput,
+  type EmailProviderSendResult,
+} from "../email/provider";
+import { createResendEmailProviderAdapter } from "../email/resend";
+import { AppError } from "../../middleware/error";
+import { prepareSystemIssueUpsert } from "../../services/operations/system-issues";
+import {
+  acceptedPayloadExpiration,
+  type SensitiveDeliveryRetentionEnv,
+} from "../../services/delivery/retention";
 import { decryptEnvelopeV1, type DeliveryCryptoEnv } from "./crypto";
-import { OutboundUrlPolicyError, requirePublicHttpsUrl } from "./url-policy";
+
+type FinalDispatchStatus =
+  | "accepted"
+  | "retry_scheduled"
+  | "waiting_configuration"
+  | "failed"
+  | "expired";
 
 interface DeliveryRow {
   id: string;
   account_id: string;
-  target_url: string;
-  signing_secret_ciphertext: string;
-  payload_ciphertext: string;
-  payload_expires_at: string;
+  customer_id: string;
+  notification_type: string;
+  contract_version: number;
+  recipient_email: string;
+  variables_ciphertext: string | null;
+  send_expires_at: string | null;
+  variables_expires_at: string | null;
   attempt_count: number;
-  automatic_attempt_count: number;
-  max_automatic_attempts: number;
-  timeout_ms: number;
+  created_at: string;
+  integration_id: string | null;
+  provider: string | null;
+  credential_ciphertext: string | null;
+  default_from_email: string | null;
+  default_from_name: string | null;
+  reply_to_email: string | null;
+  max_automatic_attempts: number | null;
+  binding_id: string | null;
+  binding_contract_version: number | null;
+  provider_template_ref: string | null;
+  account_slug: string;
+  site_url: string | null;
+}
+
+interface TestConfigurationRow {
+  account_name: string;
+  account_slug: string;
+  site_url: string | null;
+  integration_id: string;
+  provider: string;
+  credential_ciphertext: string;
+  default_from_email: string;
+  default_from_name: string | null;
+  reply_to_email: string | null;
+  binding_id: string;
+  provider_template_ref: string;
 }
 
 export interface DispatchDeliveryInput {
   db: D1Database;
-  env: DeliveryCryptoEnv;
+  env: DeliveryCryptoEnv & SensitiveDeliveryRetentionEnv;
   accountId: string;
   deliveryId: string;
   workerId?: string;
@@ -29,22 +82,183 @@ export interface DispatchDeliveryInput {
 
 export interface DispatchDeliveryResult {
   claimed: boolean;
-  status?: "accepted" | "retry_scheduled" | "failed" | "payload_expired";
+  status?: FinalDispatchStatus;
   attemptNumber?: number;
   httpStatus?: number | null;
   errorCode?: string | null;
+  outcomeUnknown?: boolean;
 }
 
-interface HttpAttemptResult {
-  outcome: "accepted" | "http_error" | "transport_error" | "timeout";
-  httpStatus: number | null;
-  responseBody: string | null;
-  errorCode: string | null;
-  errorDetail: string | null;
+export interface TestEmailConfigurationInput {
+  db: D1Database;
+  env: DeliveryCryptoEnv;
+  accountId: string;
+  emailIntegrationId: string;
+  notificationType: string;
+  contractVersion: number;
+  recipientEmail: string;
+  fetchImpl?: typeof fetch;
+}
+
+export interface TestEmailConfigurationResult {
+  providerAccepted: boolean;
+  provider: string;
+  providerTemplateRef: string;
+  recipientEmail: string;
+  providerMessageId?: string;
+  providerRequestId?: string;
+  httpStatus?: number;
+  error?: Record<string, unknown>;
+}
+
+interface MaterializedSend {
+  adapter: EmailProviderAdapter;
+  credential: ReturnType<EmailProviderAdapter["validateCredentialEnvelope"]>;
+  from: string;
+  to: string;
+  replyTo?: string;
+  templateRef: string;
+  variables: Readonly<Record<string, EmailVariableValue>>;
+  idempotencyKey: string;
+}
+
+function sanitizeEmailDiagnosticText(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value
+    .replace(/\bre_[A-Za-z0-9_-]+\b/g, "[REDACTED_API_KEY]")
+    .replace(
+      /\bLK-[0-9A-HJKMNP-TV-Z]{6}(?:-[0-9A-HJKMNP-TV-Z]{6}){3}-[0-9A-HJKMNP-TV-Z]{2}\b/g,
+      "[REDACTED_LICENSE_KEY]",
+    )
+    .replace(/\bmlk_[0-9a-f]{64}\b/g, "[REDACTED_MAGIC_LINK_TOKEN]")
+    .replace(/([?&#](?:token|access_token)=)[^\s&#"'<>\[\]]+/gi, "$1[REDACTED_TOKEN]")
+    .replace(
+      /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\b/gi,
+      "[REDACTED_EMAIL]",
+    )
+    .slice(0, 2048);
 }
 
 function changes(result: D1Result<unknown> | undefined): number {
   return Number(result?.meta?.changes ?? 0);
+}
+
+function fromAddress(row: {
+  default_from_email: string;
+  default_from_name: string | null;
+}): string {
+  const name = row.default_from_name?.trim();
+  return name ? `${name} <${row.default_from_email}>` : row.default_from_email;
+}
+
+function adapterFor(provider: string, fetchImpl?: typeof fetch): EmailProviderAdapter {
+  const registered = getEmailProviderAdapter(provider);
+  if (fetchImpl && provider === "resend") {
+    return createResendEmailProviderAdapter({ fetchImpl });
+  }
+  return registered;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseJsonObject(serialized: string, code: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new AppError(code, "The encrypted email data is not valid JSON.", 500);
+  }
+  if (!isRecord(parsed)) {
+    throw new AppError(code, "The encrypted email data must contain a JSON object.", 500);
+  }
+  return parsed;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function requestIdempotencyKey(
+  deliveryId: string,
+  request: Omit<MaterializedSend, "adapter" | "credential" | "idempotencyKey">,
+): Promise<string> {
+  return `email:${deliveryId}:${await sha256Hex(canonical(request))}`;
+}
+
+function localErrorJson(error: unknown, outcome = "configuration_invalid"): string {
+  const code = error instanceof AppError
+    ? error.code
+    : typeof (error as { code?: unknown })?.code === "string"
+      ? String((error as { code: string }).code)
+      : "EMAIL_CONFIGURATION_INVALID";
+  const message = sanitizeEmailDiagnosticText(
+    error instanceof Error ? error.message : String(error),
+  ) ?? "The current email configuration is invalid.";
+  return JSON.stringify({
+    outcome,
+    source: "licenkit",
+    code,
+    message,
+    ...(error instanceof AppError && error.details ? { details: error.details } : {}),
+  });
+}
+
+function providerErrorObject(
+  provider: string,
+  classification: EmailProviderErrorClassification,
+): Record<string, unknown> {
+  const outcomeUnknown =
+    classification.failureClass === "timeout" ||
+    classification.failureClass === "transport" ||
+    classification.providerErrorCode === "missing_or_invalid_email_id";
+  const outcome = outcomeUnknown
+    ? "provider_result_unknown"
+    : classification.action === "retry"
+      ? "provider_rejected_retryable"
+      : classification.action === "block_binding" || classification.action === "block_integration"
+        ? "configuration_rejected"
+        : "provider_rejected";
+  return {
+    outcome,
+    source: provider,
+    failure_class: classification.failureClass,
+    ...(classification.httpStatus === undefined
+      ? {}
+      : { http_status: classification.httpStatus }),
+    ...(classification.providerErrorType === undefined
+      ? {}
+      : { provider_error_type: classification.providerErrorType }),
+    ...(classification.providerErrorCode === undefined
+      ? {}
+      : { code: classification.providerErrorCode }),
+    ...(classification.providerErrorDetail === undefined
+      ? {}
+      : { message: sanitizeEmailDiagnosticText(classification.providerErrorDetail) }),
+    ...(classification.providerRequestId === undefined
+      ? {}
+      : { request_id: classification.providerRequestId }),
+    ...(classification.retryAfter === undefined
+      ? {}
+      : { retry_after: classification.retryAfter }),
+    ...(classification.responseHeadersRedacted === undefined
+      ? {}
+      : { response_headers: classification.responseHeadersRedacted }),
+    ...(classification.responseBodyRedacted === undefined
+      ? {}
+      : { response_body: classification.responseBodyRedacted }),
+    ...(outcomeUnknown ? { possible_duplicate_on_resend: true } : {}),
+  };
+}
+
+function errorCode(value: Record<string, unknown>): string | null {
+  return typeof value.code === "string" ? value.code : null;
 }
 
 function backoffSeconds(attempt: number): number {
@@ -53,285 +267,559 @@ function backoffSeconds(attempt: number): number {
   return Math.round(base * (0.8 + random * 0.4));
 }
 
-const SENSITIVE_RESPONSE_KEYS = /(?:authorization|cookie|password|secret|token|license[_-]?key|api[_-]?key)/i;
+function retryAfterTime(value: string | undefined, now: Date): number | null {
+  if (!value) return null;
+  if (/^\d+$/.test(value)) return now.getTime() + Number(value) * 1000;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
-function redactStructured(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactStructured);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
-      key,
-      SENSITIVE_RESPONSE_KEYS.test(key) ? "[REDACTED]" : redactStructured(nested),
-    ])
+async function loadDelivery(
+  db: D1Database,
+  accountId: string,
+  deliveryId: string,
+  workerId: string,
+): Promise<DeliveryRow | undefined> {
+  const result = await db
+    .prepare(
+      `SELECT delivery.id, delivery.account_id, delivery.customer_id,
+              delivery.notification_type, delivery.contract_version,
+              delivery.recipient_email, delivery.variables_ciphertext,
+              delivery.send_expires_at, delivery.variables_expires_at,
+              delivery.attempt_count,
+              delivery.created_at,
+              integration.id AS integration_id, integration.provider,
+              integration.credential_ciphertext,
+              integration.default_from_email, integration.default_from_name,
+              integration.reply_to_email, integration.max_automatic_attempts,
+              binding.id AS binding_id,
+              binding.contract_version AS binding_contract_version,
+              binding.provider_template_ref,
+              account.slug AS account_slug,
+              (SELECT site_url FROM system_settings WHERE id = 'current') AS site_url
+       FROM email_deliveries AS delivery
+       JOIN accounts AS account ON account.id = delivery.account_id
+       LEFT JOIN email_integrations AS integration
+         ON integration.account_id = delivery.account_id
+        AND integration.status = 'active'
+       LEFT JOIN email_template_bindings AS binding
+        ON binding.account_id = delivery.account_id
+        AND binding.email_integration_id = integration.id
+        AND binding.notification_type = delivery.notification_type
+        AND binding.status = 'active'
+       WHERE delivery.account_id = ?1
+         AND delivery.id = ?2
+         AND delivery.status = 'processing'
+         AND delivery.locked_by = ?3
+       LIMIT 1`,
+    )
+    .bind(accountId, deliveryId, workerId)
+    .all<DeliveryRow>();
+  return result.results[0];
+}
+
+async function materializeDelivery(
+  row: DeliveryRow,
+  input: DispatchDeliveryInput,
+): Promise<MaterializedSend> {
+  if (
+    !row.variables_ciphertext ||
+    !row.integration_id ||
+    !row.provider ||
+    !row.credential_ciphertext ||
+    !row.default_from_email ||
+    !row.binding_id ||
+    row.binding_contract_version === null ||
+    !row.provider_template_ref ||
+    row.max_automatic_attempts === null
+  ) {
+    throw new AppError(
+      "EMAIL_CONFIGURATION_NOT_FOUND",
+      "No active email Integration and Template Binding match this notification contract.",
+      409,
+      {
+        notification_type: row.notification_type,
+        contract_version: row.contract_version,
+      },
+    );
+  }
+  const [variablesSerialized, credentialSerialized] = await Promise.all([
+    decryptEnvelopeV1(row.variables_ciphertext, input.env, {
+      accountId: row.account_id,
+      table: "email_deliveries",
+      rowId: row.id,
+      field: "variables_ciphertext",
+    }),
+    decryptEnvelopeV1(row.credential_ciphertext, input.env, {
+      accountId: row.account_id,
+      table: "email_integrations",
+      rowId: row.integration_id,
+      field: "credential_ciphertext",
+    }),
+  ]);
+  const variables = validateEmailNotificationVariables(
+    row.notification_type,
+    row.binding_contract_version,
+    parseJsonObject(variablesSerialized, "EMAIL_DELIVERY_VARIABLES_INVALID"),
+    {
+      ...(row.site_url ? { trustedSiteUrl: row.site_url } : {}),
+      expectedAccountSlug: row.account_slug,
+    },
   );
-}
-
-function redactResponseBody(raw: string): string | null {
-  if (!raw) return null;
-  try {
-    return JSON.stringify(redactStructured(JSON.parse(raw))).slice(0, 2048);
-  } catch {
-    return raw
-      .replace(/\b(?:Bearer\s+)?[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b/g, "[REDACTED_TOKEN]")
-      .replace(/\b(?:LIC|LK)-[A-Z0-9-]{10,}\b/gi, "[REDACTED_LICENSE_KEY]")
-      .replace(/\b(authorization|cookie|password|secret|token|license[_-]?key|api[_-]?key)\s*[:=]\s*([^\s,;]+)/gi, "$1=[REDACTED]")
-      .slice(0, 2048);
-  }
-}
-
-async function postWithValidatedRedirects(input: {
-  url: string;
-  body: string;
-  deliveryId: string;
-  secret: string;
-  fetchImpl: typeof fetch;
-  timeoutMs: number;
-}): Promise<HttpAttemptResult> {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signature = await computeHmacSha256(`${timestamp}.${input.body}`, input.secret);
-  let target = requirePublicHttpsUrl(input.url);
-  const startedAt = Date.now();
-
-  for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
-    try {
-      const response = await input.fetchImpl(target.toString(), {
-        method: "POST",
-        redirect: "manual",
-        headers: {
-          "Content-Type": "application/json",
-          "X-LicenKit-Delivery": input.deliveryId,
-          "X-LicenKit-Timestamp": String(timestamp),
-          "X-LicenKit-Signature": `v1=${signature}`,
-        },
-        body: input.body,
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        if (!location || redirectCount === 3) {
-          return {
-            outcome: "http_error",
-            httpStatus: response.status,
-            responseBody: null,
-            errorCode: "OUTBOUND_REDIRECT_INVALID",
-            errorDetail: location ? "Too many redirects" : "Redirect response did not include Location",
-          };
-        }
-        target = requirePublicHttpsUrl(new URL(location, target).toString());
-        continue;
-      }
-      const responseBody = redactResponseBody(await response.text());
-      return response.ok
-        ? { outcome: "accepted", httpStatus: response.status, responseBody, errorCode: null, errorDetail: null }
-        : {
-            outcome: "http_error",
-            httpStatus: response.status,
-            responseBody,
-            errorCode: `OUTBOUND_HTTP_${response.status}`,
-            errorDetail: `Notification endpoint returned HTTP ${response.status}`,
-          };
-    } catch (error) {
-      clearTimeout(timeout);
-      if (error instanceof OutboundUrlPolicyError) {
-        return {
-          outcome: "transport_error",
-          httpStatus: null,
-          responseBody: null,
-          errorCode: error.code,
-          errorDetail: error.message,
-        };
-      }
-      const isTimeout = error instanceof DOMException && error.name === "AbortError";
-      return {
-        outcome: isTimeout ? "timeout" : "transport_error",
-        httpStatus: null,
-        responseBody: null,
-        errorCode: isTimeout ? "OUTBOUND_TIMEOUT" : "OUTBOUND_TRANSPORT_ERROR",
-        errorDetail: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
+  const adapter = adapterFor(row.provider, input.fetchImpl);
+  const credential = adapter.validateCredentialEnvelope(
+    parseJsonObject(credentialSerialized, "EMAIL_PROVIDER_CREDENTIAL_INVALID"),
+  );
+  const request = {
+    from: fromAddress({
+      default_from_email: row.default_from_email,
+      default_from_name: row.default_from_name,
+    }),
+    to: row.recipient_email,
+    ...(row.reply_to_email ? { replyTo: row.reply_to_email } : {}),
+    templateRef: row.provider_template_ref,
+    variables,
+  };
+  adapter.validateSendInput(request);
   return {
-    outcome: "transport_error",
-    httpStatus: null,
-    responseBody: null,
-    errorCode: "OUTBOUND_REDIRECT_INVALID",
-    errorDetail: `Redirect loop ended after ${Date.now() - startedAt}ms`,
+    adapter,
+    credential,
+    ...request,
+    idempotencyKey: await requestIdempotencyKey(row.id, request),
   };
 }
 
-export async function dispatchDelivery(input: DispatchDeliveryInput): Promise<DispatchDeliveryResult> {
+async function releaseAsConfigurationWait(
+  input: DispatchDeliveryInput,
+  row: DeliveryRow,
+  workerId: string,
+  error: unknown,
+  nowIso: string,
+): Promise<void> {
+  const diagnostic = localErrorJson(error);
+  const parsedDiagnostic = JSON.parse(diagnostic) as Record<string, unknown>;
+  await input.db.batch([
+    prepareSystemIssueUpsert({
+      db: input.db,
+      accountId: input.accountId,
+      category: "email",
+      sourceType: "email_delivery",
+      sourceId: input.deliveryId,
+      operation: row.notification_type,
+      errorCode: errorCode(parsedDiagnostic) ?? "EMAIL_CONFIGURATION_INVALID",
+      errorDetailJson: diagnostic,
+      nowIso,
+    }),
+    input.db.prepare(
+      `UPDATE email_deliveries
+       SET status = 'waiting_configuration', next_attempt_at = NULL,
+           last_error_json = ?1, locked_by = NULL, locked_until = NULL,
+           updated_at = ?2
+       WHERE account_id = ?3 AND id = ?4 AND locked_by = ?5`,
+    )
+      .bind(diagnostic, nowIso, input.accountId, input.deliveryId, workerId),
+  ]);
+}
+
+function testVariables(
+  configuration: TestConfigurationRow,
+  notificationType: string,
+  contractVersion: number,
+): Readonly<Record<string, EmailVariableValue>> {
+  const contract = getEmailNotificationContract(notificationType, contractVersion);
+  const values: Record<string, EmailVariableValue> = Object.fromEntries(
+    contract.variables
+      .filter((descriptor) => descriptor.required)
+      .map((descriptor) => [descriptor.name, descriptor.example]),
+  );
+  values.account_name = configuration.account_name;
+  if (Object.prototype.hasOwnProperty.call(values, "access_url")) {
+    if (!configuration.site_url) {
+      throw new AppError(
+        "EMAIL_TRUSTED_SITE_URL_REQUIRED",
+        "The trusted Site URL is required to test this email template.",
+        409,
+      );
+    }
+    values.access_url = buildCustomerPortalAccessUrl({
+      trustedSiteUrl: configuration.site_url,
+      accountSlug: configuration.account_slug,
+      oneTimeToken: `mlk_${"0".repeat(64)}`,
+    });
+  }
+  return validateEmailNotificationVariables(
+    notificationType,
+    contractVersion,
+    values,
+    {
+      ...(configuration.site_url ? { trustedSiteUrl: configuration.site_url } : {}),
+      expectedAccountSlug: configuration.account_slug,
+    },
+  );
+}
+
+/** 直接调用 Provider 发送测试邮件；不创建 Delivery，也不保存测试结果。 */
+export async function testEmailConfiguration(
+  input: TestEmailConfigurationInput,
+): Promise<TestEmailConfigurationResult> {
+  const result = await input.db
+    .prepare(
+      `SELECT account.name AS account_name, account.slug AS account_slug,
+              (SELECT site_url FROM system_settings WHERE id = 'current') AS site_url,
+              integration.id AS integration_id, integration.provider,
+              integration.credential_ciphertext,
+              integration.default_from_email, integration.default_from_name,
+              integration.reply_to_email,
+              binding.id AS binding_id, binding.provider_template_ref
+       FROM accounts AS account
+       JOIN email_integrations AS integration
+         ON integration.account_id = account.id
+        AND integration.id = ?2
+        AND integration.status = 'active'
+       JOIN email_template_bindings AS binding
+         ON binding.account_id = account.id
+        AND binding.email_integration_id = integration.id
+        AND binding.notification_type = ?3
+        AND binding.contract_version = ?4
+        AND binding.status = 'active'
+       WHERE account.id = ?1
+       LIMIT 1`,
+    )
+    .bind(
+      input.accountId,
+      input.emailIntegrationId,
+      input.notificationType,
+      input.contractVersion,
+    )
+    .all<TestConfigurationRow>();
+  const configuration = result.results[0];
+  if (!configuration) {
+    throw new AppError(
+      "EMAIL_TEST_CONFIGURATION_NOT_FOUND",
+      "The active email Integration or Template Binding was not found.",
+      404,
+    );
+  }
+  const adapter = adapterFor(configuration.provider, input.fetchImpl);
+  let request: EmailProviderSendInput;
+  try {
+    const variables = testVariables(
+      configuration,
+      input.notificationType,
+      input.contractVersion,
+    );
+    const credentialSerialized = await decryptEnvelopeV1(
+      configuration.credential_ciphertext,
+      input.env,
+      {
+        accountId: input.accountId,
+        table: "email_integrations",
+        rowId: configuration.integration_id,
+        field: "credential_ciphertext",
+      },
+    );
+    request = {
+      credential: adapter.validateCredentialEnvelope(
+        parseJsonObject(credentialSerialized, "EMAIL_PROVIDER_CREDENTIAL_INVALID"),
+      ),
+      from: fromAddress(configuration),
+      to: input.recipientEmail,
+      ...(configuration.reply_to_email ? { replyTo: configuration.reply_to_email } : {}),
+      templateRef: configuration.provider_template_ref,
+      variables,
+      idempotencyKey: `email-test:${ulid().toLowerCase()}`,
+    };
+    adapter.validateSendInput(request);
+  } catch (error) {
+    return {
+      providerAccepted: false,
+      provider: configuration.provider,
+      providerTemplateRef: configuration.provider_template_ref,
+      recipientEmail: input.recipientEmail,
+      error: JSON.parse(localErrorJson(error)),
+    };
+  }
+  try {
+    const sent = await adapter.send(request);
+    return {
+      providerAccepted: true,
+      provider: configuration.provider,
+      providerTemplateRef: configuration.provider_template_ref,
+      recipientEmail: input.recipientEmail,
+      providerMessageId: sent.providerMessageId,
+      ...(sent.providerRequestId ? { providerRequestId: sent.providerRequestId } : {}),
+      httpStatus: sent.httpStatus,
+    };
+  } catch (error) {
+    const classified = adapter.classifyError(error);
+    return {
+      providerAccepted: false,
+      provider: configuration.provider,
+      providerTemplateRef: configuration.provider_template_ref,
+      recipientEmail: input.recipientEmail,
+      ...(classified.providerRequestId
+        ? { providerRequestId: classified.providerRequestId }
+        : {}),
+      ...(classified.httpStatus === undefined ? {} : { httpStatus: classified.httpStatus }),
+      error: providerErrorObject(configuration.provider, classified),
+    };
+  }
+}
+
+export async function dispatchDelivery(
+  input: DispatchDeliveryInput,
+): Promise<DispatchDeliveryResult> {
   const now = input.now ?? new Date();
   const nowIso = now.toISOString();
   const workerId = input.workerId ?? `worker_${ulid().toLowerCase()}`;
   const lockedUntil = new Date(now.getTime() + 60_000).toISOString();
   const manual = input.manual === true;
 
-  const expired = await input.db
-    .prepare(
-      `UPDATE outbound_deliveries
-       SET status = 'payload_expired', payload_ciphertext = NULL,
-           payload_cleared_at = ?1, locked_by = NULL, locked_until = NULL, updated_at = ?1
-       WHERE account_id = ?2 AND id = ?3
-         AND payload_ciphertext IS NOT NULL AND payload_expires_at <= ?1
-         AND status NOT IN ('accepted', 'payload_expired')`
-    )
-    .bind(nowIso, input.accountId, input.deliveryId)
-    .run();
-  if (changes(expired) > 0) return { claimed: true, status: "payload_expired" };
+  const expirationDiagnostic = JSON.stringify({
+    outcome: "send_expired",
+    source: "licenkit",
+    code: "EMAIL_DELIVERY_SEND_EXPIRED",
+    message: "The email content expired before the email was accepted.",
+  });
+  const expirationResults = await input.db.batch([
+    input.db.prepare(
+      `UPDATE email_deliveries
+       SET status = 'expired', variables_ciphertext = NULL,
+           next_attempt_at = NULL, locked_by = NULL, locked_until = NULL,
+           last_error_json = ?1, updated_at = ?2
+       WHERE account_id = ?3 AND id = ?4
+         AND status NOT IN ('accepted', 'expired', 'cancelled')
+         AND send_expires_at IS NOT NULL
+         AND send_expires_at <= ?2
+         AND (status <> 'processing' OR locked_until <= ?2)`,
+    ).bind(expirationDiagnostic, nowIso, input.accountId, input.deliveryId),
+    input.db.prepare(
+      `UPDATE billing_checkout_verifications
+       SET status = 'expired', completed_at = NULL,
+           last_error_code = 'EMAIL_DELIVERY_SEND_EXPIRED',
+           last_error_detail = 'The related email expired before Provider acceptance.',
+           updated_at = ?1
+       WHERE account_id = ?2 AND delivery_id = ?3
+         AND status = 'delivery_pending'
+         AND EXISTS (
+           SELECT 1 FROM email_deliveries AS delivery
+           WHERE delivery.account_id = ?2 AND delivery.id = ?3
+             AND delivery.status = 'expired' AND delivery.updated_at = ?1
+         )`,
+    ).bind(nowIso, input.accountId, input.deliveryId),
+  ]);
+  if (changes(expirationResults[0]) > 0) {
+    await prepareSystemIssueUpsert({
+      db: input.db,
+      accountId: input.accountId,
+      category: "email",
+      sourceType: "email_delivery",
+      sourceId: input.deliveryId,
+      operation: "send_expiration",
+      errorCode: "EMAIL_DELIVERY_SEND_EXPIRED",
+      errorDetailJson: expirationDiagnostic,
+      nowIso,
+    }).run();
+    return { claimed: true, status: "expired" };
+  }
 
   const claim = await input.db
     .prepare(
-      `UPDATE outbound_deliveries
+      `UPDATE email_deliveries
        SET status = 'processing', locked_by = ?1, locked_until = ?2, updated_at = ?3
        WHERE account_id = ?4 AND id = ?5
-         AND payload_ciphertext IS NOT NULL AND payload_expires_at > ?3
+         AND variables_ciphertext IS NOT NULL
+         AND (send_expires_at IS NULL OR send_expires_at > ?3)
          AND (
-           (?6 = 1 AND status = 'failed')
+           (?6 = 1 AND status IN (
+             'pending', 'retry_scheduled', 'waiting_configuration', 'failed'
+           ))
            OR (?6 = 0 AND (
-             (status IN ('pending', 'retry_scheduled') AND (next_attempt_at IS NULL OR next_attempt_at <= ?3))
+             (status IN ('pending', 'retry_scheduled')
+               AND (next_attempt_at IS NULL OR next_attempt_at <= ?3))
              OR (status = 'processing' AND locked_until <= ?3)
            ))
-         )`
+         )`,
     )
     .bind(workerId, lockedUntil, nowIso, input.accountId, input.deliveryId, manual ? 1 : 0)
     .run();
   if (changes(claim) !== 1) return { claimed: false };
 
-  const rowResult = await input.db
-    .prepare(
-      `SELECT d.id, d.account_id, d.target_url, d.signing_secret_ciphertext,
-              d.payload_ciphertext, d.payload_expires_at, d.attempt_count,
-              d.automatic_attempt_count, d.max_automatic_attempts,
-              COALESCE(e.timeout_ms, 10000) AS timeout_ms
-       FROM outbound_deliveries AS d
-       LEFT JOIN outbound_endpoints AS e
-         ON e.account_id = d.account_id AND e.id = d.endpoint_id
-       WHERE d.account_id = ?1 AND d.id = ?2 AND d.locked_by = ?3`
-    )
-    .bind(input.accountId, input.deliveryId, workerId)
-    .all<DeliveryRow>();
-  const row = rowResult.results[0];
+  const row = await loadDelivery(input.db, input.accountId, input.deliveryId, workerId);
   if (!row) return { claimed: false };
 
-  const attemptNumber = row.attempt_count + 1;
-  const attemptSource = manual ? "manual_retry" : attemptNumber === 1 ? "initial" : "automatic_retry";
-  const startedAt = new Date();
-  let attempt: HttpAttemptResult;
+  let materialized: MaterializedSend;
+  let payloadExpiresAt: string;
   try {
-    const [body, secret] = await Promise.all([
-      decryptEnvelopeV1(row.payload_ciphertext, input.env, {
-        accountId: row.account_id,
-        table: "outbound_deliveries",
-        rowId: row.id,
-        field: "payload_ciphertext",
-      }),
-      decryptEnvelopeV1(row.signing_secret_ciphertext, input.env, {
-        accountId: row.account_id,
-        table: "outbound_deliveries",
-        rowId: row.id,
-        field: "signing_secret_ciphertext",
-      }),
-    ]);
-    attempt = await postWithValidatedRedirects({
-      url: row.target_url,
-      body,
-      deliveryId: row.id,
-      secret,
-      fetchImpl: input.fetchImpl ?? fetch,
-      timeoutMs: row.timeout_ms,
-    });
+    materialized = await materializeDelivery(row, input);
+    // Validate retention configuration before contacting the Provider. Once the
+    // Provider accepts a request, LicenKit must be able to persist that fact.
+    payloadExpiresAt = acceptedPayloadExpiration(now, input.env);
   } catch (error) {
-    attempt = {
-      outcome: "transport_error",
-      httpStatus: null,
-      responseBody: null,
-      errorCode: error instanceof OutboundUrlPolicyError ? error.code : "OUTBOUND_CONFIGURATION_ERROR",
-      errorDetail: error instanceof Error ? error.message : String(error),
+    await releaseAsConfigurationWait(input, row, workerId, error, nowIso);
+    return {
+      claimed: true,
+      status: "waiting_configuration",
+      errorCode: error instanceof AppError ? error.code : "EMAIL_CONFIGURATION_INVALID",
     };
   }
 
-  const completedAt = new Date();
-  const newAutomaticCount = manual ? row.automatic_attempt_count : row.automatic_attempt_count + 1;
-  const permanentFailure =
-    attempt.errorCode === "OUTBOUND_ENDPOINT_NOT_PUBLIC" ||
-    attempt.errorCode === "OUTBOUND_CONFIGURATION_ERROR";
-  const accepted = attempt.outcome === "accepted";
-  const hasAutomaticBudget = newAutomaticCount < row.max_automatic_attempts;
-  const status = accepted
-    ? "accepted"
-    : manual || permanentFailure || !hasAutomaticBudget
-      ? "failed"
-      : "retry_scheduled";
-  const nextAttemptAt =
-    status === "retry_scheduled"
-      ? new Date(completedAt.getTime() + backoffSeconds(newAutomaticCount) * 1000).toISOString()
-      : null;
+  const maxAutomaticAttempts = row.max_automatic_attempts!;
+  if (!manual && row.attempt_count >= maxAutomaticAttempts) {
+    const error = {
+      outcome: "automatic_attempt_limit_reached",
+      source: "licenkit",
+      code: "EMAIL_AUTOMATIC_ATTEMPT_LIMIT_REACHED",
+      message: "The current email Integration automatic attempt limit has been reached.",
+      attempt_count: row.attempt_count,
+      max_automatic_attempts: maxAutomaticAttempts,
+    };
+    await input.db.batch([
+      prepareSystemIssueUpsert({
+        db: input.db,
+        accountId: row.account_id,
+        category: "email",
+        sourceType: "email_delivery",
+        sourceId: row.id,
+        operation: row.notification_type,
+        errorCode: "EMAIL_AUTOMATIC_ATTEMPT_LIMIT_REACHED",
+        errorDetailJson: JSON.stringify(error),
+        nowIso,
+      }),
+      input.db.prepare(
+        `UPDATE email_deliveries
+         SET status = 'failed', next_attempt_at = NULL, last_error_json = ?1,
+             locked_by = NULL, locked_until = NULL, updated_at = ?2
+         WHERE account_id = ?3 AND id = ?4 AND locked_by = ?5`,
+      )
+        .bind(JSON.stringify(error), nowIso, row.account_id, row.id, workerId),
+    ]);
+    return {
+      claimed: true,
+      status: "failed",
+      errorCode: "EMAIL_AUTOMATIC_ATTEMPT_LIMIT_REACHED",
+    };
+  }
 
-  const attemptStatement = input.db
+  const attemptNumber = row.attempt_count + 1;
+  const counted = await input.db
     .prepare(
-      `INSERT INTO outbound_attempts (
-         id, account_id, delivery_id, attempt_number, attempt_source, outcome,
-         http_status, response_body_redacted, transport_error_code,
-         transport_error_detail, started_at, completed_at, duration_ms
-       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`
+      `UPDATE email_deliveries
+       SET attempt_count = ?1, updated_at = ?2
+       WHERE account_id = ?3 AND id = ?4
+         AND status = 'processing' AND locked_by = ?5 AND attempt_count = ?6`,
     )
-    .bind(
-      `oat_${ulid().toLowerCase()}`,
-      row.account_id,
-      row.id,
-      attemptNumber,
-      attemptSource,
-      attempt.outcome,
-      attempt.httpStatus,
-      attempt.responseBody,
-      attempt.errorCode,
-      attempt.errorDetail?.slice(0, 2048) ?? null,
-      startedAt.toISOString(),
-      completedAt.toISOString(),
-      Math.max(0, completedAt.getTime() - startedAt.getTime())
-    );
-  const updateStatement = input.db
-    .prepare(
-      `UPDATE outbound_deliveries
-       SET status = ?1, attempt_count = ?2, automatic_attempt_count = ?3,
-           next_attempt_at = ?4, last_error_code = ?5, last_error_detail = ?6,
-           accepted_at = CASE WHEN ?1 = 'accepted' THEN ?7 ELSE accepted_at END,
-           payload_ciphertext = CASE WHEN ?1 = 'accepted' THEN NULL ELSE payload_ciphertext END,
-           payload_cleared_at = CASE WHEN ?1 = 'accepted' THEN ?7 ELSE payload_cleared_at END,
-           locked_by = NULL, locked_until = NULL, updated_at = ?7
-       WHERE account_id = ?8 AND id = ?9 AND locked_by = ?10`
-    )
-    .bind(
-      status,
-      attemptNumber,
-      newAutomaticCount,
-      nextAttemptAt,
-      accepted ? null : attempt.errorCode,
-      accepted ? null : attempt.errorDetail?.slice(0, 2048) ?? null,
-      completedAt.toISOString(),
-      row.account_id,
-      row.id,
-      workerId
-    );
-  const completeCheckoutVerification = input.db
-    .prepare(
-      `UPDATE billing_checkout_verifications
-       SET status = 'completed', completed_at = ?1, updated_at = ?1
-       WHERE account_id = ?2 AND delivery_id = ?3
-         AND status = 'delivery_pending' AND ?4 = 'accepted'`
-    )
-    .bind(completedAt.toISOString(), row.account_id, row.id, status);
-  await input.db.batch([attemptStatement, updateStatement, completeCheckoutVerification]);
+    .bind(attemptNumber, nowIso, row.account_id, row.id, workerId, row.attempt_count)
+    .run();
+  if (changes(counted) !== 1) return { claimed: false };
 
+  let sent: EmailProviderSendResult | undefined;
+  let classification: EmailProviderErrorClassification | undefined;
+  try {
+    sent = await materialized.adapter.send({
+      credential: materialized.credential,
+      from: materialized.from,
+      to: materialized.to,
+      ...(materialized.replyTo ? { replyTo: materialized.replyTo } : {}),
+      templateRef: materialized.templateRef,
+      variables: materialized.variables,
+      idempotencyKey: materialized.idempotencyKey,
+    });
+  } catch (error) {
+    classification = materialized.adapter.classifyError(error);
+  }
+
+  if (sent) {
+    const acceptedResults = await input.db.batch([
+      input.db
+        .prepare(
+          `UPDATE email_deliveries
+           SET status = 'accepted', next_attempt_at = NULL,
+               provider_message_id = ?1, last_error_json = NULL,
+               variables_expires_at = ?2, accepted_at = ?3,
+               locked_by = NULL, locked_until = NULL, updated_at = ?3
+           WHERE account_id = ?4 AND id = ?5
+             AND status = 'processing' AND locked_by = ?6`,
+        )
+        .bind(sent.providerMessageId, payloadExpiresAt, nowIso, row.account_id, row.id, workerId),
+      input.db
+        .prepare(
+          `UPDATE billing_checkout_verifications
+           SET status = 'completed', completed_at = ?1, updated_at = ?1
+           WHERE account_id = ?2 AND delivery_id = ?3
+             AND status = 'delivery_pending'
+             AND EXISTS (
+               SELECT 1 FROM email_deliveries AS delivery
+               WHERE delivery.account_id = ?2 AND delivery.id = ?3
+                 AND delivery.status = 'accepted'
+             )`,
+        )
+        .bind(nowIso, row.account_id, row.id),
+    ]);
+    if (changes(acceptedResults[0]) !== 1) return { claimed: false };
+    return {
+      claimed: true,
+      status: "accepted",
+      attemptNumber,
+      httpStatus: sent.httpStatus,
+      errorCode: null,
+    };
+  }
+
+  const failure = classification!;
+  const diagnostic = providerErrorObject(row.provider!, failure);
+  const outcomeUnknown = diagnostic.outcome === "provider_result_unknown";
+  const configurationFailure =
+    failure.action === "block_integration" || failure.action === "block_binding";
+  const canRetry = failure.action === "retry" && !outcomeUnknown;
+  const retryAt = Math.max(
+    now.getTime() + backoffSeconds(attemptNumber) * 1000,
+    retryAfterTime(failure.retryAfter, now) ?? 0,
+  );
+  const withinSendWindow = row.send_expires_at === null
+    || retryAt < Date.parse(row.send_expires_at);
+  const hasBudget = attemptNumber < maxAutomaticAttempts;
+  const status: FinalDispatchStatus = configurationFailure
+    ? "waiting_configuration"
+    : canRetry && withinSendWindow && hasBudget
+      ? "retry_scheduled"
+      : "failed";
+  const nextAttemptAt = status === "retry_scheduled" ? new Date(retryAt).toISOString() : null;
+  await input.db.batch([
+    prepareSystemIssueUpsert({
+      db: input.db,
+      accountId: row.account_id,
+      category: "email",
+      sourceType: "email_delivery",
+      sourceId: row.id,
+      operation: row.notification_type,
+      errorCode: errorCode(diagnostic) ?? `EMAIL_PROVIDER_${failure.failureClass.toUpperCase()}`,
+      errorDetailJson: JSON.stringify(diagnostic),
+      nowIso,
+    }),
+    input.db
+      .prepare(
+        `UPDATE email_deliveries
+         SET status = ?1, next_attempt_at = ?2, last_error_json = ?3,
+             locked_by = NULL, locked_until = NULL, updated_at = ?4
+         WHERE account_id = ?5 AND id = ?6 AND locked_by = ?7`,
+      )
+      .bind(
+        status,
+        nextAttemptAt,
+        JSON.stringify(diagnostic),
+        nowIso,
+        row.account_id,
+        row.id,
+        workerId,
+      ),
+  ]);
   return {
     claimed: true,
     status,
     attemptNumber,
-    httpStatus: attempt.httpStatus,
-    errorCode: attempt.errorCode,
+    httpStatus: failure.httpStatus ?? null,
+    errorCode: errorCode(diagnostic),
+    outcomeUnknown,
   };
 }

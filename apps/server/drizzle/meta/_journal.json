@@ -8,6 +8,20 @@
       "when": 1789823420145,
       "tag": "0000_v1_initial",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789957008896,
+      "tag": "0001_email_delivery_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789963568052,
+      "tag": "0002_romantic_yellow_claw",
+      "breakpoints": true
     }
   ]
 }

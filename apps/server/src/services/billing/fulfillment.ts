@@ -15,9 +15,13 @@ import {
   getBillingProvider,
   syncTrustedBillingCustomer,
 } from "./customer-sync";
-import { prepareNotificationDelivery } from "../delivery/outbox";
+import { prepareEmailNotificationDelivery } from "../delivery/outbox";
+import { dispatchDelivery } from "../../infra/delivery/dispatcher";
 import { prepareLicenseAudit } from "../license/audit";
-import { blockInboundEventForProviderAuthIssue } from "./system-issues";
+import {
+  recordInboundEventProviderAuthIssue,
+} from "./system-issues";
+import { prepareSystemIssueUpsert } from "../operations/system-issues";
 
 export interface BillingWorkerEnv {
   DB: D1Database;
@@ -40,7 +44,6 @@ interface InboundEventRow {
   payload_ciphertext: string | null;
   payload_expires_at: string;
   status: string;
-  blocking_system_issue_id: string | null;
   attempt_count: number;
   locked_by: string | null;
   received_at: string;
@@ -211,7 +214,7 @@ async function loadCorrelatedEvent(
     `SELECT id, account_id, billing_provider_id, external_event_id, external_event_type,
             external_customer_id, external_transaction_id, external_subscription_id,
             external_adjustment_id, external_occurred_at, payload_ciphertext,
-            payload_expires_at, status, blocking_system_issue_id,
+            payload_expires_at, status,
             attempt_count, locked_by, received_at
      FROM inbound_events
      WHERE account_id = ?1 AND billing_provider_id = ?2
@@ -260,37 +263,14 @@ async function processCustomerEvent(
     },
   });
   const nowIso = now.toISOString();
-  const statements: D1PreparedStatement[] = [];
-  if (result.provider_status === "active" && result.link_status === "linked") {
-    statements.push(env.DB.prepare(
-      `UPDATE inbound_events
-       SET blocking_system_issue_id = NULL, next_attempt_at = ?1, updated_at = ?1
-       WHERE account_id = ?2 AND billing_provider_id = ?3
-         AND external_customer_id = ?4
-         AND status = 'pending'
-         AND last_error_code = 'BILLING_PROVIDER_API_AUTH_INVALID'
-         AND blocking_system_issue_id IS NOT NULL
-         AND payload_ciphertext IS NOT NULL AND payload_expires_at > ?1
-         AND result_type IS NULL AND result_reference_id IS NULL
-         AND EXISTS (
-           SELECT 1 FROM system_issues AS issue
-           WHERE issue.account_id = inbound_events.account_id
-             AND issue.id = inbound_events.blocking_system_issue_id
-             AND issue.billing_provider_id = inbound_events.billing_provider_id
-             AND issue.capability = 'customer_read'
-             AND issue.issue_code = 'BILLING_PROVIDER_API_AUTH_INVALID'
-         )`,
-    ).bind(nowIso, event.account_id, event.billing_provider_id, externalCustomerId));
-  }
-  statements.push(processingResultStatement(
+  await processingResultStatement(
     env.DB,
     event,
     workerId,
     result.ignoredAsStale ? "ignored_as_stale" : "billing_customer_synced",
     result.id,
     nowIso,
-  ));
-  await env.DB.batch(statements);
+  ).run();
 }
 
 async function resolveCustomerForNewPurchase(
@@ -726,25 +706,23 @@ async function fulfillInitialPurchase(input: {
   const keyHash = await hashLicenseKey(licenseKey);
   const nowIso = input.now.toISOString();
   const isVerification = resolved.verificationId !== null;
-  const delivery = await prepareNotificationDelivery({
+  const delivery = await prepareEmailNotificationDelivery({
     db: input.env.DB,
     env: input.env,
     accountId: input.event.account_id,
     customerId: customer.customerId,
-    licenseId,
-    eventType: "customer.license_issued",
+    notificationType: "customer.license_issued",
+    contractVersion: 1,
     recipientEmail: customer.email,
-    payload: {
+    variables: {
       product_id: offer.product_id,
       product_name: offer.product_name,
       license_id: licenseId,
       license_key: licenseKey,
       license_model: offer.license_model,
-      expires_at: expiresAt,
-      updates_until: updatesUntil,
-      checkout_verification: isVerification,
+      ...(expiresAt ? { expires_at: expiresAt } : {}),
+      ...(updatesUntil ? { updates_until: updatesUntil } : {}),
     },
-    idempotencyKey: `license-issued:${licenseId}:key-version:1`,
     now: input.now,
   });
 
@@ -887,6 +865,27 @@ async function fulfillInitialPurchase(input: {
       }
     }
     throw error;
+  }
+  if (delivery.status === "pending") {
+    try {
+      await dispatchDelivery({
+        db: input.env.DB,
+        env: input.env,
+        accountId: input.event.account_id,
+        deliveryId: delivery.deliveryId,
+        now: input.now,
+      });
+    } catch (error) {
+      // License, Billing facts, and the pending Delivery were committed in the
+      // preceding batch. The shared Scheduler recovers the same Delivery; an
+      // immediate trigger failure must not rewrite those durable facts.
+      console.error("Billing fulfillment email Delivery immediate trigger failed", {
+        code: "EMAIL_DELIVERY_IMMEDIATE_TRIGGER_FAILED",
+        accountId: input.event.account_id,
+        deliveryId: delivery.deliveryId,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+    }
   }
 }
 
@@ -1337,22 +1336,37 @@ async function scheduleFailure(
   if (status === "retry") status = "pending";
   const delaySeconds = Math.min(3600, Math.max(5, 5 * 2 ** Math.min(attempts - 1, 9)));
   const nextAttemptAt = status === "pending" ? new Date(now.getTime() + delaySeconds * 1000).toISOString() : null;
-  await env.DB.prepare(
-    `UPDATE inbound_events
-     SET status = ?1, next_attempt_at = ?2, locked_by = NULL, locked_until = NULL,
-         last_error_code = ?3, last_error_detail = ?4, updated_at = ?5,
-         processed_at = CASE WHEN ?1 IN ('failed', 'needs_attention') THEN ?5 ELSE processed_at END
-     WHERE account_id = ?6 AND id = ?7 AND status = 'processing' AND locked_by = ?8`,
-  ).bind(
-    status,
-    nextAttemptAt,
-    normalized.code,
-    serializeBillingDiagnostic({ message: normalized.message, ...normalized.details }),
-    now.toISOString(),
-    event.account_id,
-    event.id,
-    workerId,
-  ).run();
+  const nowIso = now.toISOString();
+  const detailJson = serializeBillingDiagnostic({ message: normalized.message, ...normalized.details });
+  await env.DB.batch([
+    prepareSystemIssueUpsert({
+      db: env.DB,
+      accountId: event.account_id,
+      category: "webhook",
+      sourceType: "inbound_event",
+      sourceId: event.id,
+      operation: event.external_event_type,
+      errorCode: normalized.code,
+      errorDetailJson: detailJson,
+      nowIso,
+    }),
+    env.DB.prepare(
+      `UPDATE inbound_events
+       SET status = ?1, next_attempt_at = ?2, locked_by = NULL, locked_until = NULL,
+           last_error_code = ?3, last_error_detail = ?4, updated_at = ?5,
+           processed_at = CASE WHEN ?1 IN ('failed', 'needs_attention') THEN ?5 ELSE processed_at END
+       WHERE account_id = ?6 AND id = ?7 AND status = 'processing' AND locked_by = ?8`,
+    ).bind(
+      status,
+      nextAttemptAt,
+      normalized.code,
+      detailJson,
+      nowIso,
+      event.account_id,
+      event.id,
+      workerId,
+    ),
+  ]);
 }
 
 export async function processBillingInboundEvent(input: {
@@ -1368,7 +1382,7 @@ export async function processBillingInboundEvent(input: {
     `SELECT id, account_id, billing_provider_id, external_event_id, external_event_type,
             external_customer_id, external_transaction_id, external_subscription_id,
             external_adjustment_id, external_occurred_at, payload_ciphertext,
-            payload_expires_at, status, blocking_system_issue_id,
+            payload_expires_at, status,
             attempt_count, locked_by, received_at
      FROM inbound_events
      WHERE account_id = ?1 AND id = ?2
@@ -1384,7 +1398,6 @@ export async function processBillingInboundEvent(input: {
        SET status = 'processing', locked_by = ?1, locked_until = ?2,
            attempt_count = attempt_count + 1, updated_at = ?3
        WHERE account_id = ?4 AND id = ?5 AND status = 'pending'
-         AND blocking_system_issue_id IS NULL
          AND (next_attempt_at IS NULL OR next_attempt_at <= ?3)`,
     ).bind(input.workerId, lockedUntil, now.toISOString(), input.accountId, input.eventId).run();
     if ((claim.meta.changes ?? 0) !== 1) {
@@ -1393,8 +1406,7 @@ export async function processBillingInboundEvent(input: {
       event = await selectEvent();
     }
   }
-  if (!event || event.status !== "processing" || event.locked_by !== input.workerId ||
-      event.blocking_system_issue_id !== null) {
+  if (!event || event.status !== "processing" || event.locked_by !== input.workerId) {
     return { processed: false, status: event?.status ?? "not_found" };
   }
 
@@ -1433,12 +1445,13 @@ export async function processBillingInboundEvent(input: {
     }
   } catch (error) {
     if (error instanceof PaddleHttpError && error.code === "BILLING_PROVIDER_API_AUTH_INVALID") {
-      await blockInboundEventForProviderAuthIssue({
+      await recordInboundEventProviderAuthIssue({
         db: input.env.DB,
         accountId: event.account_id,
         billingProviderId: event.billing_provider_id,
         inboundEventId: event.id,
         workerId: input.workerId,
+        issueCode: error.code,
         providerError: error.providerDetails,
         now,
       });
@@ -1506,12 +1519,34 @@ export async function processDueBillingInboundEvents(
   let accountCursor = "";
   while (true) {
     const accounts = await env.DB.prepare(
-      `SELECT id
-       FROM accounts
-       WHERE status = 'active' AND id > ?1
-       ORDER BY id
-       LIMIT ?2`,
-    ).bind(accountCursor, accountPageSize).all<{ id: string }>();
+      `SELECT candidate.account_id AS id
+       FROM (
+         SELECT event.account_id
+         FROM inbound_events AS event
+         JOIN accounts AS account ON account.id = event.account_id
+         WHERE account.status = 'active'
+           AND (
+             (event.status = 'pending'
+               AND (event.next_attempt_at IS NULL OR event.next_attempt_at <= ?2))
+             OR (event.status = 'processing' AND event.locked_until <= ?2)
+           )
+         UNION
+         SELECT license.account_id
+         FROM billing_subscriptions AS subscription
+         JOIN licenses AS license
+           ON license.account_id = subscription.account_id
+          AND license.id = subscription.license_id
+         JOIN accounts AS account ON account.id = license.account_id
+         WHERE account.status = 'active'
+           AND subscription.status = 'past_due'
+           AND license.status = 'active'
+           AND license.is_checkout_verification = 0
+           AND datetime(license.expires_at, '+' || license.payment_grace_seconds || ' seconds') <= datetime(?2)
+       ) AS candidate
+       WHERE candidate.account_id > ?1
+       ORDER BY candidate.account_id
+       LIMIT ?3`,
+    ).bind(accountCursor, now.toISOString(), accountPageSize).all<{ id: string }>();
     if (accounts.results.length === 0) break;
     summary.accounts += accounts.results.length;
     for (const account of accounts.results) {
@@ -1519,7 +1554,6 @@ export async function processDueBillingInboundEvents(
         `SELECT id
          FROM inbound_events
          WHERE account_id = ?1
-           AND blocking_system_issue_id IS NULL
            AND (
              (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?2))
              OR (status = 'processing' AND locked_until <= ?2)
@@ -1534,7 +1568,6 @@ export async function processDueBillingInboundEvents(
            SET status = 'processing', locked_by = ?1, locked_until = ?2,
                attempt_count = attempt_count + 1, updated_at = ?3
            WHERE account_id = ?4 AND id = ?5
-             AND blocking_system_issue_id IS NULL
              AND (
                (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?3))
                OR (status = 'processing' AND locked_until <= ?3)

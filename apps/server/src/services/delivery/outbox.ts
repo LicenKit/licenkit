@@ -1,273 +1,250 @@
 import { ulid } from "ulid";
+import {
+  getEmailNotificationContract,
+  validateEmailNotificationVariables,
+} from "../../domain/email/contracts";
 import { decryptEnvelopeV1, encryptEnvelopeV1 } from "../../infra/delivery/crypto";
+import { getEmailProviderAdapter } from "../../infra/email/provider";
+import { AppError } from "../../middleware/error";
 
-export type DeliveryStatus = "pending" | "blocked_configuration";
+export type EmailDeliveryStatus = "pending" | "waiting_configuration";
 
-export interface PrepareNotificationDeliveryInput {
+interface EmailDeliveryEnv {
+  STORAGE_ENCRYPTION_KEY?: string;
+}
+
+export interface PrepareEmailNotificationDeliveryInput {
   db: D1Database;
-  env: { STORAGE_ENCRYPTION_KEY?: string; SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS?: string | number };
+  env: EmailDeliveryEnv;
   accountId: string;
-  customerId?: string | null;
-  licenseId?: string | null;
-  eventType: string;
+  customerId: string;
+  notificationType: string;
+  contractVersion: number;
   recipientEmail: string;
-  payload: Record<string, unknown>;
-  payloadExpiresAt?: string;
-  idempotencyKey?: string;
+  /** 业务事件发生时产生的变量；公共变量由本服务补齐。 */
+  variables: Readonly<Record<string, unknown>>;
+  /** 业务内容自身的最晚发送时间，例如 Magic Link 的失效时间。 */
+  sendExpiresAt?: string;
   now?: Date;
 }
 
-export interface PreparedNotificationDelivery {
+export interface PreparedEmailNotificationDelivery {
   deliveryId: string;
-  status: DeliveryStatus;
-  payloadExpiresAt: string;
+  status: EmailDeliveryStatus;
+  sendExpiresAt: string | null;
+  variablesExpiresAt: null;
   statements: D1PreparedStatement[];
 }
 
-export interface PrepareEndpointTestDeliveryInput {
+export interface ValidateEmailDeliveryConfigurationInput {
   db: D1Database;
-  env: PrepareNotificationDeliveryInput["env"];
+  env: EmailDeliveryEnv;
   accountId: string;
-  endpointId: string;
-  now?: Date;
+  notificationType: string;
+  contractVersion: number;
 }
 
-export interface ValidateNotificationDeliveryConfigurationInput {
-  db: D1Database;
-  env: PrepareNotificationDeliveryInput["env"];
-  accountId: string;
-  eventType: string;
+interface AccountEmailContextRow {
+  name: string;
+  slug: string;
+  site_url: string | null;
 }
 
-interface NotificationEndpointRow {
-  id: string;
-  url: string;
-  signing_secret_ciphertext: string;
-  max_automatic_attempts: number;
+interface ActiveEmailConfigurationRow {
+  integration_id: string;
+  provider: string;
+  credential_ciphertext: string;
 }
 
-const DEFAULT_SENSITIVE_PAYLOAD_TTL_SECONDS = 86_400;
+function appError(code: string, message: string, status: 400 | 404 | 409 | 500 = 400): AppError {
+  return new AppError(code, message, status);
+}
 
-function readPositiveInteger(value: string | number | undefined, fallback: number): number {
-  if (value === undefined || value === "") return fallback;
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error("SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS must be a positive integer");
+function sendExpiration(
+  now: Date,
+  requested?: string,
+): string | null {
+  if (requested === undefined) return null;
+  const requestedDeadline = Date.parse(requested);
+  if (!Number.isFinite(requestedDeadline) || requestedDeadline <= now.getTime()) {
+    throw appError(
+      "EMAIL_DELIVERY_SEND_EXPIRATION_INVALID",
+      "The email Delivery send expiration must be a valid future time.",
+    );
   }
-  return parsed;
+  return new Date(requestedDeadline).toISOString();
 }
 
-async function findNotificationEndpoint(
+async function accountEmailContext(
   db: D1Database,
   accountId: string,
-  eventType: string,
-): Promise<NotificationEndpointRow | undefined> {
-  const endpointResult = await db
+): Promise<AccountEmailContextRow> {
+  const result = await db
     .prepare(
-      `SELECT id, url, signing_secret_ciphertext, max_automatic_attempts
-       FROM outbound_endpoints
-       WHERE account_id = ?1
-         AND endpoint_type = 'notification_gateway'
-         AND status = 'active'
-         AND EXISTS (
-           SELECT 1 FROM json_each(subscribed_events_json)
-           WHERE value = ?2 OR value = '*'
-         )
-         AND EXISTS (
-           SELECT 1 FROM outbound_deliveries AS endpoint_test
-           WHERE endpoint_test.account_id = outbound_endpoints.account_id
-             AND endpoint_test.endpoint_id = outbound_endpoints.id
-             AND endpoint_test.event_type = 'endpoint.test'
-             AND endpoint_test.status = 'accepted'
-             AND endpoint_test.accepted_at >= outbound_endpoints.updated_at
-         )
+      `SELECT account.name, account.slug,
+              (SELECT site_url FROM system_settings WHERE id = 'current') AS site_url
+       FROM accounts AS account
+       WHERE account.id = ?1
        LIMIT 1`,
     )
-    .bind(accountId, eventType)
-    .all<NotificationEndpointRow>();
-  return endpointResult.results[0];
+    .bind(accountId)
+    .all<AccountEmailContextRow>();
+  const account = result.results[0];
+  if (!account) throw appError("ACCOUNT_NOT_FOUND", "The Account was not found.", 404);
+  return account;
+}
+
+async function findActiveEmailConfiguration(
+  db: D1Database,
+  accountId: string,
+  notificationType: string,
+  contractVersion: number,
+): Promise<ActiveEmailConfigurationRow | undefined> {
+  const result = await db
+    .prepare(
+      `SELECT integration.id AS integration_id, integration.provider,
+              integration.credential_ciphertext
+       FROM email_integrations AS integration
+       JOIN email_template_bindings AS binding
+         ON binding.account_id = integration.account_id
+        AND binding.email_integration_id = integration.id
+        AND binding.notification_type = ?2
+        AND binding.contract_version = ?3
+        AND binding.status = 'active'
+       WHERE integration.account_id = ?1
+         AND integration.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(accountId, notificationType, contractVersion)
+    .all<ActiveEmailConfigurationRow>();
+  return result.results[0];
+}
+
+function rejectCallerOwnedCommonVariables(
+  variables: Readonly<Record<string, unknown>>,
+): void {
+  if (
+    Object.prototype.hasOwnProperty.call(variables, "account_name")
+  ) {
+    throw appError(
+      "EMAIL_NOTIFICATION_COMMON_VARIABLE_FORBIDDEN",
+      "Shared email variables are injected by the email Delivery service.",
+    );
+  }
 }
 
 /**
- * Validates shared Notification Gateway crypto before a caller branches on a
- * private recipient identity. Missing/unverified endpoints are valid here:
- * the resulting Delivery is persisted as blocked_configuration instead.
+ * 生成一条邮件业务事实，并让调用方与业务变更放入同一个 D1 batch。
+ * Delivery 只保存事件变量；实际发送时才读取当前 Integration 与 Binding。
  */
-export async function validateNotificationDeliveryConfiguration(
-  input: ValidateNotificationDeliveryConfigurationInput,
-): Promise<void> {
-  const endpoint = await findNotificationEndpoint(input.db, input.accountId, input.eventType);
-  if (!endpoint) return;
-  await decryptEnvelopeV1(endpoint.signing_secret_ciphertext, input.env, {
-    accountId: input.accountId,
-    table: "outbound_endpoints",
-    rowId: endpoint.id,
-    field: "signing_secret_ciphertext",
-  });
-}
-
-/**
- * Builds the Delivery INSERT without executing it so callers can include it in
- * the same D1 batch as the domain mutation that produced the notification.
- */
-export async function prepareNotificationDelivery(
-  input: PrepareNotificationDeliveryInput
-): Promise<PreparedNotificationDelivery> {
+export async function prepareEmailNotificationDelivery(
+  input: PrepareEmailNotificationDeliveryInput,
+): Promise<PreparedEmailNotificationDelivery> {
   const now = input.now ?? new Date();
   const nowIso = now.toISOString();
   const deliveryId = `dly_${ulid().toLowerCase()}`;
-  const idempotencyKey = input.idempotencyKey ?? `${input.eventType}:${deliveryId}`;
-  const payloadExpiresAt = input.payloadExpiresAt ?? new Date(
-    now.getTime() + readPositiveInteger(
-      input.env.SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS,
-      DEFAULT_SENSITIVE_PAYLOAD_TTL_SECONDS,
-    ) * 1000,
-  ).toISOString();
-  if (Date.parse(payloadExpiresAt) <= now.getTime()) {
-    throw new Error("Delivery payload expiration must be in the future");
-  }
-
-  const endpoint = await findNotificationEndpoint(input.db, input.accountId, input.eventType);
-
-  const body = JSON.stringify({
-    id: deliveryId,
-    type: input.eventType,
-    created_at: nowIso,
-    recipient: { email: input.recipientEmail },
-    data: input.payload,
-  });
-  const status: DeliveryStatus = endpoint ? "pending" : "blocked_configuration";
-  const maxAutomaticAttempts = endpoint?.max_automatic_attempts ?? 4;
-  const payloadCiphertext = await encryptEnvelopeV1(body, input.env, {
+  rejectCallerOwnedCommonVariables(input.variables);
+  const sendExpiresAt = sendExpiration(now, input.sendExpiresAt);
+  const account = await accountEmailContext(input.db, input.accountId);
+  const variables = validateEmailNotificationVariables(
+    input.notificationType,
+    input.contractVersion,
+    {
+      ...input.variables,
+      account_name: account.name,
+    },
+    {
+      ...(account.site_url ? { trustedSiteUrl: account.site_url } : {}),
+      expectedAccountSlug: account.slug,
+    },
+  );
+  const configuration = await findActiveEmailConfiguration(
+    input.db,
+    input.accountId,
+    input.notificationType,
+    input.contractVersion,
+  );
+  const status: EmailDeliveryStatus = configuration ? "pending" : "waiting_configuration";
+  const variablesCiphertext = await encryptEnvelopeV1(JSON.stringify(variables), input.env, {
     accountId: input.accountId,
-    table: "outbound_deliveries",
+    table: "email_deliveries",
     rowId: deliveryId,
-    field: "payload_ciphertext",
+    field: "variables_ciphertext",
   });
-  let deliverySigningSecretCiphertext: string | null = null;
-  if (endpoint) {
-    const signingSecret = await decryptEnvelopeV1(endpoint.signing_secret_ciphertext, input.env, {
-      accountId: input.accountId,
-      table: "outbound_endpoints",
-      rowId: endpoint.id,
-      field: "signing_secret_ciphertext",
+  const lastErrorJson = configuration
+    ? null
+    : JSON.stringify({
+      outcome: "configuration_unavailable",
+      source: "licenkit",
+      code: "EMAIL_CONFIGURATION_NOT_FOUND",
+      message: "No active email Integration and Template Binding match this notification contract.",
     });
-    deliverySigningSecretCiphertext = await encryptEnvelopeV1(signingSecret, input.env, {
-      accountId: input.accountId,
-      table: "outbound_deliveries",
-      rowId: deliveryId,
-      field: "signing_secret_ciphertext",
-    });
-  }
-
   const statement = input.db
     .prepare(
-      `INSERT INTO outbound_deliveries (
-         id, account_id, endpoint_id, customer_id, license_id, event_type,
-         recipient_email, idempotency_key, target_url,
-         signing_secret_ciphertext, payload_ciphertext, payload_expires_at,
-         status, attempt_count, automatic_attempt_count,
-         max_automatic_attempts, next_attempt_at, created_at, updated_at
-       ) VALUES (
-         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-         ?13, 0, 0, ?14, ?15, ?16, ?16
-       )`
+      `INSERT INTO email_deliveries (
+         id, account_id, customer_id, notification_type, contract_version,
+         recipient_email, variables_ciphertext, send_expires_at, variables_expires_at,
+         status, attempt_count, next_attempt_at, last_error_json,
+         created_at, updated_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, 0, ?10, ?11, ?12, ?12)`,
     )
     .bind(
       deliveryId,
       input.accountId,
-      endpoint?.id ?? null,
-      input.customerId ?? null,
-      input.licenseId ?? null,
-      input.eventType,
+      input.customerId,
+      input.notificationType,
+      input.contractVersion,
       input.recipientEmail,
-      idempotencyKey,
-      endpoint?.url ?? null,
-      deliverySigningSecretCiphertext,
-      payloadCiphertext,
-      payloadExpiresAt,
+      variablesCiphertext,
+      sendExpiresAt,
       status,
-      maxAutomaticAttempts,
-      endpoint ? nowIso : null,
-      nowIso
+      status === "pending" ? nowIso : null,
+      lastErrorJson,
+      nowIso,
     );
-
   return {
     deliveryId,
     status,
-    payloadExpiresAt,
+    sendExpiresAt,
+    variablesExpiresAt: null,
     statements: [statement],
   };
 }
 
-export async function prepareEndpointTestDelivery(
-  input: PrepareEndpointTestDeliveryInput
-): Promise<PreparedNotificationDelivery> {
-  const now = input.now ?? new Date();
-  const nowIso = now.toISOString();
-  const endpointResult = await input.db
-    .prepare(
-      `SELECT id, url, signing_secret_ciphertext, max_automatic_attempts
-       FROM outbound_endpoints
-       WHERE account_id = ?1 AND id = ?2 AND status = 'active'
-       LIMIT 1`
-    )
-    .bind(input.accountId, input.endpointId)
-    .all<NotificationEndpointRow>();
-  const endpoint = endpointResult.results[0];
-  if (!endpoint) throw new Error("OUTBOUND_ENDPOINT_NOT_FOUND");
-
-  const deliveryId = `dly_${ulid().toLowerCase()}`;
-  const payloadExpiresAt = new Date(now.getTime() + 3600_000).toISOString();
-  const body = JSON.stringify({
-    id: deliveryId,
-    type: "endpoint.test",
-    created_at: nowIso,
-    data: { endpoint_id: endpoint.id, message: "LicenKit endpoint test" },
-  });
-  const signingSecret = await decryptEnvelopeV1(endpoint.signing_secret_ciphertext, input.env, {
-    accountId: input.accountId,
-    table: "outbound_endpoints",
-    rowId: endpoint.id,
-    field: "signing_secret_ciphertext",
-  });
-  const [payloadCiphertext, signingSecretCiphertext] = await Promise.all([
-    encryptEnvelopeV1(body, input.env, {
+/**
+ * 公共 Magic Link 请求在查询客户身份前调用：缺少发送配置不是身份信号，
+ * 但已配置却无法解密的凭证必须对所有请求一致失败。
+ */
+export async function validateEmailDeliveryConfiguration(
+  input: ValidateEmailDeliveryConfigurationInput,
+): Promise<void> {
+  getEmailNotificationContract(input.notificationType, input.contractVersion);
+  const configuration = await findActiveEmailConfiguration(
+    input.db,
+    input.accountId,
+    input.notificationType,
+    input.contractVersion,
+  );
+  if (!configuration) return;
+  const serialized = await decryptEnvelopeV1(
+    configuration.credential_ciphertext,
+    input.env,
+    {
       accountId: input.accountId,
-      table: "outbound_deliveries",
-      rowId: deliveryId,
-      field: "payload_ciphertext",
-    }),
-    encryptEnvelopeV1(signingSecret, input.env, {
-      accountId: input.accountId,
-      table: "outbound_deliveries",
-      rowId: deliveryId,
-      field: "signing_secret_ciphertext",
-    }),
-  ]);
-  const statement = input.db
-    .prepare(
-      `INSERT INTO outbound_deliveries (
-         id, account_id, endpoint_id, event_type, idempotency_key, target_url,
-         signing_secret_ciphertext, payload_ciphertext, payload_expires_at,
-         status, attempt_count, automatic_attempt_count, max_automatic_attempts,
-         next_attempt_at, created_at, updated_at
-       ) VALUES (
-         ?1, ?2, ?3, 'endpoint.test', ?4, ?5, ?6, ?7, ?8,
-         'pending', 0, 0, ?9, ?10, ?10, ?10
-       )`
-    )
-    .bind(
-      deliveryId,
-      input.accountId,
-      endpoint.id,
-      `endpoint.test:${deliveryId}`,
-      endpoint.url,
-      signingSecretCiphertext,
-      payloadCiphertext,
-      payloadExpiresAt,
-      endpoint.max_automatic_attempts,
-      nowIso
+      table: "email_integrations",
+      rowId: configuration.integration_id,
+      field: "credential_ciphertext",
+    },
+  );
+  let credential: unknown;
+  try {
+    credential = JSON.parse(serialized);
+  } catch {
+    throw appError(
+      "EMAIL_PROVIDER_CREDENTIAL_INVALID",
+      "The configured email Provider credential is invalid.",
+      500,
     );
-  return { deliveryId, status: "pending", payloadExpiresAt, statements: [statement] };
+  }
+  getEmailProviderAdapter(configuration.provider).validateCredentialEnvelope(credential);
 }
