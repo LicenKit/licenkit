@@ -13,11 +13,10 @@ interface EmailDeliveryEnv {
   STORAGE_ENCRYPTION_KEY?: string;
 }
 
-export interface PrepareEmailNotificationDeliveryInput {
+interface PrepareEmailNotificationDeliveryBaseInput {
   db: D1Database;
   env: EmailDeliveryEnv;
-  accountId: string;
-  customerId: string;
+  instanceId: string;
   notificationType: string;
   contractVersion: number;
   recipientEmail: string;
@@ -27,6 +26,11 @@ export interface PrepareEmailNotificationDeliveryInput {
   sendExpiresAt?: string;
   now?: Date;
 }
+
+export type PrepareEmailNotificationDeliveryInput = PrepareEmailNotificationDeliveryBaseInput & (
+  | { recipientType?: "customer"; customerId: string }
+  | { recipientType: "instance_invitation"; customerId?: never }
+);
 
 export interface PreparedEmailNotificationDelivery {
   deliveryId: string;
@@ -39,15 +43,15 @@ export interface PreparedEmailNotificationDelivery {
 export interface ValidateEmailDeliveryConfigurationInput {
   db: D1Database;
   env: EmailDeliveryEnv;
-  accountId: string;
+  instanceId: string;
   notificationType: string;
   contractVersion: number;
 }
 
-interface AccountEmailContextRow {
+interface InstanceEmailContextRow {
   name: string;
   slug: string;
-  site_url: string | null;
+  site_url: string;
 }
 
 interface ActiveEmailConfigurationRow {
@@ -75,28 +79,27 @@ function sendExpiration(
   return new Date(requestedDeadline).toISOString();
 }
 
-async function accountEmailContext(
+async function instanceEmailContext(
   db: D1Database,
-  accountId: string,
-): Promise<AccountEmailContextRow> {
+  instanceId: string,
+): Promise<InstanceEmailContextRow> {
   const result = await db
     .prepare(
-      `SELECT account.name, account.slug,
-              (SELECT site_url FROM system_settings WHERE id = 'current') AS site_url
-       FROM accounts AS account
-       WHERE account.id = ?1
+      `SELECT instance.name, instance.slug, instance.site_url
+       FROM instances AS instance
+       WHERE instance.id = ?1
        LIMIT 1`,
     )
-    .bind(accountId)
-    .all<AccountEmailContextRow>();
-  const account = result.results[0];
-  if (!account) throw appError("ACCOUNT_NOT_FOUND", "The Account was not found.", 404);
-  return account;
+    .bind(instanceId)
+    .all<InstanceEmailContextRow>();
+  const instance = result.results[0];
+  if (!instance) throw appError("INSTANCE_NOT_FOUND", "The Instance was not found.", 404);
+  return instance;
 }
 
 async function findActiveEmailConfiguration(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   notificationType: string,
   contractVersion: number,
 ): Promise<ActiveEmailConfigurationRow | undefined> {
@@ -106,16 +109,16 @@ async function findActiveEmailConfiguration(
               integration.credential_ciphertext
        FROM email_integrations AS integration
        JOIN email_template_bindings AS binding
-         ON binding.account_id = integration.account_id
+         ON binding.instance_id = integration.instance_id
         AND binding.email_integration_id = integration.id
         AND binding.notification_type = ?2
         AND binding.contract_version = ?3
         AND binding.status = 'active'
-       WHERE integration.account_id = ?1
+       WHERE integration.instance_id = ?1
          AND integration.status = 'active'
        LIMIT 1`,
     )
-    .bind(accountId, notificationType, contractVersion)
+    .bind(instanceId, notificationType, contractVersion)
     .all<ActiveEmailConfigurationRow>();
   return result.results[0];
 }
@@ -124,7 +127,7 @@ function rejectCallerOwnedCommonVariables(
   variables: Readonly<Record<string, unknown>>,
 ): void {
   if (
-    Object.prototype.hasOwnProperty.call(variables, "account_name")
+    Object.prototype.hasOwnProperty.call(variables, "instance_name")
   ) {
     throw appError(
       "EMAIL_NOTIFICATION_COMMON_VARIABLE_FORBIDDEN",
@@ -145,28 +148,28 @@ export async function prepareEmailNotificationDelivery(
   const deliveryId = `dly_${ulid().toLowerCase()}`;
   rejectCallerOwnedCommonVariables(input.variables);
   const sendExpiresAt = sendExpiration(now, input.sendExpiresAt);
-  const account = await accountEmailContext(input.db, input.accountId);
+  const instance = await instanceEmailContext(input.db, input.instanceId);
   const variables = validateEmailNotificationVariables(
     input.notificationType,
     input.contractVersion,
     {
       ...input.variables,
-      account_name: account.name,
+      instance_name: instance.name,
     },
     {
-      ...(account.site_url ? { trustedSiteUrl: account.site_url } : {}),
-      expectedAccountSlug: account.slug,
+      trustedSiteUrl: instance.site_url,
+      expectedInstanceSlug: instance.slug,
     },
   );
   const configuration = await findActiveEmailConfiguration(
     input.db,
-    input.accountId,
+    input.instanceId,
     input.notificationType,
     input.contractVersion,
   );
   const status: EmailDeliveryStatus = configuration ? "pending" : "waiting_configuration";
   const variablesCiphertext = await encryptEnvelopeV1(JSON.stringify(variables), input.env, {
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     table: "email_deliveries",
     rowId: deliveryId,
     field: "variables_ciphertext",
@@ -182,16 +185,17 @@ export async function prepareEmailNotificationDelivery(
   const statement = input.db
     .prepare(
       `INSERT INTO email_deliveries (
-         id, account_id, customer_id, notification_type, contract_version,
+         id, instance_id, recipient_type, customer_id, notification_type, contract_version,
          recipient_email, variables_ciphertext, send_expires_at, variables_expires_at,
          status, attempt_count, next_attempt_at, last_error_json,
          created_at, updated_at
-       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, 0, ?10, ?11, ?12, ?12)`,
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, 0, ?11, ?12, ?13, ?13)`,
     )
     .bind(
       deliveryId,
-      input.accountId,
-      input.customerId,
+      input.instanceId,
+      input.recipientType ?? "customer",
+      input.recipientType === "instance_invitation" ? null : input.customerId,
       input.notificationType,
       input.contractVersion,
       input.recipientEmail,
@@ -221,7 +225,7 @@ export async function validateEmailDeliveryConfiguration(
   getEmailNotificationContract(input.notificationType, input.contractVersion);
   const configuration = await findActiveEmailConfiguration(
     input.db,
-    input.accountId,
+    input.instanceId,
     input.notificationType,
     input.contractVersion,
   );
@@ -230,7 +234,7 @@ export async function validateEmailDeliveryConfiguration(
     configuration.credential_ciphertext,
     input.env,
     {
-      accountId: input.accountId,
+      instanceId: input.instanceId,
       table: "email_integrations",
       rowId: configuration.integration_id,
       field: "credential_ciphertext",

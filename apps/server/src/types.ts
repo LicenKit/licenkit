@@ -17,13 +17,13 @@ export interface Env {
   SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS?: string;
 }
 
-export type UserRole = "owner" | "admin" | "member" | "viewer";
+export type InstanceRole = "owner" | "admin" | "member" | "viewer";
 
 export interface Variables {
   requestId: string;
-  accountId?: string;
+  instanceId?: string;
   userId?: string;
-  userRole?: UserRole;
+  instanceRole?: InstanceRole;
   userEmail?: string;
   adminSessionId?: string;
   customerId?: string;

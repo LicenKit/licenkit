@@ -26,12 +26,12 @@ LicenKit 不提供产品页示例源码。使用方在自己的站点项目中�
 `.env` 只保存前端公开配置：
 
 ```dotenv
-VITE_LICENKIT_ACCOUNT_SLUG=example-studio
+VITE_LICENKIT_INSTANCE_SLUG=example-studio
 VITE_PADDLE_ENVIRONMENT=live
 VITE_PADDLE_CLIENT_SIDE_TOKEN=live_...
 ```
 
-`accountSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中显式填写的 `siteUrl` 用于生成邮件 Magic Link；当前要求它与 LicenKit `appUrl` 同源，站点通过相对路径 `/api/v1` 使用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断、Delivery 敏感负载和验证令牌不能进入源码、静态构建产物、日志或分析事件。
+`instanceSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中显式填写的 `siteUrl` 用于生成邮件 Magic Link；当前要求它与 LicenKit `appUrl` 同源，站点通过相对路径 `/api/v1` 使用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断、Delivery 敏感负载和验证令牌不能进入源码、静态构建产物、日志或分析事件。
 
 同一个 Paddle Price ID 必须在 LicenKit Admin 中创建 Billing Offer，关联唯一 Billing Provider、Product、License Plan 和购买类型。前端不需要 LicenKit Offer ID、Product ID 或 License Plan ID；后端从已验签 Webhook 中取得 Price ID 后执行关联。
 
@@ -76,7 +76,7 @@ Sandbox 与 Live 必须分别设置 Paddle Default Payment Link。Live 产品页
 - License 已创建但 Email Integration/Binding 未就绪时创建 `waiting_configuration` Email Delivery；
 - 管理端必须提供告警、诊断和显式恢复动作。
 
-Offer 激活仍要求购买闭环 Readiness，用于证明首次上线前 Product/Plan/Provider、Paddle 事件合同、active Email Integration、`customer.license_issued@1` 当前 Binding、调度器、签名密钥和真实 Sandbox 闭环均已就绪。邮件配置测试是管理员即时操作，结果和 System Issue 都不形成持久化门禁。找回、安全重置和 Magic Link Binding 可分别测试并在管理端展示状态，但不参与 Offer 激活门禁；激活状态不代表静态页面能够感知之后的运行期退化。
+Offer 激活仍要求购买闭环 Readiness，用于证明首次上线前 Product/Plan/Provider、Paddle 事件合同、active Email Integration、`customer.license_issued@1` 当前 Binding、签名密钥和真实 Sandbox 闭环均已就绪。邮件配置测试和 System Issue 都不形成持久化门禁。Scheduler 最近成功时间不持久化，也不参与 Offer 激活；远程调度是否运行必须在 Cloudflare Cron Events 与 Workers Logs 中验收。找回、安全重置和 Magic Link Binding 可分别测试并在管理端展示状态，但不参与 Offer 激活门禁；激活状态不代表静态页面能够感知之后的运行期退化。
 
 ## 5. Admin Sandbox 验证
 

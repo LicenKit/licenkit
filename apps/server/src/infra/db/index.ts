@@ -8,9 +8,10 @@ export type LicenKitDB = ReturnType<typeof drizzle<typeof schema>>;
 /**
  * Returns the tenant database instance.
  * In self-hosted LicenKit, all tenants reside in the primary c.env.DB.
- * In LicenKit-Cloud, this function dynamically routes to the appropriate D1 shard based on accountId.
+ * In LicenKit-Cloud, this function dynamically routes to the appropriate D1 shard based on instanceId.
  */
-export function getTenantDB(c: Context<AppContext>, accountId?: string): LicenKitDB {
+export function getTenantDB(c: Context<AppContext>, instanceId?: string): LicenKitDB {
+  void instanceId;
   return drizzle(c.env.DB, { schema });
 }
 

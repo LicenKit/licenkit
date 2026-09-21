@@ -8,14 +8,14 @@ import { adminLicensesRouter } from "../src/routes/admin/licenses.routes";
 import { customerRouter } from "../src/routes/customer.routes";
 import { issueManualLicense } from "../src/services/license/issue";
 import {
-  CUSTOMER_ACCOUNT_COOKIE,
+  CUSTOMER_INSTANCE_COOKIE,
   CUSTOMER_CSRF_COOKIE,
   CUSTOMER_SESSION_COOKIE,
   createSessionSecrets,
 } from "../src/services/identity/session";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
-const ACCOUNT_ID = "acc_license_email";
+const INSTANCE_ID = "acc_license_email";
 const USER_ID = "usr_license_email";
 const PRODUCT_ID = "prd_00000000000000000000000002";
 const PLAN_ID = "lpl_license_email";
@@ -43,9 +43,9 @@ function adminApp(): Hono<AppContext> {
   app.onError(errorHandler);
   app.use("*", async (c, next) => {
     c.set("requestId", "req_license_email_admin");
-    c.set("accountId", ACCOUNT_ID);
+    c.set("instanceId", INSTANCE_ID);
     c.set("userId", USER_ID);
-    c.set("userRole", "owner");
+    c.set("instanceRole", "owner");
     c.set("userEmail", "owner@example.test");
     await next();
   });
@@ -67,39 +67,32 @@ describe("License email business paths", () => {
     testEnv = createTestEnv({ STORAGE_ENCRYPTION_KEY_ID: "test-primary" });
     const nowIso = NOW.toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (
-         id, instance_name, app_url, site_url, initialized_at, updated_at
-       ) VALUES ('current', 'License Email', 'https://license.example.test',
-         'https://license.example.test', ?, ?)`,
-    ).run(nowIso, nowIso);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, 'License Email Account', 'license-email', 'active', ?, ?)`,
-    ).run(ACCOUNT_ID, nowIso, nowIso);
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?, 'License Email Instance', 'license-email', 'https://license.example.test', 'active', ?, ?)`,
+    ).run(INSTANCE_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO users (
-         id, account_id, email, password_hash, name, role, status,
+         id, email, password_hash, name,
          created_at, updated_at
-       ) VALUES (?, ?, 'owner@example.test', 'hash', 'Owner', 'owner',
-         'active', ?, ?)`,
-    ).run(USER_ID, ACCOUNT_ID, nowIso, nowIso);
+       ) VALUES (?, 'owner@example.test', 'hash', 'Owner', ?, ?)`,
+    ).run(USER_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, account_id, slug, name, description, billing_environment,
+         id, instance_id, slug, name, description, billing_environment,
          trial_enabled, trial_duration_seconds, trial_features_json,
          status, created_at, updated_at
        ) VALUES (?, ?, 'license-email-product', 'License Email Product', NULL,
          NULL, 0, NULL, '[]', 'active', ?, ?)`,
-    ).run(PRODUCT_ID, ACCOUNT_ID, nowIso, nowIso);
+    ).run(PRODUCT_ID, INSTANCE_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
-         id, account_id, product_id, name, revision, license_model,
+         id, instance_id, product_id, name, revision, license_model,
          credential_mode, default_term_seconds, update_window_seconds,
          signed_token_ttl_seconds, payment_grace_seconds, max_activations,
          features_json, status, created_at, updated_at
        ) VALUES (?, ?, ?, 'Perpetual', 1, 'perpetual', 'opaque', NULL, NULL,
          0, 0, 2, '[]', 'active', ?, ?)`,
-    ).run(PLAN_ID, ACCOUNT_ID, PRODUCT_ID, nowIso, nowIso);
+    ).run(PLAN_ID, INSTANCE_ID, PRODUCT_ID, nowIso, nowIso);
   });
 
   afterEach(() => {
@@ -115,7 +108,7 @@ describe("License email business paths", () => {
       JSON.stringify({ version: 1, apiKey: "re_license_email_secret" }),
       testEnv.env,
       {
-        accountId: ACCOUNT_ID,
+        instanceId: INSTANCE_ID,
         table: "email_integrations",
         rowId: INTEGRATION_ID,
         field: "credential_ciphertext",
@@ -123,24 +116,24 @@ describe("License email business paths", () => {
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_integrations (
-         id, account_id, provider, name, credential_ciphertext,
+         id, instance_id, provider, name, credential_ciphertext,
          default_from_email, default_from_name, max_automatic_attempts,
          status, created_at, updated_at
        ) VALUES (?, ?, 'resend', 'Primary', ?, 'licenses@example.test',
          'License Email', 4, 'active', ?, ?)`,
-    ).run(INTEGRATION_ID, ACCOUNT_ID, credentialCiphertext, nowIso, nowIso);
+    ).run(INTEGRATION_ID, INSTANCE_ID, credentialCiphertext, nowIso, nowIso);
 
     for (const [index, notificationType] of notificationTypes.entries()) {
       const bindingId = `etb_license_email_${index}`;
       testEnv.sqliteDb.prepare(
         `INSERT INTO email_template_bindings (
-         id, account_id, email_integration_id, notification_type,
+         id, instance_id, email_integration_id, notification_type,
            contract_version, provider_template_ref,
            status, created_at, updated_at
          ) VALUES (?, ?, ?, ?, 1, ?, 'active', ?, ?)`,
       ).run(
         bindingId,
-        ACCOUNT_ID,
+        INSTANCE_ID,
         INTEGRATION_ID,
         notificationType,
         TEMPLATE_BY_NOTIFICATION[notificationType],
@@ -154,7 +147,7 @@ describe("License email business paths", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       licensePlanId: PLAN_ID,
       customerEmail: "buyer@example.test",
       actor: { type: "user", id: USER_ID },
@@ -167,11 +160,11 @@ describe("License email business paths", () => {
     const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
     testEnv.sqliteDb.prepare(
       `INSERT INTO customer_login_challenges (
-         id, account_id, customer_id, token_hash, expires_at, consumed_at,
+         id, instance_id, customer_id, token_hash, expires_at, consumed_at,
          delivery_id, created_at
        ) VALUES ('mlc_license_email', ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      ACCOUNT_ID,
+      INSTANCE_ID,
       issued.license.customerId,
       await sha256Hex("challenge-license-email"),
       expiresAt,
@@ -181,11 +174,11 @@ describe("License email business paths", () => {
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO customer_sessions (
-         id, account_id, customer_id, login_challenge_id,
+         id, instance_id, customer_id, login_challenge_id,
          session_token_hash, csrf_token_hash, expires_at, created_at
        ) VALUES ('css_license_email', ?, ?, 'mlc_license_email', ?, ?, ?, ?)`,
     ).run(
-      ACCOUNT_ID,
+      INSTANCE_ID,
       issued.license.customerId,
       session.sessionTokenHash,
       session.csrfTokenHash,
@@ -197,7 +190,7 @@ describe("License email business paths", () => {
       session,
       cookie: [
         `${CUSTOMER_SESSION_COOKIE}=${session.sessionToken}`,
-        `${CUSTOMER_ACCOUNT_COOKIE}=${ACCOUNT_ID}`,
+        `${CUSTOMER_INSTANCE_COOKIE}=${INSTANCE_ID}`,
         `${CUSTOMER_CSRF_COOKIE}=${session.csrfToken}`,
       ].join("; "),
     };
@@ -216,13 +209,13 @@ describe("License email business paths", () => {
       providerBodies.push(body);
       const delivery = testEnv.sqliteDb.prepare(
         `SELECT status FROM email_deliveries
-         WHERE account_id = ? AND notification_type = ?
+         WHERE instance_id = ? AND notification_type = ?
          ORDER BY created_at DESC, id DESC LIMIT 1`,
-      ).get(ACCOUNT_ID, Object.entries(TEMPLATE_BY_NOTIFICATION).find(([, template]) => template === body.template.id)?.[0]) as any;
+      ).get(INSTANCE_ID, Object.entries(TEMPLATE_BY_NOTIFICATION).find(([, template]) => template === body.template.id)?.[0]) as any;
       const license = testEnv.sqliteDb.prepare(
-        `SELECT key_version FROM licenses WHERE account_id = ?
+        `SELECT key_version FROM licenses WHERE instance_id = ?
          ORDER BY created_at DESC, id DESC LIMIT 1`,
-      ).get(ACCOUNT_ID) as any;
+      ).get(INSTANCE_ID) as any;
       expect(delivery?.status).toBe("processing");
       expect(license?.key_version).toBeGreaterThan(0);
       committedVersions.push(license.key_version);
@@ -230,7 +223,7 @@ describe("License email business paths", () => {
     });
     vi.stubGlobal("fetch", providerFetch);
 
-    const issueResponse = await adminApp().request(
+    const legacyIssueResponse = await adminApp().request(
       "https://license.example.test/admin/licenses",
       {
         method: "POST",
@@ -242,9 +235,26 @@ describe("License email business paths", () => {
       },
       testEnv.env,
     );
+    expect(legacyIssueResponse.status).toBe(400);
+    expect((await legacyIssueResponse.json() as any).error.code).toBe("VALIDATION_ERROR");
+
+    const issueResponse = await adminApp().request(
+      "https://license.example.test/admin/licenses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          license_plan_id: PLAN_ID,
+          customer_email: "buyer@example.test",
+        }),
+      },
+      testEnv.env,
+    );
     expect(issueResponse.status).toBe(201);
     const issued = (await issueResponse.json() as any).data;
     expect(issued.delivery.status).toBe("accepted");
+    expect(issued.license).toHaveProperty("license_key");
+    expect(issued.license).not.toHaveProperty("licenseKey");
 
     const recoveryResponse = await adminApp().request(
       `https://license.example.test/admin/licenses/${issued.license.id}/recover-key`,
@@ -272,11 +282,11 @@ describe("License email business paths", () => {
       "license-security-reset-v1",
     ]);
     expect(providerBodies[0].template.variables).toMatchObject({
-      account_name: "License Email Account",
+      instance_name: "License Email Instance",
       product_id: PRODUCT_ID,
       product_name: "License Email Product",
       license_id: issued.license.id,
-      license_key: issued.license.licenseKey,
+      license_key: issued.license.license_key,
       license_model: "perpetual",
     });
     expect(providerBodies[0].template.variables).not.toHaveProperty("recipient_email");
@@ -286,12 +296,12 @@ describe("License email business paths", () => {
     expect(providerBodies[2].template.variables.key_version).toBe(3);
 
     const auditJson = JSON.stringify(testEnv.sqliteDb.prepare(
-      `SELECT details_redacted_json FROM audit_logs WHERE account_id = ?
+      `SELECT details_redacted_json FROM audit_logs WHERE instance_id = ?
        ORDER BY created_at, id`,
-    ).all(ACCOUNT_ID));
-    expect(auditJson).not.toContain(issued.license.licenseKey);
-    expect(auditJson).not.toContain(recovered.licenseKey);
-    expect(auditJson).not.toContain(reset.licenseKey);
+    ).all(INSTANCE_ID));
+    expect(auditJson).not.toContain(issued.license.license_key);
+    expect(auditJson).not.toContain(recovered.license_key);
+    expect(auditJson).not.toContain(reset.license_key);
   });
 
   it("uses waitUntil for Customer recovery and keeps the successful response when Provider delivery fails", async () => {
@@ -301,13 +311,13 @@ describe("License email business paths", () => {
     let committedBeforeProvider = false;
     const providerFetch = vi.fn(async () => {
       const license = testEnv.sqliteDb.prepare(
-        `SELECT key_version FROM licenses WHERE account_id = ? AND id = ?`,
-      ).get(ACCOUNT_ID, issued.license.id) as any;
+        `SELECT key_version FROM licenses WHERE instance_id = ? AND id = ?`,
+      ).get(INSTANCE_ID, issued.license.id) as any;
       const delivery = testEnv.sqliteDb.prepare(
         `SELECT status FROM email_deliveries
-         WHERE account_id = ? AND notification_type = 'customer.license_recovered'
+         WHERE instance_id = ? AND notification_type = 'customer.license_recovered'
          ORDER BY created_at DESC, id DESC LIMIT 1`,
-      ).get(ACCOUNT_ID) as any;
+      ).get(INSTANCE_ID) as any;
       committedBeforeProvider = license?.key_version === 2 && delivery?.status === "processing";
       return jsonResponse(
         { name: "application_error", message: "temporary Provider failure" },
@@ -338,7 +348,7 @@ describe("License email business paths", () => {
     expect(response.status).toBe(200);
     const result = (await response.json() as any).data;
     expect(result.delivery.status).toBe("pending");
-    expect(result.license.keyVersion).toBe(2);
+    expect(result.license.key_version).toBe(2);
     expect(backgroundTasks).toHaveLength(1);
     await expect(backgroundTasks[0]).resolves.toBeUndefined();
     expect(providerFetch).toHaveBeenCalledTimes(1);
@@ -350,9 +360,9 @@ describe("License email business paths", () => {
       attempt_count: 1,
     });
     const auditJson = JSON.stringify(testEnv.sqliteDb.prepare(
-      `SELECT details_redacted_json FROM audit_logs WHERE account_id = ?`,
-    ).all(ACCOUNT_ID));
-    expect(auditJson).not.toContain(result.licenseKey);
+      `SELECT details_redacted_json FROM audit_logs WHERE instance_id = ?`,
+    ).all(INSTANCE_ID));
+    expect(auditJson).not.toContain(result.license_key);
   });
 
   it("keeps the Customer recovery response successful when waitUntil registration fails", async () => {
@@ -385,12 +395,12 @@ describe("License email business paths", () => {
     );
     expect(response.status).toBe(200);
     const result = (await response.json() as any).data;
-    expect(result.license.keyVersion).toBe(2);
+    expect(result.license.key_version).toBe(2);
     expect(result.delivery.status).toBe("pending");
     expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(log.mock.calls)).not.toContain(issued.license.licenseKey);
     expect(testEnv.sqliteDb.prepare(
-      `SELECT key_version FROM licenses WHERE account_id = ? AND id = ?`,
-    ).get(ACCOUNT_ID, issued.license.id)).toEqual({ key_version: 2 });
+      `SELECT key_version FROM licenses WHERE instance_id = ? AND id = ?`,
+    ).get(INSTANCE_ID, issued.license.id)).toEqual({ key_version: 2 });
   });
 });

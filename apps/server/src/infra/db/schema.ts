@@ -13,62 +13,46 @@ import {
 } from "drizzle-orm/sqlite-core";
 import type { SQLiteTableExtraConfigValue } from "drizzle-orm/sqlite-core";
 
-const accountReference = { onDelete: "restrict" as const };
+const restrictReference = { onDelete: "restrict" as const };
 const nocaseText = customType<{ data: string }>({
   dataType() {
     return "text COLLATE NOCASE";
   },
 });
 
-export const systemSettings = sqliteTable(
-  "system_settings",
-  {
-    id: text("id").primaryKey(),
-    instanceName: text("instance_name").notNull(),
-    appUrl: text("app_url").notNull(),
-    siteUrl: text("site_url").notNull(),
-    apiBaseUrl: text("api_base_url"),
-    schedulerLastSuccessAt: text("scheduler_last_success_at"),
-    schedulerLastDurationMs: integer("scheduler_last_duration_ms"),
-    initializedAt: text("initialized_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    check("ck_system_settings_singleton", sql`${table.id} = 'current'`),
-    check(
-      "ck_system_settings_scheduler_duration",
-      sql`${table.schedulerLastDurationMs} is null or ${table.schedulerLastDurationMs} >= 0`,
-    ),
-    check(
-      "ck_system_settings_scheduler_health_pair",
-      sql`(${table.schedulerLastSuccessAt} is null and ${table.schedulerLastDurationMs} is null)
-        or (${table.schedulerLastSuccessAt} is not null and ${table.schedulerLastDurationMs} is not null)`,
-    ),
-  ],
-);
-
-export const accounts = sqliteTable(
-  "accounts",
+export const instances = sqliteTable(
+  "instances",
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
-    defaultSubscriptionPaymentGraceSeconds: integer(
-      "default_subscription_payment_grace_seconds",
-    )
-      .notNull()
-      .default(432000),
+    siteUrl: text("site_url").notNull(),
     status: text("status").notNull().default("active"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_accounts_slug").on(table.slug),
+    unique("uq_instances_slug").on(table.slug),
     check(
-      "ck_accounts_default_subscription_payment_grace_seconds",
-      sql`${table.defaultSubscriptionPaymentGraceSeconds} >= 0`,
+      "ck_instances_slug",
+      sql`length(${table.slug}) > 0
+        and ${table.slug} = lower(${table.slug})
+        and ${table.slug} not glob '*[^a-z0-9-]*'
+        and ${table.slug} not like '-%'
+        and ${table.slug} not like '%-'`,
     ),
-    check("ck_accounts_status", sql`${table.status} in ('active', 'suspended', 'archived')`),
+    check("ck_instances_status", sql`${table.status} in ('active', 'suspended', 'archived')`),
+  ],
+);
+
+export const deploymentBootstrap = sqliteTable(
+  "deployment_bootstrap",
+  {
+    singletonKey: text("singleton_key").primaryKey(),
+    completedAt: text("completed_at").notNull(),
+  },
+  (table) => [
+    check("ck_deployment_bootstrap_singleton", sql`${table.singletonKey} = 'deployment'`),
   ],
 );
 
@@ -76,23 +60,14 @@ export const users = sqliteTable(
   "users",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
-      .notNull()
-      .references(() => accounts.id, accountReference),
     email: nocaseText("email").notNull(),
     passwordHash: text("password_hash").notNull(),
     name: text("name").notNull(),
-    role: text("role").notNull(),
-    status: text("status").notNull().default("active"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_users_account_id").on(table.accountId, table.id),
-    unique("uq_users_account_email").on(table.accountId, table.email),
-    index("idx_users_account_status").on(table.accountId, table.status),
-    check("ck_users_role", sql`${table.role} in ('owner', 'admin', 'member', 'viewer')`),
-    check("ck_users_status", sql`${table.status} in ('active', 'disabled')`),
+    unique("uq_users_email").on(table.email),
   ],
 );
 
@@ -100,10 +75,9 @@ export const adminSessions = sqliteTable(
   "admin_sessions",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
-    userId: text("user_id").notNull(),
+      .references(() => users.id, restrictReference),
     sessionTokenHash: text("session_token_hash").notNull(),
     csrfTokenHash: text("csrf_token_hash").notNull(),
     expiresAt: text("expires_at").notNull(),
@@ -112,16 +86,10 @@ export const adminSessions = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    unique("uq_admin_sessions_account_id").on(table.accountId, table.id),
     unique("uq_admin_sessions_token_hash").on(table.sessionTokenHash),
     unique("uq_admin_sessions_csrf_token_hash").on(table.csrfTokenHash),
-    foreignKey({
-      name: "fk_admin_sessions_user",
-      columns: [table.accountId, table.userId],
-      foreignColumns: [users.accountId, users.id],
-    }).onDelete("restrict"),
-    index("idx_admin_sessions_user_expiry").on(table.accountId, table.userId, table.expiresAt),
-    index("idx_admin_sessions_lookup").on(table.accountId, table.sessionTokenHash),
+    index("idx_admin_sessions_user_expiry").on(table.userId, table.expiresAt),
+    index("idx_admin_sessions_lookup").on(table.sessionTokenHash),
   ],
 );
 
@@ -129,9 +97,9 @@ export const customers = sqliteTable(
   "customers",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     email: nocaseText("email").notNull(),
     name: text("name"),
     status: text("status").notNull().default("active"),
@@ -139,10 +107,10 @@ export const customers = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_customers_account_id").on(table.accountId, table.id),
-    unique("uq_customers_account_email").on(table.accountId, table.email),
-    index("idx_customers_account_status").on(
-      table.accountId,
+    unique("uq_customers_instance_id").on(table.instanceId, table.id),
+    unique("uq_customers_instance_email").on(table.instanceId, table.email),
+    index("idx_customers_instance_status").on(
+      table.instanceId,
       table.status,
       sql`${table.createdAt} desc`,
     ),
@@ -154,13 +122,14 @@ export const products = sqliteTable(
   "products",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     description: text("description"),
     billingEnvironment: text("billing_environment"),
+    paymentGraceSeconds: integer("payment_grace_seconds").notNull().default(0),
     trialEnabled: integer("trial_enabled", { mode: "boolean" }).notNull().default(false),
     trialDurationSeconds: integer("trial_duration_seconds"),
     trialFeaturesJson: text("trial_features_json").notNull().default("[]"),
@@ -169,13 +138,14 @@ export const products = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_products_account_id").on(table.accountId, table.id),
-    unique("uq_products_account_slug").on(table.accountId, table.slug),
-    index("idx_products_account_status").on(table.accountId, table.status),
+    unique("uq_products_instance_id").on(table.instanceId, table.id),
+    unique("uq_products_instance_slug").on(table.instanceId, table.slug),
+    index("idx_products_instance_status").on(table.instanceId, table.status),
     check(
       "ck_products_billing_environment",
       sql`${table.billingEnvironment} in ('sandbox', 'live')`,
     ),
+    check("ck_products_payment_grace", sql`${table.paymentGraceSeconds} >= 0`),
     check("ck_products_trial_enabled", sql`${table.trialEnabled} in (0, 1)`),
     check(
       "ck_products_trial_duration_seconds",
@@ -197,9 +167,9 @@ export const productReleases = sqliteTable(
   "product_releases",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     productId: text("product_id").notNull(),
     version: text("version").notNull(),
     platform: text("platform").notNull(),
@@ -211,20 +181,20 @@ export const productReleases = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_product_releases_account_id").on(table.accountId, table.id),
+    unique("uq_product_releases_instance_id").on(table.instanceId, table.id),
     unique("uq_product_releases_identity").on(
-      table.accountId,
+      table.instanceId,
       table.productId,
       table.version,
       table.platform,
     ),
     foreignKey({
       name: "fk_product_releases_product",
-      columns: [table.accountId, table.productId],
-      foreignColumns: [products.accountId, products.id],
+      columns: [table.instanceId, table.productId],
+      foreignColumns: [products.instanceId, products.id],
     }).onDelete("restrict"),
     index("idx_product_releases_lookup").on(
-      table.accountId,
+      table.instanceId,
       table.productId,
       table.version,
       table.platform,
@@ -242,9 +212,9 @@ export const signingKeys = sqliteTable(
   "signing_keys",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     productId: text("product_id").notNull(),
     algorithm: text("algorithm").notNull().default("Ed25519"),
     source: text("source").notNull(),
@@ -256,15 +226,15 @@ export const signingKeys = sqliteTable(
     revokedAt: text("revoked_at"),
   },
   (table) => [
-    unique("uq_signing_keys_account_id").on(table.accountId, table.id),
+    unique("uq_signing_keys_instance_id").on(table.instanceId, table.id),
     foreignKey({
       name: "fk_signing_keys_product",
-      columns: [table.accountId, table.productId],
-      foreignColumns: [products.accountId, products.id],
+      columns: [table.instanceId, table.productId],
+      foreignColumns: [products.instanceId, products.id],
     }).onDelete("restrict"),
-    index("idx_signing_keys_product_status").on(table.accountId, table.productId, table.status),
+    index("idx_signing_keys_product_status").on(table.instanceId, table.productId, table.status),
     uniqueIndex("uq_signing_keys_product_active")
-      .on(table.accountId, table.productId)
+      .on(table.instanceId, table.productId)
       .where(sql`${table.status} = 'active'`),
     check("ck_signing_keys_algorithm", sql`${table.algorithm} = 'Ed25519'`),
     check("ck_signing_keys_source", sql`${table.source} in ('generated', 'uploaded')`),
@@ -276,9 +246,9 @@ export const licensePlans = sqliteTable(
   "license_plans",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     productId: text("product_id").notNull(),
     name: text("name").notNull(),
     revision: integer("revision").notNull().default(1),
@@ -295,14 +265,14 @@ export const licensePlans = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_license_plans_account_id").on(table.accountId, table.id),
-    unique("uq_license_plans_product_id").on(table.accountId, table.productId, table.id),
+    unique("uq_license_plans_instance_id").on(table.instanceId, table.id),
+    unique("uq_license_plans_product_id").on(table.instanceId, table.productId, table.id),
     foreignKey({
       name: "fk_license_plans_product",
-      columns: [table.accountId, table.productId],
-      foreignColumns: [products.accountId, products.id],
+      columns: [table.instanceId, table.productId],
+      foreignColumns: [products.instanceId, products.id],
     }).onDelete("restrict"),
-    index("idx_license_plans_product_status").on(table.accountId, table.productId, table.status),
+    index("idx_license_plans_product_status").on(table.instanceId, table.productId, table.status),
     check("ck_license_plans_revision", sql`${table.revision} >= 1`),
     check(
       "ck_license_plans_license_model",
@@ -351,9 +321,9 @@ export const billingProviders = sqliteTable(
   "billing_providers",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     provider: text("provider").notNull(),
     environment: text("environment").notNull(),
     clientSideToken: text("client_side_token").notNull(),
@@ -364,9 +334,9 @@ export const billingProviders = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_billing_providers_account_id").on(table.accountId, table.id),
-    unique("uq_billing_providers_identity").on(table.accountId, table.provider, table.environment),
-    index("idx_billing_providers_account_status").on(table.accountId, table.status),
+    unique("uq_billing_providers_instance_id").on(table.instanceId, table.id),
+    unique("uq_billing_providers_identity").on(table.instanceId, table.provider, table.environment),
+    index("idx_billing_providers_instance_status").on(table.instanceId, table.status),
     check("ck_billing_providers_environment", sql`${table.environment} in ('sandbox', 'live')`),
     check("ck_billing_providers_status", sql`${table.status} in ('active', 'disabled')`),
     check(
@@ -381,9 +351,9 @@ export const systemIssues = sqliteTable(
   "system_issues",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     category: text("category").notNull(),
     sourceType: text("source_type").notNull(),
     sourceId: text("source_id").notNull(),
@@ -395,12 +365,15 @@ export const systemIssues = sqliteTable(
     firstSeenAt: text("first_seen_at").notNull(),
     lastSeenAt: text("last_seen_at").notNull(),
     processedAt: text("processed_at"),
-    processedByUserId: text("processed_by_user_id"),
+    processedByUserId: text("processed_by_user_id").references(
+      () => users.id,
+      restrictReference,
+    ),
   },
   (table) => [
-    unique("uq_system_issues_account_id").on(table.accountId, table.id),
+    unique("uq_system_issues_instance_id").on(table.instanceId, table.id),
     unique("uq_system_issues_identity").on(
-      table.accountId,
+      table.instanceId,
       table.category,
       table.sourceType,
       table.sourceId,
@@ -408,12 +381,12 @@ export const systemIssues = sqliteTable(
       table.errorCode,
     ),
     index("idx_system_issues_recent").on(
-      table.accountId,
+      table.instanceId,
       table.status,
       table.lastSeenAt,
     ),
     index("idx_system_issues_source").on(
-      table.accountId,
+      table.instanceId,
       table.category,
       table.sourceType,
       table.sourceId,
@@ -438,11 +411,6 @@ export const systemIssues = sqliteTable(
           and ${table.processedAt} is not null
           and ${table.processedByUserId} is not null)`,
     ),
-    foreignKey({
-      name: "fk_system_issues_processed_by",
-      columns: [table.accountId, table.processedByUserId],
-      foreignColumns: [users.accountId, users.id],
-    }).onDelete("restrict"),
   ],
 );
 
@@ -450,9 +418,9 @@ export const licenses = sqliteTable(
   "licenses",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     customerId: text("customer_id").notNull(),
     productId: text("product_id").notNull(),
     planId: text("plan_id").notNull(),
@@ -483,41 +451,41 @@ export const licenses = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_licenses_account_id").on(table.accountId, table.id),
-    unique("uq_licenses_account_key_hash").on(table.accountId, table.keyHash),
+    unique("uq_licenses_instance_id").on(table.instanceId, table.id),
+    unique("uq_licenses_instance_key_hash").on(table.instanceId, table.keyHash),
     foreignKey({
       name: "fk_licenses_customer",
-      columns: [table.accountId, table.customerId],
-      foreignColumns: [customers.accountId, customers.id],
+      columns: [table.instanceId, table.customerId],
+      foreignColumns: [customers.instanceId, customers.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_licenses_product",
-      columns: [table.accountId, table.productId],
-      foreignColumns: [products.accountId, products.id],
+      columns: [table.instanceId, table.productId],
+      foreignColumns: [products.instanceId, products.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_licenses_plan",
-      columns: [table.accountId, table.productId, table.planId],
-      foreignColumns: [licensePlans.accountId, licensePlans.productId, licensePlans.id],
+      columns: [table.instanceId, table.productId, table.planId],
+      foreignColumns: [licensePlans.instanceId, licensePlans.productId, licensePlans.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_licenses_source_provider",
-      columns: [table.accountId, table.sourceBillingProviderId],
-      foreignColumns: [billingProviders.accountId, billingProviders.id],
+      columns: [table.instanceId, table.sourceBillingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
     }).onDelete("restrict"),
     uniqueIndex("uq_licenses_source_transaction")
-      .on(table.accountId, table.sourceBillingProviderId, table.sourceExternalTransactionId)
+      .on(table.instanceId, table.sourceBillingProviderId, table.sourceExternalTransactionId)
       .where(
         sql`${table.sourceBillingProviderId} is not null and ${table.sourceExternalTransactionId} is not null`,
       ),
-    index("idx_licenses_account_status").on(
-      table.accountId,
+    index("idx_licenses_instance_status").on(
+      table.instanceId,
       table.status,
       sql`${table.createdAt} desc`,
     ),
-    index("idx_licenses_product_plan").on(table.accountId, table.productId, table.planId),
+    index("idx_licenses_product_plan").on(table.instanceId, table.productId, table.planId),
     index("idx_licenses_customer").on(
-      table.accountId,
+      table.instanceId,
       table.customerId,
       sql`${table.createdAt} desc`,
     ),
@@ -599,9 +567,9 @@ export const activations = sqliteTable(
   "activations",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     licenseId: text("license_id").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
     machineTokenHash: text("machine_token_hash").notNull(),
@@ -617,16 +585,16 @@ export const activations = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_activations_account_id").on(table.accountId, table.id),
+    unique("uq_activations_instance_id").on(table.instanceId, table.id),
     foreignKey({
       name: "fk_activations_license",
-      columns: [table.accountId, table.licenseId],
-      foreignColumns: [licenses.accountId, licenses.id],
+      columns: [table.instanceId, table.licenseId],
+      foreignColumns: [licenses.instanceId, licenses.id],
     }).onDelete("restrict"),
-    index("idx_activations_license_status").on(table.accountId, table.licenseId, table.status),
-    index("idx_activations_token_hash").on(table.accountId, table.machineTokenHash),
+    index("idx_activations_license_status").on(table.instanceId, table.licenseId, table.status),
+    index("idx_activations_token_hash").on(table.instanceId, table.machineTokenHash),
     uniqueIndex("uq_activations_active_fingerprint")
-      .on(table.accountId, table.licenseId, table.fingerprintHash)
+      .on(table.instanceId, table.licenseId, table.fingerprintHash)
       .where(sql`${table.status} = 'active'`),
     check("ck_activations_status", sql`${table.status} in ('active', 'deactivated', 'revoked')`),
   ],
@@ -636,9 +604,9 @@ export const trialClaims = sqliteTable(
   "trial_claims",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     productId: text("product_id").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
     trialTokenHash: text("trial_token_hash").notNull(),
@@ -651,17 +619,17 @@ export const trialClaims = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_trial_claims_account_id").on(table.accountId, table.id),
-    unique("uq_trial_claims_token_hash").on(table.accountId, table.trialTokenHash),
-    unique("uq_trial_claims_device").on(table.accountId, table.productId, table.fingerprintHash),
+    unique("uq_trial_claims_instance_id").on(table.instanceId, table.id),
+    unique("uq_trial_claims_token_hash").on(table.instanceId, table.trialTokenHash),
+    unique("uq_trial_claims_device").on(table.instanceId, table.productId, table.fingerprintHash),
     foreignKey({
       name: "fk_trial_claims_product",
-      columns: [table.accountId, table.productId],
-      foreignColumns: [products.accountId, products.id],
+      columns: [table.instanceId, table.productId],
+      foreignColumns: [products.instanceId, products.id],
     }).onDelete("restrict"),
-    index("idx_trial_claims_lookup").on(table.accountId, table.productId, table.id),
+    index("idx_trial_claims_lookup").on(table.instanceId, table.productId, table.id),
     index("idx_trial_claims_expiry").on(
-      table.accountId,
+      table.instanceId,
       table.productId,
       table.expiresAt,
       table.revokedAt,
@@ -683,9 +651,9 @@ export const billingCustomers = sqliteTable(
   "billing_customers",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     billingProviderId: text("billing_provider_id").notNull(),
     customerId: text("customer_id"),
     externalCustomerId: text("external_customer_id").notNull(),
@@ -700,33 +668,29 @@ export const billingCustomers = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_billing_customers_account_id").on(table.accountId, table.id),
-    unique("uq_billing_customers_provider_customer").on(
-      table.billingProviderId,
-      table.externalCustomerId,
-    ),
-    unique("uq_billing_customers_account_provider_customer").on(
-      table.accountId,
+    unique("uq_billing_customers_instance_id").on(table.instanceId, table.id),
+    unique("uq_billing_customers_instance_provider_customer").on(
+      table.instanceId,
       table.billingProviderId,
       table.externalCustomerId,
     ),
     foreignKey({
       name: "fk_billing_customers_provider",
-      columns: [table.accountId, table.billingProviderId],
-      foreignColumns: [billingProviders.accountId, billingProviders.id],
+      columns: [table.instanceId, table.billingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_customers_customer",
-      columns: [table.accountId, table.customerId],
-      foreignColumns: [customers.accountId, customers.id],
+      columns: [table.instanceId, table.customerId],
+      foreignColumns: [customers.instanceId, customers.id],
     }).onDelete("restrict"),
     index("idx_billing_customers_customer").on(
-      table.accountId,
+      table.instanceId,
       table.customerId,
       sql`${table.updatedAt} desc`,
     ),
     index("idx_billing_customers_link_status").on(
-      table.accountId,
+      table.instanceId,
       table.billingProviderId,
       table.linkStatus,
       table.updatedAt,
@@ -752,9 +716,9 @@ export const billingOffers = sqliteTable(
   "billing_offers",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     billingProviderId: text("billing_provider_id").notNull(),
     externalPriceId: text("external_price_id").notNull(),
     productId: text("product_id").notNull(),
@@ -765,24 +729,28 @@ export const billingOffers = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_billing_offers_account_id").on(table.accountId, table.id),
-    unique("uq_billing_offers_price").on(table.billingProviderId, table.externalPriceId),
+    unique("uq_billing_offers_instance_id").on(table.instanceId, table.id),
+    unique("uq_billing_offers_price").on(
+      table.instanceId,
+      table.billingProviderId,
+      table.externalPriceId,
+    ),
     foreignKey({
       name: "fk_billing_offers_provider",
-      columns: [table.accountId, table.billingProviderId],
-      foreignColumns: [billingProviders.accountId, billingProviders.id],
+      columns: [table.instanceId, table.billingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_offers_product",
-      columns: [table.accountId, table.productId],
-      foreignColumns: [products.accountId, products.id],
+      columns: [table.instanceId, table.productId],
+      foreignColumns: [products.instanceId, products.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_offers_plan",
-      columns: [table.accountId, table.productId, table.licensePlanId],
-      foreignColumns: [licensePlans.accountId, licensePlans.productId, licensePlans.id],
+      columns: [table.instanceId, table.productId, table.licensePlanId],
+      foreignColumns: [licensePlans.instanceId, licensePlans.productId, licensePlans.id],
     }).onDelete("restrict"),
-    index("idx_billing_offers_plan_status").on(table.accountId, table.licensePlanId, table.status),
+    index("idx_billing_offers_plan_status").on(table.instanceId, table.licensePlanId, table.status),
     check("ck_billing_offers_purchase_type", sql`${table.purchaseType} in ('one_time', 'subscription')`),
     check("ck_billing_offers_status", sql`${table.status} in ('draft', 'active', 'archived')`),
   ],
@@ -792,9 +760,9 @@ export const billingSubscriptions = sqliteTable(
   "billing_subscriptions",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     billingProviderId: text("billing_provider_id").notNull(),
     licenseId: text("license_id").notNull(),
     externalSubscriptionId: text("external_subscription_id").notNull(),
@@ -816,33 +784,34 @@ export const billingSubscriptions = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_billing_subscriptions_account_id").on(table.accountId, table.id),
+    unique("uq_billing_subscriptions_instance_id").on(table.instanceId, table.id),
     unique("uq_billing_subscriptions_external").on(
+      table.instanceId,
       table.billingProviderId,
       table.externalSubscriptionId,
     ),
-    unique("uq_billing_subscriptions_license").on(table.licenseId),
+    unique("uq_billing_subscriptions_license").on(table.instanceId, table.licenseId),
     foreignKey({
       name: "fk_billing_subscriptions_provider",
-      columns: [table.accountId, table.billingProviderId],
-      foreignColumns: [billingProviders.accountId, billingProviders.id],
+      columns: [table.instanceId, table.billingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_subscriptions_customer",
-      columns: [table.accountId, table.billingProviderId, table.externalCustomerId],
+      columns: [table.instanceId, table.billingProviderId, table.externalCustomerId],
       foreignColumns: [
-        billingCustomers.accountId,
+        billingCustomers.instanceId,
         billingCustomers.billingProviderId,
         billingCustomers.externalCustomerId,
       ],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_subscriptions_license",
-      columns: [table.accountId, table.licenseId],
-      foreignColumns: [licenses.accountId, licenses.id],
+      columns: [table.instanceId, table.licenseId],
+      foreignColumns: [licenses.instanceId, licenses.id],
     }).onDelete("restrict"),
     index("idx_billing_subscriptions_status_period").on(
-      table.accountId,
+      table.instanceId,
       table.status,
       table.currentPeriodEnd,
     ),
@@ -880,9 +849,9 @@ export const billingAdjustments = sqliteTable(
   "billing_adjustments",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     billingProviderId: text("billing_provider_id").notNull(),
     licenseId: text("license_id"),
     externalAdjustmentId: text("external_adjustment_id").notNull(),
@@ -899,7 +868,10 @@ export const billingAdjustments = sqliteTable(
     reviewStatus: text("review_status").notNull(),
     resolutionAction: text("resolution_action"),
     resolutionReason: text("resolution_reason"),
-    resolvedByUserId: text("resolved_by_user_id"),
+    resolvedByUserId: text("resolved_by_user_id").references(
+      () => users.id,
+      restrictReference,
+    ),
     resolvedAt: text("resolved_at"),
     lastExternalOccurredAt: text("last_external_occurred_at").notNull(),
     lastExternalEventId: text("last_external_event_id").notNull(),
@@ -907,33 +879,29 @@ export const billingAdjustments = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_billing_adjustments_account_id").on(table.accountId, table.id),
+    unique("uq_billing_adjustments_instance_id").on(table.instanceId, table.id),
     unique("uq_billing_adjustments_external").on(
+      table.instanceId,
       table.billingProviderId,
       table.externalAdjustmentId,
     ),
     foreignKey({
       name: "fk_billing_adjustments_provider",
-      columns: [table.accountId, table.billingProviderId],
-      foreignColumns: [billingProviders.accountId, billingProviders.id],
+      columns: [table.instanceId, table.billingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_adjustments_license",
-      columns: [table.accountId, table.licenseId],
-      foreignColumns: [licenses.accountId, licenses.id],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_billing_adjustments_resolved_by",
-      columns: [table.accountId, table.resolvedByUserId],
-      foreignColumns: [users.accountId, users.id],
+      columns: [table.instanceId, table.licenseId],
+      foreignColumns: [licenses.instanceId, licenses.id],
     }).onDelete("restrict"),
     index("idx_billing_adjustments_review").on(
-      table.accountId,
+      table.instanceId,
       table.reviewStatus,
       sql`${table.updatedAt} desc`,
     ),
     index("idx_billing_adjustments_transaction").on(
-      table.accountId,
+      table.instanceId,
       table.billingProviderId,
       table.externalTransactionId,
       sql`${table.updatedAt} desc`,
@@ -995,9 +963,9 @@ export const inboundEvents = sqliteTable(
   "inbound_events",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     billingProviderId: text("billing_provider_id").notNull(),
     externalEventId: text("external_event_id").notNull(),
     externalEventType: text("external_event_type").notNull(),
@@ -1024,29 +992,33 @@ export const inboundEvents = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_inbound_events_account_id").on(table.accountId, table.id),
-    unique("uq_inbound_events_external").on(table.billingProviderId, table.externalEventId),
+    unique("uq_inbound_events_instance_id").on(table.instanceId, table.id),
+    unique("uq_inbound_events_external").on(
+      table.instanceId,
+      table.billingProviderId,
+      table.externalEventId,
+    ),
     foreignKey({
       name: "fk_inbound_events_provider",
-      columns: [table.accountId, table.billingProviderId],
-      foreignColumns: [billingProviders.accountId, billingProviders.id],
+      columns: [table.instanceId, table.billingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
     }).onDelete("restrict"),
     index("idx_inbound_events_status_schedule").on(
-      table.accountId,
+      table.instanceId,
       table.status,
       table.nextAttemptAt,
       table.lockedUntil,
       table.receivedAt,
     ),
     index("idx_inbound_events_provider_type").on(
-      table.accountId,
+      table.instanceId,
       table.billingProviderId,
       table.externalEventType,
       sql`${table.receivedAt} desc`,
     ),
     index("idx_inbound_events_customer")
       .on(
-        table.accountId,
+        table.instanceId,
         table.billingProviderId,
         table.externalCustomerId,
         sql`${table.receivedAt} desc`,
@@ -1054,7 +1026,7 @@ export const inboundEvents = sqliteTable(
       .where(sql`${table.externalCustomerId} is not null`),
     index("idx_inbound_events_transaction")
       .on(
-        table.accountId,
+        table.instanceId,
         table.billingProviderId,
         table.externalTransactionId,
         sql`${table.receivedAt} desc`,
@@ -1062,7 +1034,7 @@ export const inboundEvents = sqliteTable(
       .where(sql`${table.externalTransactionId} is not null`),
     index("idx_inbound_events_subscription")
       .on(
-        table.accountId,
+        table.instanceId,
         table.billingProviderId,
         table.externalSubscriptionId,
         sql`${table.receivedAt} desc`,
@@ -1070,7 +1042,7 @@ export const inboundEvents = sqliteTable(
       .where(sql`${table.externalSubscriptionId} is not null`),
     index("idx_inbound_events_adjustment")
       .on(
-        table.accountId,
+        table.instanceId,
         table.billingProviderId,
         table.externalAdjustmentId,
         sql`${table.receivedAt} desc`,
@@ -1091,9 +1063,9 @@ export const emailIntegrations = sqliteTable(
   "email_integrations",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     provider: text("provider").notNull(),
     name: text("name").notNull(),
     credentialCiphertext: text("credential_ciphertext").notNull(),
@@ -1106,11 +1078,11 @@ export const emailIntegrations = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_email_integrations_account_id").on(table.accountId, table.id),
-    uniqueIndex("uq_email_integrations_active_account")
-      .on(table.accountId)
+    unique("uq_email_integrations_instance_id").on(table.instanceId, table.id),
+    uniqueIndex("uq_email_integrations_active_instance")
+      .on(table.instanceId)
       .where(sql`${table.status} = 'active'`),
-    index("idx_email_integrations_account_status").on(table.accountId, table.status),
+    index("idx_email_integrations_instance_status").on(table.instanceId, table.status),
     check("ck_email_integrations_provider", sql`${table.provider} = 'resend'`),
     check(
       "ck_email_integrations_max_attempts",
@@ -1124,9 +1096,9 @@ export const emailTemplateBindings = sqliteTable(
   "email_template_bindings",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     emailIntegrationId: text("email_integration_id").notNull(),
     notificationType: text("notification_type").notNull(),
     contractVersion: integer("contract_version").notNull(),
@@ -1136,24 +1108,24 @@ export const emailTemplateBindings = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table): SQLiteTableExtraConfigValue[] => [
-    unique("uq_email_template_bindings_account_id").on(table.accountId, table.id),
+    unique("uq_email_template_bindings_instance_id").on(table.instanceId, table.id),
     unique("uq_email_template_bindings_integration_id").on(
-      table.accountId,
+      table.instanceId,
       table.emailIntegrationId,
       table.id,
     ),
     unique("uq_email_template_bindings_contract").on(
-      table.accountId,
+      table.instanceId,
       table.emailIntegrationId,
       table.notificationType,
     ),
     foreignKey({
       name: "fk_email_template_bindings_integration",
-      columns: [table.accountId, table.emailIntegrationId],
-      foreignColumns: [emailIntegrations.accountId, emailIntegrations.id],
+      columns: [table.instanceId, table.emailIntegrationId],
+      foreignColumns: [emailIntegrations.instanceId, emailIntegrations.id],
     }).onDelete("restrict"),
     index("idx_email_template_bindings_lookup").on(
-      table.accountId,
+      table.instanceId,
       table.emailIntegrationId,
       table.notificationType,
       table.contractVersion,
@@ -1172,10 +1144,11 @@ export const emailDeliveries = sqliteTable(
   "email_deliveries",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
-    customerId: text("customer_id").notNull(),
+      .references(() => instances.id, restrictReference),
+    recipientType: text("recipient_type").notNull(),
+    customerId: text("customer_id"),
     notificationType: text("notification_type").notNull(),
     contractVersion: integer("contract_version").notNull(),
     recipientEmail: nocaseText("recipient_email").notNull(),
@@ -1194,26 +1167,31 @@ export const emailDeliveries = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_email_deliveries_account_id").on(table.accountId, table.id),
-    unique("uq_email_deliveries_customer_id").on(table.accountId, table.customerId, table.id),
+    unique("uq_email_deliveries_instance_id").on(table.instanceId, table.id),
+    unique("uq_email_deliveries_customer_id").on(table.instanceId, table.customerId, table.id),
     foreignKey({
       name: "fk_email_deliveries_customer",
-      columns: [table.accountId, table.customerId],
-      foreignColumns: [customers.accountId, customers.id],
+      columns: [table.instanceId, table.customerId],
+      foreignColumns: [customers.instanceId, customers.id],
     }).onDelete("restrict"),
     index("idx_email_deliveries_status_schedule").on(
-      table.accountId,
+      table.instanceId,
       table.status,
       table.nextAttemptAt,
       table.lockedUntil,
       table.createdAt,
     ),
     index("idx_email_deliveries_customer").on(
-      table.accountId,
+      table.instanceId,
       table.customerId,
       sql`${table.createdAt} desc`,
     ),
     check("ck_email_deliveries_contract_version", sql`${table.contractVersion} >= 1`),
+    check(
+      "ck_email_deliveries_recipient",
+      sql`(${table.recipientType} = 'customer' and ${table.customerId} is not null)
+        or (${table.recipientType} = 'instance_invitation' and ${table.customerId} is null)`,
+    ),
     check(
       "ck_email_deliveries_status",
       sql`${table.status} in (
@@ -1265,13 +1243,139 @@ export const emailDeliveries = sqliteTable(
   ],
 );
 
+export const instanceInvitations = sqliteTable(
+  "instance_invitations",
+  {
+    id: text("id").primaryKey(),
+    instanceId: text("instance_id")
+      .notNull()
+      .references(() => instances.id, restrictReference),
+    email: nocaseText("email").notNull(),
+    role: text("role").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    status: text("status").notNull().default("pending"),
+    invitedByUserId: text("invited_by_user_id")
+      .notNull()
+      .references(() => users.id, restrictReference),
+    acceptedByUserId: text("accepted_by_user_id").references(
+      () => users.id,
+      restrictReference,
+    ),
+    deliveryId: text("delivery_id").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    acceptedAt: text("accepted_at"),
+    revokedAt: text("revoked_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    unique("uq_instance_invitations_instance_id").on(table.instanceId, table.id),
+    unique("uq_instance_invitations_token_hash").on(table.tokenHash),
+    unique("uq_instance_invitations_delivery").on(table.instanceId, table.deliveryId),
+    uniqueIndex("uq_instance_invitations_pending_email")
+      .on(table.instanceId, table.email)
+      .where(sql`${table.status} = 'pending'`),
+    foreignKey({
+      name: "fk_instance_invitations_delivery",
+      columns: [table.instanceId, table.deliveryId],
+      foreignColumns: [emailDeliveries.instanceId, emailDeliveries.id],
+    }).onDelete("restrict"),
+    index("idx_instance_invitations_status_expiry").on(
+      table.instanceId,
+      table.status,
+      table.expiresAt,
+    ),
+    index("idx_instance_invitations_invited_by").on(
+      table.instanceId,
+      table.invitedByUserId,
+      sql`${table.createdAt} desc`,
+    ),
+    check(
+      "ck_instance_invitations_role",
+      sql`${table.role} in ('owner', 'admin', 'member', 'viewer')`,
+    ),
+    check(
+      "ck_instance_invitations_status",
+      sql`${table.status} in ('pending', 'accepted', 'revoked', 'expired')`,
+    ),
+    check(
+      "ck_instance_invitations_expiry",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "ck_instance_invitations_terminal_state",
+      sql`(${table.status} in ('pending', 'expired')
+          and ${table.acceptedByUserId} is null
+          and ${table.acceptedAt} is null
+          and ${table.revokedAt} is null)
+        or (${table.status} = 'accepted'
+          and ${table.acceptedByUserId} is not null
+          and ${table.acceptedAt} is not null
+          and ${table.revokedAt} is null)
+        or (${table.status} = 'revoked'
+          and ${table.acceptedByUserId} is null
+          and ${table.acceptedAt} is null
+          and ${table.revokedAt} is not null)`,
+    ),
+  ],
+);
+
+export const instanceMemberships = sqliteTable(
+  "instance_memberships",
+  {
+    instanceId: text("instance_id")
+      .notNull()
+      .references(() => instances.id, restrictReference),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, restrictReference),
+    role: text("role").notNull(),
+    status: text("status").notNull().default("active"),
+    joinedByInvitationId: text("joined_by_invitation_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "pk_instance_memberships",
+      columns: [table.instanceId, table.userId],
+    }),
+    unique("uq_instance_memberships_invitation").on(
+      table.instanceId,
+      table.joinedByInvitationId,
+    ),
+    foreignKey({
+      name: "fk_instance_memberships_invitation",
+      columns: [table.instanceId, table.joinedByInvitationId],
+      foreignColumns: [instanceInvitations.instanceId, instanceInvitations.id],
+    }).onDelete("restrict"),
+    index("idx_instance_memberships_user_status").on(table.userId, table.status),
+    index("idx_instance_memberships_instance_status").on(
+      table.instanceId,
+      table.status,
+      table.role,
+    ),
+    index("idx_instance_memberships_active_owner")
+      .on(table.instanceId)
+      .where(sql`${table.role} = 'owner' and ${table.status} = 'active'`),
+    check(
+      "ck_instance_memberships_role",
+      sql`${table.role} in ('owner', 'admin', 'member', 'viewer')`,
+    ),
+    check(
+      "ck_instance_memberships_status",
+      sql`${table.status} in ('active', 'disabled', 'removed')`,
+    ),
+  ],
+);
+
 export const customerLoginChallenges = sqliteTable(
   "customer_login_challenges",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     customerId: text("customer_id").notNull(),
     tokenHash: text("token_hash").notNull(),
     expiresAt: text("expires_at").notNull(),
@@ -1282,35 +1386,35 @@ export const customerLoginChallenges = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    unique("uq_customer_login_challenges_account_id").on(table.accountId, table.id),
+    unique("uq_customer_login_challenges_instance_id").on(table.instanceId, table.id),
     unique("uq_customer_login_challenges_customer_id").on(
-      table.accountId,
+      table.instanceId,
       table.customerId,
       table.id,
     ),
     unique("uq_customer_login_challenges_token_hash").on(table.tokenHash),
     foreignKey({
       name: "fk_customer_login_challenges_customer",
-      columns: [table.accountId, table.customerId],
-      foreignColumns: [customers.accountId, customers.id],
+      columns: [table.instanceId, table.customerId],
+      foreignColumns: [customers.instanceId, customers.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_customer_login_challenges_delivery",
-      columns: [table.accountId, table.customerId, table.deliveryId],
+      columns: [table.instanceId, table.customerId, table.deliveryId],
       foreignColumns: [
-        emailDeliveries.accountId,
+        emailDeliveries.instanceId,
         emailDeliveries.customerId,
         emailDeliveries.id,
       ],
     }).onDelete("restrict"),
     index("idx_customer_login_challenges_customer").on(
-      table.accountId,
+      table.instanceId,
       table.customerId,
       sql`${table.createdAt} desc`,
     ),
-    index("idx_customer_login_challenges_lookup").on(table.accountId, table.tokenHash),
+    index("idx_customer_login_challenges_lookup").on(table.instanceId, table.tokenHash),
     index("idx_customer_login_challenges_expiry").on(
-      table.accountId,
+      table.instanceId,
       table.expiresAt,
       table.consumedAt,
       table.revokedAt,
@@ -1322,9 +1426,9 @@ export const customerSessions = sqliteTable(
   "customer_sessions",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     customerId: text("customer_id").notNull(),
     loginChallengeId: text("login_challenge_id").notNull(),
     sessionTokenHash: text("session_token_hash").notNull(),
@@ -1335,30 +1439,30 @@ export const customerSessions = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    unique("uq_customer_sessions_account_id").on(table.accountId, table.id),
-    unique("uq_customer_sessions_challenge").on(table.loginChallengeId),
+    unique("uq_customer_sessions_instance_id").on(table.instanceId, table.id),
+    unique("uq_customer_sessions_challenge").on(table.instanceId, table.loginChallengeId),
     unique("uq_customer_sessions_token_hash").on(table.sessionTokenHash),
     unique("uq_customer_sessions_csrf_token_hash").on(table.csrfTokenHash),
     foreignKey({
       name: "fk_customer_sessions_customer",
-      columns: [table.accountId, table.customerId],
-      foreignColumns: [customers.accountId, customers.id],
+      columns: [table.instanceId, table.customerId],
+      foreignColumns: [customers.instanceId, customers.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_customer_sessions_challenge",
-      columns: [table.accountId, table.customerId, table.loginChallengeId],
+      columns: [table.instanceId, table.customerId, table.loginChallengeId],
       foreignColumns: [
-        customerLoginChallenges.accountId,
+        customerLoginChallenges.instanceId,
         customerLoginChallenges.customerId,
         customerLoginChallenges.id,
       ],
     }).onDelete("restrict"),
     index("idx_customer_sessions_customer_expiry").on(
-      table.accountId,
+      table.instanceId,
       table.customerId,
       table.expiresAt,
     ),
-    index("idx_customer_sessions_lookup").on(table.accountId, table.sessionTokenHash),
+    index("idx_customer_sessions_lookup").on(table.instanceId, table.sessionTokenHash),
   ],
 );
 
@@ -1366,9 +1470,9 @@ export const licenseKeyRotations = sqliteTable(
   "license_key_rotations",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     licenseId: text("license_id").notNull(),
     fromVersion: integer("from_version").notNull(),
     toVersion: integer("to_version").notNull(),
@@ -1376,35 +1480,33 @@ export const licenseKeyRotations = sqliteTable(
     revokedActivations: integer("revoked_activations", { mode: "boolean" })
       .notNull()
       .default(false),
-    initiatedByUserId: text("initiated_by_user_id"),
+    initiatedByUserId: text("initiated_by_user_id").references(
+      () => users.id,
+      restrictReference,
+    ),
     initiatedByCustomerId: text("initiated_by_customer_id"),
     deliveryId: text("delivery_id"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    unique("uq_license_key_rotations_account_id").on(table.accountId, table.id),
+    unique("uq_license_key_rotations_instance_id").on(table.instanceId, table.id),
     foreignKey({
       name: "fk_license_key_rotations_license",
-      columns: [table.accountId, table.licenseId],
-      foreignColumns: [licenses.accountId, licenses.id],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_license_key_rotations_user",
-      columns: [table.accountId, table.initiatedByUserId],
-      foreignColumns: [users.accountId, users.id],
+      columns: [table.instanceId, table.licenseId],
+      foreignColumns: [licenses.instanceId, licenses.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_license_key_rotations_customer",
-      columns: [table.accountId, table.initiatedByCustomerId],
-      foreignColumns: [customers.accountId, customers.id],
+      columns: [table.instanceId, table.initiatedByCustomerId],
+      foreignColumns: [customers.instanceId, customers.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_license_key_rotations_delivery",
-      columns: [table.accountId, table.deliveryId],
-      foreignColumns: [emailDeliveries.accountId, emailDeliveries.id],
+      columns: [table.instanceId, table.deliveryId],
+      foreignColumns: [emailDeliveries.instanceId, emailDeliveries.id],
     }).onDelete("restrict"),
     index("idx_license_key_rotations_license").on(
-      table.accountId,
+      table.instanceId,
       table.licenseId,
       sql`${table.createdAt} desc`,
     ),
@@ -1426,11 +1528,13 @@ export const billingCheckoutVerifications = sqliteTable(
   "billing_checkout_verifications",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
+    instanceId: text("instance_id")
       .notNull()
-      .references(() => accounts.id, accountReference),
+      .references(() => instances.id, restrictReference),
     billingOfferId: text("billing_offer_id").notNull(),
-    requestedByUserId: text("requested_by_user_id").notNull(),
+    requestedByUserId: text("requested_by_user_id")
+      .notNull()
+      .references(() => users.id, restrictReference),
     tokenHash: text("token_hash").notNull(),
     status: text("status").notNull().default("pending"),
     externalTransactionId: text("external_transaction_id"),
@@ -1444,38 +1548,33 @@ export const billingCheckoutVerifications = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    unique("uq_billing_checkout_verifications_account_id").on(table.accountId, table.id),
+    unique("uq_billing_checkout_verifications_instance_id").on(table.instanceId, table.id),
     unique("uq_billing_checkout_verifications_token_hash").on(table.tokenHash),
     uniqueIndex("uq_billing_checkout_verifications_transaction")
-      .on(table.accountId, table.billingOfferId, table.externalTransactionId)
+      .on(table.instanceId, table.billingOfferId, table.externalTransactionId)
       .where(sql`${table.externalTransactionId} is not null`),
     foreignKey({
       name: "fk_billing_checkout_verifications_offer",
-      columns: [table.accountId, table.billingOfferId],
-      foreignColumns: [billingOffers.accountId, billingOffers.id],
-    }).onDelete("restrict"),
-    foreignKey({
-      name: "fk_billing_checkout_verifications_user",
-      columns: [table.accountId, table.requestedByUserId],
-      foreignColumns: [users.accountId, users.id],
+      columns: [table.instanceId, table.billingOfferId],
+      foreignColumns: [billingOffers.instanceId, billingOffers.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_checkout_verifications_license",
-      columns: [table.accountId, table.licenseId],
-      foreignColumns: [licenses.accountId, licenses.id],
+      columns: [table.instanceId, table.licenseId],
+      foreignColumns: [licenses.instanceId, licenses.id],
     }).onDelete("restrict"),
     foreignKey({
       name: "fk_billing_checkout_verifications_delivery",
-      columns: [table.accountId, table.deliveryId],
-      foreignColumns: [emailDeliveries.accountId, emailDeliveries.id],
+      columns: [table.instanceId, table.deliveryId],
+      foreignColumns: [emailDeliveries.instanceId, emailDeliveries.id],
     }).onDelete("restrict"),
     index("idx_billing_checkout_verifications_status_expiry").on(
-      table.accountId,
+      table.instanceId,
       table.status,
       table.expiresAt,
     ),
     index("idx_billing_checkout_verifications_offer").on(
-      table.accountId,
+      table.instanceId,
       table.billingOfferId,
       sql`${table.completedAt} desc`,
     ),
@@ -1506,11 +1605,10 @@ export const auditLogs = sqliteTable(
   "audit_logs",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
-      .notNull()
-      .references(() => accounts.id, accountReference),
+    scopeType: text("scope_type").notNull(),
+    instanceId: text("instance_id").references(() => instances.id, restrictReference),
     actorType: text("actor_type").notNull(),
-    actorUserId: text("actor_user_id"),
+    actorUserId: text("actor_user_id").references(() => users.id, restrictReference),
     actorCustomerId: text("actor_customer_id"),
     action: text("action").notNull(),
     resourceType: text("resource_type").notNull(),
@@ -1522,33 +1620,39 @@ export const auditLogs = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    unique("uq_audit_logs_account_id").on(table.accountId, table.id),
-    foreignKey({
-      name: "fk_audit_logs_user",
-      columns: [table.accountId, table.actorUserId],
-      foreignColumns: [users.accountId, users.id],
-    }).onDelete("restrict"),
     foreignKey({
       name: "fk_audit_logs_customer",
-      columns: [table.accountId, table.actorCustomerId],
-      foreignColumns: [customers.accountId, customers.id],
+      columns: [table.instanceId, table.actorCustomerId],
+      foreignColumns: [customers.instanceId, customers.id],
     }).onDelete("restrict"),
-    index("idx_audit_logs_account_created").on(
-      table.accountId,
+    index("idx_audit_logs_instance_created").on(
+      table.instanceId,
       sql`${table.createdAt} desc`,
     ),
     index("idx_audit_logs_resource").on(
-      table.accountId,
+      table.instanceId,
       table.resourceType,
       table.resourceId,
       sql`${table.createdAt} desc`,
     ),
     index("idx_audit_logs_action").on(
-      table.accountId,
+      table.instanceId,
       table.action,
       sql`${table.createdAt} desc`,
     ),
+    index("idx_audit_logs_identity_created")
+      .on(table.actorUserId, sql`${table.createdAt} desc`)
+      .where(sql`${table.scopeType} = 'identity'`),
     check("ck_audit_logs_actor_type", sql`${table.actorType} in ('user', 'customer', 'system')`),
+    check("ck_audit_logs_scope_type", sql`${table.scopeType} in ('identity', 'instance')`),
+    check(
+      "ck_audit_logs_scope",
+      sql`(${table.scopeType} = 'identity'
+          and ${table.instanceId} is null
+          and ${table.actorType} = 'user'
+          and ${table.actorUserId} is not null)
+        or (${table.scopeType} = 'instance' and ${table.instanceId} is not null)`,
+    ),
     check("ck_audit_logs_details_json", sql`json_valid(${table.detailsRedactedJson})`),
     check(
       "ck_audit_logs_actor",

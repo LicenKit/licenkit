@@ -9,28 +9,28 @@ interface IdRow { id: string }
 
 export async function runDeliveryScheduler(
   env: SchedulerEnv,
-  options: { accountLimit?: number; deliveryLimitPerAccount?: number; now?: Date } = {},
-): Promise<{ accounts: number; claimed: number; accepted: number; failed: number }> {
+  options: { instanceLimit?: number; deliveryLimitPerInstance?: number; now?: Date } = {},
+): Promise<{ instances: number; claimed: number; accepted: number; failed: number }> {
   const now = options.now ?? new Date();
   const nowIso = now.toISOString();
-  const accountPageSize = Math.min(500, Math.max(1, options.accountLimit ?? 100));
-  const deliveryLimit = Math.min(100, Math.max(1, options.deliveryLimitPerAccount ?? 25));
-  let accountCursor: string | null = null;
-  let accountCount = 0;
+  const instancePageSize = Math.min(500, Math.max(1, options.instanceLimit ?? 100));
+  const deliveryLimit = Math.min(100, Math.max(1, options.deliveryLimitPerInstance ?? 25));
+  let instanceCursor: string | null = null;
+  let instanceCount = 0;
   let claimed = 0;
   let accepted = 0;
   let failed = 0;
 
   while (true) {
-    const accounts: D1Result<IdRow> = await env.DB
+    const instances: D1Result<IdRow> = await env.DB
       .prepare(
-        `SELECT account.id
-         FROM accounts AS account
-         WHERE account.status = 'active'
-           AND (?2 IS NULL OR account.id > ?2)
+        `SELECT instance.id
+         FROM instances AS instance
+         WHERE instance.status = 'active'
+           AND (?2 IS NULL OR instance.id > ?2)
            AND EXISTS (
              SELECT 1 FROM email_deliveries AS delivery
-             WHERE delivery.account_id = account.id
+             WHERE delivery.instance_id = instance.id
                AND delivery.variables_ciphertext IS NOT NULL
                AND (
                  (delivery.status NOT IN ('accepted', 'expired', 'cancelled')
@@ -44,20 +44,20 @@ export async function runDeliveryScheduler(
                    AND (delivery.send_expires_at IS NULL OR delivery.send_expires_at > ?1))
                )
            )
-         ORDER BY account.id
+         ORDER BY instance.id
          LIMIT ?3`,
       )
-      .bind(nowIso, accountCursor, accountPageSize)
+      .bind(nowIso, instanceCursor, instancePageSize)
       .all<IdRow>();
-    if (accounts.results.length === 0) break;
-    accountCount += accounts.results.length;
+    if (instances.results.length === 0) break;
+    instanceCount += instances.results.length;
 
-    for (const account of accounts.results) {
+    for (const instance of instances.results) {
       const due = await env.DB
         .prepare(
           `SELECT id
            FROM email_deliveries
-           WHERE account_id = ?1
+           WHERE instance_id = ?1
              AND variables_ciphertext IS NOT NULL
              AND (
                (status NOT IN ('accepted', 'expired', 'cancelled')
@@ -72,13 +72,13 @@ export async function runDeliveryScheduler(
            ORDER BY created_at, id
            LIMIT ?3`,
         )
-        .bind(account.id, nowIso, deliveryLimit)
+        .bind(instance.id, nowIso, deliveryLimit)
         .all<IdRow>();
       for (const delivery of due.results) {
         const result = await dispatchDelivery({
           db: env.DB,
           env,
-          accountId: account.id,
+          instanceId: instance.id,
           deliveryId: delivery.id,
           now,
         });
@@ -88,8 +88,8 @@ export async function runDeliveryScheduler(
       }
     }
 
-    accountCursor = accounts.results[accounts.results.length - 1].id;
+    instanceCursor = instances.results[instances.results.length - 1].id;
   }
 
-  return { accounts: accountCount, claimed, accepted, failed };
+  return { instances: instanceCount, claimed, accepted, failed };
 }

@@ -13,9 +13,10 @@ import { evaluateBillingOfferReadiness, getBillingOfferReadinessRow } from "../s
 import { clearExpiredInboundEventPayloads } from "../src/services/runtime/retention";
 import { errorHandler } from "../src/middleware/error";
 import { adminEmailDeliveriesRouter } from "../src/routes/admin/email.routes";
+import { adminBillingRouter } from "../src/routes/admin/billing.routes";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
-const accountId = "acc_billing_v1";
+const instanceId = "acc_billing_v1";
 const providerId = "bpr_sandbox_v1";
 const webhookSecret = "pdl_ntfsec_v1_test_secret_123456789";
 const nowIso = "2026-09-19T08:00:00.000Z";
@@ -35,6 +36,33 @@ function eventPayload(eventId: string, eventType: string, data: Record<string, u
   return JSON.stringify({ event_id: eventId, event_type: eventType, occurred_at: occurredAt, data });
 }
 
+function billingAdminApp() {
+  const admin = new Hono<AppContext>();
+  admin.onError(errorHandler);
+  admin.use("*", async (c, next) => {
+    c.set("requestId", "req_billing_admin_snake_case");
+    c.set("instanceId", instanceId);
+    c.set("userId", "usr_billing_owner");
+    c.set("instanceRole", "owner");
+    c.set("userEmail", "owner@example.test");
+    await next();
+  });
+  admin.route("/", adminBillingRouter);
+  return admin;
+}
+
+function expectNoCamelCaseKeys(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach(expectNoCamelCaseKeys);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value)) {
+    expect(key).not.toMatch(/[a-z][A-Z]/);
+    expectNoCamelCaseKeys(item);
+  }
+}
+
 describe("V1 Paddle billing and fulfillment contracts", () => {
   let testEnv: TestEnvContext;
 
@@ -44,50 +72,124 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     testEnv.env.DB = testEnv.d1;
     const db = testEnv.sqliteDb;
     db.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, site_url, initialized_at, updated_at)
-       VALUES ('current', 'LicenKit', 'https://licenses.example.test', 'https://licenses.example.test', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?, 'Billing V1', 'billing-v1', 'https://licenses.example.test', 'active', ?, ?)`,
+    ).run(instanceId, nowIso, nowIso);
+    db.prepare(
+      `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
+       VALUES ('usr_billing_owner', 'owner@example.test', 'hash', 'Owner', ?, ?)`,
     ).run(nowIso, nowIso);
     db.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, 'Billing V1', 'billing-v1', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+      `INSERT INTO instance_memberships (
+         instance_id, user_id, role, status, joined_by_invitation_id, created_at, updated_at
+       ) VALUES (?, 'usr_billing_owner', 'owner', 'active', NULL, ?, ?)`,
+    ).run(instanceId, nowIso, nowIso);
+    db.prepare(
+      `INSERT INTO deployment_bootstrap (singleton_key, completed_at)
+       VALUES ('deployment', ?)`,
+    ).run(nowIso);
     const encryptedSecret = await encryptBillingProviderSecret(
       webhookSecret,
       testEnv.env,
-      accountId,
+      instanceId,
       providerId,
       "webhook_secret_ciphertext",
     );
     db.prepare(
       `INSERT INTO billing_providers (
-         id, account_id, provider, environment, client_side_token,
+         id, instance_id, provider, environment, client_side_token,
          webhook_secret_ciphertext, status, created_at, updated_at
        ) VALUES (?, ?, 'paddle', 'sandbox', 'test_client_token_v1', ?, 'active', ?, ?)`,
-    ).run(providerId, accountId, encryptedSecret, nowIso, nowIso);
+    ).run(providerId, instanceId, encryptedSecret, nowIso, nowIso);
     db.prepare(
       `INSERT INTO products (
-         id, account_id, slug, name, billing_environment, status, created_at, updated_at
+         id, instance_id, slug, name, billing_environment, status, created_at, updated_at
        ) VALUES ('prd_00000000000000000000000001', ?, 'one', 'One Time', 'sandbox', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+    ).run(instanceId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO license_plans (
-         id, account_id, product_id, name, license_model, credential_mode,
+         id, instance_id, product_id, name, license_model, credential_mode,
          payment_grace_seconds, features_json, status, created_at, updated_at
        ) VALUES ('pln_one', ?, 'prd_00000000000000000000000001', 'One Time', 'perpetual', 'opaque',
          0, '[]', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+    ).run(instanceId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO billing_offers (
-         id, account_id, billing_provider_id, external_price_id, product_id,
+         id, instance_id, billing_provider_id, external_price_id, product_id,
          license_plan_id, purchase_type, status, created_at, updated_at
        ) VALUES ('off_one', ?, ?, 'pri_one123', 'prd_00000000000000000000000001', 'pln_one',
          'one_time', 'active', ?, ?)`,
-    ).run(accountId, providerId, nowIso, nowIso);
+    ).run(instanceId, providerId, nowIso, nowIso);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("uses a strict snake_case Admin Billing contract", async () => {
+    const admin = billingAdminApp();
+    const providersResponse = await admin.request("http://test/providers", {}, testEnv.env);
+    expect(providersResponse.status).toBe(200);
+    const providersBody = await providersResponse.json() as any;
+    expect(providersBody.data.items[0]).toMatchObject({
+      id: providerId,
+      client_side_token: "test_client_token_v1",
+      webhook_secret_configured: true,
+      api_key_configured: false,
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    expectNoCamelCaseKeys(providersBody);
+
+    const legacyResponse = await admin.request("http://test/providers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "paddle",
+        environment: "live",
+        clientSideToken: "live_legacy_client_token",
+        webhookSecret: "legacy_webhook_secret_123456",
+      }),
+    }, testEnv.env);
+    expect(legacyResponse.status).toBe(400);
+
+    const createResponse = await admin.request("http://test/providers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "paddle",
+        environment: "live",
+        client_side_token: "live_admin_client_token_v1",
+        webhook_secret: "live_webhook_secret_123456789",
+      }),
+    }, testEnv.env);
+    expect(createResponse.status).toBe(201);
+    const createBody = await createResponse.json() as any;
+    expect(createBody.data).toMatchObject({
+      environment: "live",
+      client_side_token: "live_admin_client_token_v1",
+      webhook_secret_configured: true,
+      api_key_configured: false,
+    });
+    expectNoCamelCaseKeys(createBody);
+
+    testEnv.sqliteDb.prepare("UPDATE billing_offers SET status = 'draft' WHERE id = 'off_one'").run();
+    const verificationResponse = await admin.request("http://test/offers/off_one/verification-config", {
+      method: "POST",
+    }, testEnv.env);
+    expect(verificationResponse.status).toBe(201);
+    const verificationBody = await verificationResponse.json() as any;
+    expect(verificationBody.data).toMatchObject({
+      verification_mode: true,
+      verification_token: expect.stringMatching(/^vfy_/),
+      expires_at: expect.any(String),
+      checkout: {
+        client_side_token: "test_client_token_v1",
+        price_id: "pri_one123",
+      },
+    });
+    expectNoCamelCaseKeys(verificationBody);
   });
 
   async function postEvent(rawBody: string, secret = webhookSecret, destinationProviderId = providerId) {
@@ -108,7 +210,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
   async function processEvent(inboundEventId: string, processingNow = new Date(Date.now() + 1_000)) {
     return processBillingInboundEvent({
       env: testEnv.env,
-      accountId,
+      instanceId,
       eventId: inboundEventId,
       workerId: `test_${inboundEventId}`,
       now: processingNow,
@@ -117,17 +219,17 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
   function seedLinkedCustomer(externalCustomerId = "ctm_buyer1", email = "buyer@example.test"): void {
     testEnv.sqliteDb.prepare(
-      `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
+      `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
        VALUES ('cus_buyer', ?, ?, 'Buyer', 'active', ?, ?)`,
-    ).run(accountId, email, nowIso, nowIso);
+    ).run(instanceId, email, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_customers (
-         id, account_id, billing_provider_id, customer_id, external_customer_id,
+         id, instance_id, billing_provider_id, customer_id, external_customer_id,
          provider_email, provider_status, link_status, last_sync_source,
          external_updated_at, created_at, updated_at
        ) VALUES ('bcu_buyer', ?, ?, 'cus_buyer', ?, ?, 'active', 'linked',
          'webhook', ?, ?, ?)`,
-    ).run(accountId, providerId, externalCustomerId, email, nowIso, nowIso, nowIso);
+    ).run(instanceId, providerId, externalCustomerId, email, nowIso, nowIso, nowIso);
   }
 
   async function issueOneTimeLicense(transactionId = "txn_purchase1"): Promise<{ eventId: string; licenseId: string }> {
@@ -138,25 +240,25 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     });
     const posted = await postEvent(payload);
     expect(posted.response.status).toBe(200);
-    const result = await processEvent(posted.body.data.eventId);
+    const result = await processEvent(posted.body.data.event_id);
     expect(result.status).toBe("processed");
     const license = testEnv.sqliteDb.prepare(
       "SELECT id FROM licenses WHERE source_external_transaction_id = ?",
     ).get(transactionId) as { id: string };
-    return { eventId: posted.body.data.eventId, licenseId: license.id };
+    return { eventId: posted.body.data.event_id, licenseId: license.id };
   }
 
   async function configureProviderApiKey(apiKey = "pdl_sdbx_apikey_v1"): Promise<void> {
     const encrypted = await encryptBillingProviderSecret(
       apiKey,
       testEnv.env,
-      accountId,
+      instanceId,
       providerId,
       "api_secret_ciphertext",
     );
     testEnv.sqliteDb.prepare(
-      "UPDATE billing_providers SET api_secret_ciphertext = ? WHERE account_id = ? AND id = ?",
-    ).run(encrypted, accountId, providerId);
+      "UPDATE billing_providers SET api_secret_ciphertext = ? WHERE instance_id = ? AND id = ?",
+    ).run(encrypted, instanceId, providerId);
   }
 
   async function configureLicenseIssuedEmail(): Promise<void> {
@@ -165,7 +267,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       JSON.stringify({ version: 1, apiKey: "re_billing_fulfillment" }),
       testEnv.env,
       {
-        accountId,
+        instanceId,
         table: "email_integrations",
         rowId: integrationId,
         field: "credential_ciphertext",
@@ -173,20 +275,20 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_integrations (
-         id, account_id, provider, name, credential_ciphertext,
+         id, instance_id, provider, name, credential_ciphertext,
          default_from_email, max_automatic_attempts,
          status, created_at, updated_at
        ) VALUES (?, ?, 'resend', 'Billing', ?, 'licenses@example.test',
          4, 'active', ?, ?)`,
-    ).run(integrationId, accountId, credentialCiphertext, nowIso, nowIso);
+    ).run(integrationId, instanceId, credentialCiphertext, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_template_bindings (
-         id, account_id, email_integration_id, notification_type,
+         id, instance_id, email_integration_id, notification_type,
          contract_version, provider_template_ref,
          status, created_at, updated_at
        ) VALUES ('etb_billing_fulfillment', ?, ?, 'customer.license_issued',
          1, 'license-issued-v1', 'active', ?, ?)`,
-    ).run(accountId, integrationId, nowIso, nowIso);
+    ).run(instanceId, integrationId, nowIso, nowIso);
   }
 
   it("verifies the raw signature and persists one encrypted event idempotently", async () => {
@@ -206,7 +308,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(first.response.status).toBe(200);
     expect(duplicate.response.status).toBe(200);
     expect(duplicate.body.data.duplicate).toBe(true);
-    expect(duplicate.body.data.payloadRefreshed).toBe(false);
+    expect(duplicate.body.data.payload_refreshed).toBe(false);
+    expect(duplicate.body.data).not.toHaveProperty("payloadRefreshed");
     const rows = testEnv.sqliteDb.prepare(
       "SELECT payload_ciphertext, payload_hash FROM inbound_events WHERE external_event_id = ?",
     ).all("evt_customer_signature") as Array<{ payload_ciphertext: string; payload_hash: string }>;
@@ -241,13 +344,13 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
            last_error_code = 'BILLING_EVENT_PAYLOAD_EXPIRED',
            last_error_detail = '{"message":"expired"}'
        WHERE id = ?`,
-    ).run(first.body.data.eventId);
+    ).run(first.body.data.event_id);
     await expect(clearExpiredInboundEventPayloads(testEnv.d1, {
       now: new Date("2026-09-19T08:01:00.000Z"),
     })).resolves.toEqual({ cleared: 1 });
     expect(testEnv.sqliteDb.prepare(
       "SELECT payload_ciphertext, payload_cleared_at FROM inbound_events WHERE id = ?",
-    ).get(first.body.data.eventId)).toEqual({
+    ).get(first.body.data.event_id)).toEqual({
       payload_ciphertext: null,
       payload_cleared_at: "2026-09-19T08:01:00.000Z",
     });
@@ -255,15 +358,15 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const replay = await postEvent(payload);
     expect(replay.response.status).toBe(200);
     expect(replay.body.data).toMatchObject({
-      eventId: first.body.data.eventId,
+      event_id: first.body.data.event_id,
       duplicate: true,
-      payloadRefreshed: true,
+      payload_refreshed: true,
       status: "needs_attention",
     });
     const refreshed = testEnv.sqliteDb.prepare(
       `SELECT status, payload_ciphertext, payload_expires_at, payload_cleared_at, last_error_code
        FROM inbound_events WHERE id = ?`,
-    ).get(first.body.data.eventId) as any;
+    ).get(first.body.data.event_id) as any;
     expect(refreshed.status).toBe("needs_attention");
     expect(refreshed.payload_ciphertext).toBeTruthy();
     expect(Date.parse(refreshed.payload_expires_at)).toBeGreaterThan(Date.now());
@@ -273,23 +376,26 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
   it("keeps an out-of-order subscription purchase pending, then fulfills once trusted dependencies arrive", async () => {
     testEnv.sqliteDb.prepare(
-      `INSERT INTO products (id, account_id, slug, name, billing_environment, status, created_at, updated_at)
-       VALUES ('prd_00000000000000000000000002', ?, 'sub', 'Subscription', 'sandbox', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+      `INSERT INTO products (
+         id, instance_id, slug, name, billing_environment, payment_grace_seconds,
+         status, created_at, updated_at
+       ) VALUES ('prd_00000000000000000000000002', ?, 'sub', 'Subscription', 'sandbox',
+         86400, 'active', ?, ?)`,
+    ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
-         id, account_id, product_id, name, license_model, credential_mode,
+         id, instance_id, product_id, name, license_model, credential_mode,
          payment_grace_seconds, features_json, status, created_at, updated_at
        ) VALUES ('pln_sub', ?, 'prd_00000000000000000000000002', 'Subscription', 'subscription', 'opaque',
          86400, '[]', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+    ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_offers (
-         id, account_id, billing_provider_id, external_price_id, product_id,
+         id, instance_id, billing_provider_id, external_price_id, product_id,
          license_plan_id, purchase_type, status, created_at, updated_at
        ) VALUES ('off_sub', ?, ?, 'pri_sub123', 'prd_00000000000000000000000002', 'pln_sub',
          'subscription', 'active', ?, ?)`,
-    ).run(accountId, providerId, nowIso, nowIso);
+    ).run(instanceId, providerId, nowIso, nowIso);
 
     const transaction = await postEvent(eventPayload("evt_txn_early", "transaction.completed", {
       id: "txn_early1",
@@ -297,9 +403,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       subscription_id: "sub_early1",
       items: [{ price: { id: "pri_sub123" }, quantity: 1 }],
     }));
-    expect((await processEvent(transaction.body.data.eventId)).status).toBe("pending");
+    expect((await processEvent(transaction.body.data.event_id)).status).toBe("pending");
     expect((testEnv.sqliteDb.prepare("SELECT last_error_code FROM inbound_events WHERE id = ?")
-      .get(transaction.body.data.eventId) as any).last_error_code).toBe("BILLING_DEPENDENCY_PENDING");
+      .get(transaction.body.data.event_id) as any).last_error_code).toBe("BILLING_DEPENDENCY_PENDING");
 
     const customer = await postEvent(eventPayload("evt_customer_early", "customer.created", {
       id: "ctm_early1",
@@ -309,7 +415,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       created_at: nowIso,
       updated_at: nowIso,
     }));
-    expect((await processEvent(customer.body.data.eventId)).status).toBe("processed");
+    expect((await processEvent(customer.body.data.event_id)).status).toBe("processed");
 
     const subscription = await postEvent(eventPayload("evt_sub_early", "subscription.created", {
       id: "sub_early1",
@@ -323,7 +429,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       next_billed_at: "2026-10-19T08:00:00.000Z",
       items: [{ price: { id: "pri_sub123" }, quantity: 1 }],
     }));
-    expect((await processEvent(subscription.body.data.eventId)).status).toBe("processed");
+    expect((await processEvent(subscription.body.data.event_id)).status).toBe("processed");
     expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM licenses WHERE source_external_transaction_id = 'txn_early1'").get())
       .toEqual({ count: 1 });
     expect((testEnv.sqliteDb.prepare("SELECT status, external_subscription_id FROM billing_subscriptions").get() as any))
@@ -345,10 +451,10 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       customer_id: "ctm_buyer1",
       items,
     }));
-    const result = await processEvent(posted.body.data.eventId);
+    const result = await processEvent(posted.body.data.event_id);
     expect(result.status).toBe("needs_attention");
     expect((testEnv.sqliteDb.prepare("SELECT last_error_code FROM inbound_events WHERE id = ?")
-      .get(posted.body.data.eventId) as any).last_error_code).toBe(errorCode);
+      .get(posted.body.data.event_id) as any).last_error_code).toBe(errorCode);
     expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM licenses").get()).toEqual({ count: 0 });
   });
 
@@ -357,10 +463,10 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const { licenseId } = await issueOneTimeLicense("txn_refund1");
     testEnv.sqliteDb.prepare(
       `INSERT INTO activations (
-         id, account_id, license_id, fingerprint_hash, machine_token_hash,
+         id, instance_id, license_id, fingerprint_hash, machine_token_hash,
          status, activated_at, updated_at
        ) VALUES ('act_refund', ?, ?, 'fp_refund', 'mt_refund', 'active', ?, ?)`,
-    ).run(accountId, licenseId, nowIso, nowIso);
+    ).run(instanceId, licenseId, nowIso, nowIso);
     const adjustment = await postEvent(eventPayload("evt_adj_refund", "adjustment.updated", {
       id: "adj_refund1",
       transaction_id: "txn_refund1",
@@ -372,7 +478,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       total: "1000",
       reason: "requested_by_customer",
     }, "2026-09-19T09:00:00.000Z"));
-    expect((await processEvent(adjustment.body.data.eventId)).status).toBe("needs_attention");
+    expect((await processEvent(adjustment.body.data.event_id)).status).toBe("needs_attention");
     expect(testEnv.sqliteDb.prepare(
       `SELECT provider_action, adjustment_type, provider_status, automatic_effect, review_status
        FROM billing_adjustments WHERE external_adjustment_id = 'adj_refund1'`,
@@ -415,7 +521,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       template: {
         id: "license-issued-v1",
         variables: {
-          account_name: "Billing V1",
+          instance_name: "Billing V1",
           product_id: "prd_00000000000000000000000001",
           product_name: "One Time",
           license_id: licenseId,
@@ -424,7 +530,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       },
     });
     expect(Object.keys(providerBodies[0].template.variables).sort()).toEqual([
-      "account_name",
+      "instance_name",
       "license_id",
       "license_key",
       "license_model",
@@ -434,8 +540,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(testEnv.sqliteDb.prepare(
       `SELECT status, notification_type, provider_message_id
        FROM email_deliveries
-       WHERE account_id = ? AND notification_type = 'customer.license_issued'`,
-    ).get(accountId)).toEqual({
+       WHERE instance_id = ? AND notification_type = 'customer.license_issued'`,
+    ).get(instanceId)).toEqual({
       status: "accepted",
       notification_type: "customer.license_issued",
       provider_message_id: "email_billing_license_issued",
@@ -444,7 +550,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
   it("does not expose a LicenKit public Checkout configuration endpoint", async () => {
     const response = await app.request(
-      "/api/v1/public/accounts/billing-v1/products/one/checkout",
+      "/api/v1/public/instances/billing-v1/products/one/checkout",
       { method: "GET" },
       testEnv.env,
     );
@@ -457,36 +563,36 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const encryptedSecret = await encryptBillingProviderSecret(
       webhookSecret,
       testEnv.env,
-      accountId,
+      instanceId,
       liveProviderId,
       "webhook_secret_ciphertext",
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_providers (
-         id, account_id, provider, environment, client_side_token,
+         id, instance_id, provider, environment, client_side_token,
          webhook_secret_ciphertext, status, created_at, updated_at
        ) VALUES (?, ?, 'paddle', 'live', 'live_client_token_v1', ?, 'active', ?, ?)`,
-    ).run(liveProviderId, accountId, encryptedSecret, nowIso, nowIso);
+    ).run(liveProviderId, instanceId, encryptedSecret, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, account_id, slug, name, billing_environment, status, created_at, updated_at
+         id, instance_id, slug, name, billing_environment, status, created_at, updated_at
        ) VALUES ('prd_live_readiness', ?, 'live-readiness', 'Live Readiness', 'live', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+    ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
-         id, account_id, product_id, name, license_model, credential_mode,
+         id, instance_id, product_id, name, license_model, credential_mode,
          payment_grace_seconds, features_json, status, created_at, updated_at
        ) VALUES ('pln_live_readiness', ?, 'prd_live_readiness', 'Live Readiness', 'perpetual', 'opaque',
          0, '[]', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+    ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_offers (
-         id, account_id, billing_provider_id, external_price_id, product_id,
+         id, instance_id, billing_provider_id, external_price_id, product_id,
          license_plan_id, purchase_type, status, created_at, updated_at
        ) VALUES ('off_live_readiness', ?, ?, 'pri_live_readiness', 'prd_live_readiness',
          'pln_live_readiness', 'one_time', 'draft', ?, ?)`,
-    ).run(accountId, liveProviderId, nowIso, nowIso);
-    const row = await getBillingOfferReadinessRow(testEnv.env.DB, accountId, "off_live_readiness");
+    ).run(instanceId, liveProviderId, nowIso, nowIso);
+    const row = await getBillingOfferReadinessRow(testEnv.env.DB, instanceId, "off_live_readiness");
     expect(row).not.toBeNull();
 
     const readiness = await evaluateBillingOfferReadiness(testEnv.env.DB, row!, {
@@ -497,49 +603,49 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(readiness.checks.map((item) => item.key)).not.toContain("live_price_preview");
   });
 
-  it("selects only Accounts with due Billing work and still reaches a late Account", async () => {
+  it("selects only Instances with due Billing work and still reaches a late Instance", async () => {
     const db = testEnv.sqliteDb;
-    const insertAccount = db.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'active', ?, ?)`,
+    const insertInstance = db.prepare(
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'https://licenses.example.test', 'active', ?, ?)`,
     );
     for (let index = 0; index < 105; index++) {
       const suffix = String(index).padStart(3, "0");
-      insertAccount.run(`acc_page_${suffix}`, `Page ${suffix}`, `page-${suffix}`, nowIso, nowIso);
+      insertInstance.run(`acc_page_${suffix}`, `Page ${suffix}`, `page-${suffix}`, nowIso, nowIso);
     }
-    const lateAccountId = "acc_page_104";
+    const lateInstanceId = "acc_page_104";
     const lateProviderId = "bpr_page_104";
     const encryptedSecret = await encryptBillingProviderSecret(
       webhookSecret,
       testEnv.env,
-      lateAccountId,
+      lateInstanceId,
       lateProviderId,
       "webhook_secret_ciphertext",
     );
     db.prepare(
       `INSERT INTO billing_providers (
-         id, account_id, provider, environment, client_side_token,
+         id, instance_id, provider, environment, client_side_token,
          webhook_secret_ciphertext, status, created_at, updated_at
        ) VALUES (?, ?, 'paddle', 'sandbox', 'test_page_token', ?, 'active', ?, ?)`,
-    ).run(lateProviderId, lateAccountId, encryptedSecret, nowIso, nowIso);
+    ).run(lateProviderId, lateInstanceId, encryptedSecret, nowIso, nowIso);
     const eventId = "ine_last_page";
     const rawBody = eventPayload("evt_last_page", "product.updated", { id: "pro_lastpage" });
     const payloadCiphertext = await encryptInboundPayload(
       rawBody,
       testEnv.env,
-      lateAccountId,
+      lateInstanceId,
       eventId,
     );
     const scheduleNow = new Date(Date.now() + 1_000);
     db.prepare(
       `INSERT INTO inbound_events (
-         id, account_id, billing_provider_id, external_event_id, external_event_type,
+         id, instance_id, billing_provider_id, external_event_id, external_event_type,
          payload_ciphertext, payload_hash, payload_expires_at, status, attempt_count,
          next_attempt_at, received_at, updated_at
        ) VALUES (?, ?, ?, 'evt_last_page', 'product.updated', ?, ?, ?, 'pending', 0, ?, ?, ?)`,
     ).run(
       eventId,
-      lateAccountId,
+      lateInstanceId,
       lateProviderId,
       payloadCiphertext,
       await sha256Hex(rawBody),
@@ -549,12 +655,12 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       nowIso,
     );
     const result = await processDueBillingInboundEvents(testEnv.env, {
-      accountLimit: 25,
-      eventLimitPerAccount: 5,
+      instanceLimit: 25,
+      eventLimitPerInstance: 5,
       now: scheduleNow,
       workerId: "scheduler_pagination_test",
     });
-    expect(result.accounts).toBe(1);
+    expect(result.instances).toBe(1);
     expect(result.processed).toBe(1);
     expect(db.prepare("SELECT status, result_type FROM inbound_events WHERE id = ?").get(eventId))
       .toEqual({ status: "processed", result_type: "ignored_event_type" });
@@ -563,9 +669,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
   it("consumes a Sandbox verification token once and creates only a permanently suspended evidence License", async () => {
     seedLinkedCustomer();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-       VALUES ('usr_verify', ?, 'admin@example.test', 'hash', 'Admin', 'owner', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+      `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
+       VALUES ('usr_verify', 'admin@example.test', 'hash', 'Admin', ?, ?)`,
+    ).run(nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       "UPDATE billing_offers SET status = 'draft' WHERE id = 'off_one'",
     ).run();
@@ -578,17 +684,17 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const verificationExpiresAt = new Date(Date.now() + 3_600_000).toISOString();
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_checkout_verifications (
-         id, account_id, billing_offer_id, requested_by_user_id, token_hash,
+         id, instance_id, billing_offer_id, requested_by_user_id, token_hash,
          status, expires_at, created_at, updated_at
        ) VALUES ('bcv_one', ?, 'off_one', 'usr_verify', ?, 'pending', ?, ?, ?)`,
-    ).run(accountId, await sha256Hex(token), verificationExpiresAt, nowIso, nowIso);
+    ).run(instanceId, await sha256Hex(token), verificationExpiresAt, nowIso, nowIso);
     const first = await postEvent(eventPayload("evt_verify_one", "transaction.completed", {
       id: "txn_verify1",
       customer_id: "ctm_buyer1",
       items: [{ price: { id: "pri_one123" }, quantity: 1 }],
       custom_data: { licenkit_checkout_verification: token },
     }));
-    expect((await processEvent(first.body.data.eventId)).status).toBe("processed");
+    expect((await processEvent(first.body.data.event_id)).status).toBe("processed");
     expect(testEnv.sqliteDb.prepare(
       `SELECT status, status_reason, is_checkout_verification
        FROM licenses WHERE source_external_transaction_id = 'txn_verify1'`,
@@ -602,9 +708,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       items: [{ price: { id: "pri_one123" }, quantity: 1 }],
       custom_data: { licenkit_checkout_verification: token },
     }));
-    expect((await processEvent(replay.body.data.eventId)).status).toBe("needs_attention");
+    expect((await processEvent(replay.body.data.event_id)).status).toBe("needs_attention");
     expect((testEnv.sqliteDb.prepare("SELECT last_error_code FROM inbound_events WHERE id = ?")
-      .get(replay.body.data.eventId) as any).last_error_code).toBe("BILLING_CHECKOUT_VERIFICATION_INVALID");
+      .get(replay.body.data.event_id) as any).last_error_code).toBe("BILLING_CHECKOUT_VERIFICATION_INVALID");
     expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM licenses").get()).toEqual({ count: 1 });
 
     const pendingDelivery = testEnv.sqliteDb.prepare(
@@ -615,9 +721,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     emailAdmin.onError(errorHandler);
     emailAdmin.use("*", async (c, next) => {
       c.set("requestId", "req_checkout_cancel");
-      c.set("accountId", accountId);
+      c.set("instanceId", instanceId);
       c.set("userId", "usr_verify");
-      c.set("userRole", "owner");
+      c.set("instanceRole", "owner");
       c.set("userEmail", "admin@example.test");
       c.set("sessionNamespace", "admin");
       c.set("sessionCsrfTokenHash", await sha256Hex(csrfToken));
@@ -649,11 +755,11 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const acceptedToken = "vfy_delivery_accepted_token";
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_checkout_verifications (
-         id, account_id, billing_offer_id, requested_by_user_id, token_hash,
+         id, instance_id, billing_offer_id, requested_by_user_id, token_hash,
          status, expires_at, created_at, updated_at
        ) VALUES ('bcv_accepted', ?, 'off_one', 'usr_verify', ?, 'pending', ?, ?, ?)`,
     ).run(
-      accountId,
+      instanceId,
       await sha256Hex(acceptedToken),
       verificationExpiresAt,
       nowIso,
@@ -669,7 +775,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
         custom_data: { licenkit_checkout_verification: acceptedToken },
       },
     ));
-    expect((await processEvent(acceptedEvent.body.data.eventId)).status).toBe("processed");
+    expect((await processEvent(acceptedEvent.body.data.event_id)).status).toBe("processed");
     expect(testEnv.sqliteDb.prepare(
       `SELECT verification.status AS verification_status,
               delivery.status AS delivery_status
@@ -686,32 +792,32 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const encryptedLiveSecret = await encryptBillingProviderSecret(
       liveSecret,
       testEnv.env,
-      accountId,
+      instanceId,
       liveProviderId,
       "webhook_secret_ciphertext",
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_providers (
-         id, account_id, provider, environment, client_side_token,
+         id, instance_id, provider, environment, client_side_token,
          webhook_secret_ciphertext, status, created_at, updated_at
        ) VALUES (?, ?, 'paddle', 'live', 'live_client_token_v1', ?, 'active', ?, ?)`,
-    ).run(liveProviderId, accountId, encryptedLiveSecret, nowIso, nowIso);
+    ).run(liveProviderId, instanceId, encryptedLiveSecret, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_offers (
-         id, account_id, billing_provider_id, external_price_id, product_id,
+         id, instance_id, billing_provider_id, external_price_id, product_id,
          license_plan_id, purchase_type, status, created_at, updated_at
        ) VALUES ('off_live_verify', ?, ?, 'pri_live123', 'prd_00000000000000000000000001', 'pln_one',
          'one_time', 'draft', ?, ?)`,
-    ).run(accountId, liveProviderId, nowIso, nowIso);
+    ).run(instanceId, liveProviderId, nowIso, nowIso);
     const liveToken = "vfy_live_must_not_work";
     const liveTokenHash = await sha256Hex(liveToken);
     expect(() => testEnv.sqliteDb.prepare(
       `INSERT INTO billing_checkout_verifications (
-         id, account_id, billing_offer_id, requested_by_user_id, token_hash,
+         id, instance_id, billing_offer_id, requested_by_user_id, token_hash,
          status, expires_at, created_at, updated_at
        ) VALUES ('bcv_live', ?, 'off_live_verify', 'usr_verify', ?, 'pending',
          '2026-09-20T08:00:00.000Z', ?, ?)`,
-    ).run(accountId, liveTokenHash, nowIso, nowIso)).toThrow(/draft_sandbox_offer/);
+    ).run(instanceId, liveTokenHash, nowIso, nowIso)).toThrow(/draft_sandbox_offer/);
   });
   it("keeps Provider auth failures as passive issues while Events remain independently actionable", async () => {
     await configureProviderApiKey();
@@ -735,15 +841,15 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       items: [{ price: { id: "pri_one123" }, quantity: 1 }],
     }));
 
-    expect((await processEvent(first.body.data.eventId)).status).toBe("needs_attention");
-    expect((await processEvent(second.body.data.eventId)).status).toBe("needs_attention");
+    expect((await processEvent(first.body.data.event_id)).status).toBe("needs_attention");
+    expect((await processEvent(second.body.data.event_id)).status).toBe("needs_attention");
 
     const issues = testEnv.sqliteDb.prepare(
       `SELECT id, category, source_type, source_id, operation, error_code,
               error_detail_json, occurrence_count
        FROM system_issues
-       WHERE account_id = ?`,
-    ).all(accountId) as Array<any>;
+       WHERE instance_id = ?`,
+    ).all(instanceId) as Array<any>;
     expect(issues).toHaveLength(1);
     expect(issues[0]).toMatchObject({
       category: "webhook",
@@ -760,7 +866,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       message: "API key lacks customer.read",
     });
 
-    const listed = await listSystemIssues({ db: testEnv.d1, accountId });
+    const listed = await listSystemIssues({ db: testEnv.d1, instanceId });
     expect(listed.items).toEqual([
       expect.objectContaining({
         id: issues[0].id,
@@ -778,7 +884,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
        FROM inbound_events
        WHERE id IN (?, ?)
        ORDER BY id`,
-    ).all(first.body.data.eventId, second.body.data.eventId) as Array<any>;
+    ).all(first.body.data.event_id, second.body.data.event_id) as Array<any>;
     expect(events).toHaveLength(2);
     for (const event of events) {
       expect(event).toMatchObject({
@@ -808,10 +914,10 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       created_at: nowIso,
       updated_at: "2026-09-19T08:01:00.000Z",
     }));
-    expect((await processEvent(customerWebhook.body.data.eventId)).status).toBe("processed");
+    expect((await processEvent(customerWebhook.body.data.event_id)).status).toBe("processed");
     expect(testEnv.sqliteDb.prepare(
       "SELECT status FROM inbound_events WHERE id = ?",
-    ).get(first.body.data.eventId)).toEqual({ status: "needs_attention" });
+    ).get(first.body.data.event_id)).toEqual({ status: "needs_attention" });
   });
 
   it("records manual billing API failures without creating or linking an inbound Event", async () => {
@@ -827,7 +933,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     await expect(reconcileBillingCustomer({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       billingCustomerId: "bcu_buyer",
       fetchImpl: rejected as typeof fetch,
       now: new Date(Date.now() + 1_000),
@@ -835,8 +941,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
     expect(testEnv.sqliteDb.prepare(
       `SELECT category, source_type, source_id, operation, error_code, occurrence_count
-       FROM system_issues WHERE account_id = ?`,
-    ).get(accountId)).toEqual({
+       FROM system_issues WHERE instance_id = ?`,
+    ).get(instanceId)).toEqual({
       category: "billing",
       source_type: "billing_provider",
       source_id: providerId,
@@ -853,19 +959,21 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     seedLinkedCustomer("ctm_portal1", "portal@example.test");
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, account_id, slug, name, billing_environment, status, created_at, updated_at
-       ) VALUES ('prd_portal', ?, 'portal', 'Portal Subscription', 'sandbox', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+         id, instance_id, slug, name, billing_environment, payment_grace_seconds,
+         status, created_at, updated_at
+       ) VALUES ('prd_portal', ?, 'portal', 'Portal Subscription', 'sandbox', 86400,
+         'active', ?, ?)`,
+    ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
-         id, account_id, product_id, name, license_model, credential_mode,
+         id, instance_id, product_id, name, license_model, credential_mode,
          payment_grace_seconds, features_json, status, created_at, updated_at
        ) VALUES ('pln_portal', ?, 'prd_portal', 'Portal Subscription', 'subscription', 'opaque',
          86400, '[]', 'active', ?, ?)`,
-    ).run(accountId, nowIso, nowIso);
+    ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO licenses (
-         id, account_id, customer_id, product_id, plan_id, plan_revision,
+         id, instance_id, customer_id, product_id, plan_id, plan_revision,
          license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
          payment_grace_seconds, max_activations, features_json, key_hash,
          key_version, source, source_billing_provider_id,
@@ -877,10 +985,10 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
          1, 'payment', ?, 'txn_portal1', 'active',
          '2026-10-19T08:00:00.000Z', ?, ?
        )`,
-    ).run(accountId, providerId, nowIso, nowIso);
+    ).run(instanceId, providerId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO billing_subscriptions (
-         id, account_id, billing_provider_id, license_id,
+         id, instance_id, billing_provider_id, license_id,
          external_subscription_id, external_customer_id, external_price_id,
          status, current_period_start, current_period_end, next_billed_at,
          created_at, updated_at
@@ -890,7 +998,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
          'active', ?, '2026-10-19T08:00:00.000Z', '2026-10-19T08:00:00.000Z',
          ?, ?
        )`,
-    ).run(accountId, providerId, nowIso, nowIso, nowIso);
+    ).run(instanceId, providerId, nowIso, nowIso, nowIso);
 
     const rejected = vi.fn(async () => new Response(JSON.stringify({
       error: { code: "forbidden", detail: "customer_portal_session.write is missing" },
@@ -901,7 +1009,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     await expect(createCustomerPortalSession({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       customerId: "cus_buyer",
       licenseId: "lic_portal1",
       fetchImpl: rejected as typeof fetch,
@@ -910,8 +1018,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
     expect(testEnv.sqliteDb.prepare(
       `SELECT category, source_type, source_id, operation, error_code, occurrence_count
-       FROM system_issues WHERE account_id = ?`,
-    ).get(accountId)).toEqual({
+       FROM system_issues WHERE instance_id = ?`,
+    ).get(instanceId)).toEqual({
       category: "billing",
       source_type: "billing_provider",
       source_id: providerId,

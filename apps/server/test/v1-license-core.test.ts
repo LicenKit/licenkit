@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Hono } from "hono";
+import type { AppContext } from "../src/types";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 import { issueManualLicense } from "../src/services/license/issue";
 import { activateLicense, validateActivation } from "../src/services/license/activation";
@@ -6,10 +8,35 @@ import { rotateLicenseKey } from "../src/services/license/key-rotation";
 import { claimTrial, validateTrial } from "../src/services/license/trial";
 import { decryptEnvelopeV1, encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 import { generateEd25519KeyPair, base64UrlToJson } from "../src/infra/crypto";
+import { clientRouter } from "../src/routes/client.routes";
+import { adminLicensePlansRouter } from "../src/routes/admin/license-plans.routes";
+import { errorHandler } from "../src/middleware/error";
+
+function clientApp() {
+  const app = new Hono<AppContext>();
+  app.onError(errorHandler);
+  app.route("/api/v1/client", clientRouter);
+  return app;
+}
+
+function adminLicensePlansApp() {
+  const app = new Hono<AppContext>();
+  app.onError(errorHandler);
+  app.use("*", async (c, next) => {
+    c.set("requestId", "req_plan_test");
+    c.set("instanceId", "ins_v1_core");
+    c.set("instanceRole", "owner");
+    c.set("userId", "usr_v1_owner");
+    c.set("userEmail", "owner@example.com");
+    await next();
+  });
+  app.route("/", adminLicensePlansRouter);
+  return app;
+}
 
 describe("V1 License core contract", () => {
   let testEnv: TestEnvContext;
-  const accountId = "acc_v1_core";
+  const instanceId = "ins_v1_core";
   const userId = "usr_v1_owner";
   const productId = "prd_00000000000000000000000001";
   const releaseId = "rel_v1_100";
@@ -33,13 +60,13 @@ describe("V1 License core contract", () => {
     const credential = input.credential ?? "opaque";
     await run(
       `INSERT INTO license_plans (
-         id, account_id, product_id, name, revision, license_model,
+         id, instance_id, product_id, name, revision, license_model,
          credential_mode, default_term_seconds, update_window_seconds,
          signed_token_ttl_seconds, payment_grace_seconds, max_activations,
          features_json, status, created_at, updated_at
        ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, '["pro_export"]', 'active', ?12, ?12)`,
       input.id,
-      accountId,
+      instanceId,
       productId,
       `${model} plan`,
       model,
@@ -56,34 +83,42 @@ describe("V1 License core contract", () => {
   beforeEach(async () => {
     testEnv = createTestEnv();
     await run(
-      `INSERT INTO accounts (id, name, slug, default_subscription_payment_grace_seconds, status, created_at, updated_at)
-       VALUES (?1, 'V1 Core', 'v1-core', 432000, 'active', ?2, ?2)`,
-      accountId,
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?1, 'V1 Core', 'v1-core', 'https://license.example.test', 'active', ?2, ?2)`,
+      instanceId,
       "2026-09-01T00:00:00.000Z",
     );
     await run(
-      `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-       VALUES (?1, ?2, 'owner@example.com', 'hash', 'Owner', 'owner', 'active', ?3, ?3)`,
+      `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
+       VALUES (?1, 'owner@example.com', 'hash', 'Owner', ?2, ?2)`,
       userId,
-      accountId,
+      "2026-09-01T00:00:00.000Z",
+    );
+    await run(
+      `INSERT INTO instance_memberships (instance_id, user_id, role, status, created_at, updated_at)
+       VALUES (?1, ?2, 'owner', 'active', ?3, ?3)`,
+      instanceId,
+      userId,
       "2026-09-01T00:00:00.000Z",
     );
     await run(
       `INSERT INTO products (
-         id, account_id, slug, name, description, billing_environment,
-         trial_enabled, trial_duration_seconds, trial_features_json, status, created_at, updated_at
-       ) VALUES (?1, ?2, 'v1-app', 'V1 App', NULL, NULL, 1, 1200, '["trial_export"]', 'active', ?3, ?3)`,
+         id, instance_id, slug, name, description, billing_environment,
+         payment_grace_seconds, trial_enabled, trial_duration_seconds,
+         trial_features_json, status, created_at, updated_at
+       ) VALUES (?1, ?2, 'v1-app', 'V1 App', NULL, NULL, 432000, 1, 1200,
+                 '["trial_export"]', 'active', ?3, ?3)`,
       productId,
-      accountId,
+      instanceId,
       "2026-09-01T00:00:00.000Z",
     );
     await run(
       `INSERT INTO product_releases (
-         id, account_id, product_id, version, platform, description, download_url,
+         id, instance_id, product_id, version, platform, description, download_url,
          artifact_sha256, released_at, created_at, updated_at
        ) VALUES (?1, ?2, ?3, '1.0.0', 'macos-universal', NULL, NULL, ?4, ?5, ?5, ?5)`,
       releaseId,
-      accountId,
+      instanceId,
       productId,
       "a".repeat(64),
       releasedAt,
@@ -91,6 +126,47 @@ describe("V1 License core contract", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it("snapshots the Product payment grace when creating a subscription Plan", async () => {
+    const legacy = await adminLicensePlansApp().request("https://license.example.test/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        productId,
+        name: "Legacy subscription",
+        licenseModel: "subscription",
+        credentialMode: "opaque",
+        signedTokenTtlSeconds: 0,
+        maxActivations: 2,
+        features: [],
+      }),
+    }, testEnv.env);
+    expect(legacy.status).toBe(400);
+    expect((await legacy.json() as any).error.code).toBe("VALIDATION_ERROR");
+
+    const response = await adminLicensePlansApp().request("https://license.example.test/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        product_id: productId,
+        name: "Subscription",
+        license_model: "subscription",
+        credential_mode: "opaque",
+        signed_token_ttl_seconds: 0,
+        max_activations: 2,
+        features: [],
+      }),
+    }, testEnv.env);
+    expect(response.status).toBe(201);
+    const body = await response.json() as any;
+    expect(body.data.instance_id).toBe(instanceId);
+    expect(body.data).not.toHaveProperty("instanceId");
+    expect(body.data.payment_grace_seconds).toBe(432000);
+    expect(body.data).not.toHaveProperty("paymentGraceSeconds");
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT payment_grace_seconds FROM license_plans WHERE instance_id = ? AND product_id = ?",
+    ).get(instanceId, productId)).toEqual({ payment_grace_seconds: 432000 });
+  });
 
   it("freezes perpetual terms and does not inherit later plan edits", async () => {
     const providerFetch = vi.fn();
@@ -100,7 +176,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_perpetual",
       customerEmail: "Buyer@Example.COM",
       actor: { type: "user", id: userId },
@@ -116,8 +192,8 @@ describe("V1 License core contract", () => {
     const delivery = testEnv.sqliteDb.prepare(
       `SELECT notification_type, contract_version, recipient_email, status,
               attempt_count, variables_ciphertext
-       FROM email_deliveries WHERE account_id = ? AND id = ?`,
-    ).get(accountId, issued.delivery.id) as any;
+       FROM email_deliveries WHERE instance_id = ? AND id = ?`,
+    ).get(instanceId, issued.delivery.id) as any;
     expect(delivery).toMatchObject({
       notification_type: "customer.license_issued",
       contract_version: 1,
@@ -129,14 +205,14 @@ describe("V1 License core contract", () => {
       delivery.variables_ciphertext,
       testEnv.env,
       {
-        accountId,
+        instanceId,
         table: "email_deliveries",
         rowId: issued.delivery.id,
         field: "variables_ciphertext",
       },
     ));
     expect(variables).toMatchObject({
-      account_name: "V1 Core",
+      instance_name: "V1 Core",
       product_id: productId,
       product_name: "V1 App",
       license_id: issued.license.id,
@@ -149,13 +225,13 @@ describe("V1 License core contract", () => {
 
     await run(
       `UPDATE license_plans SET max_activations = 9, features_json = '["changed"]', revision = 2
-       WHERE account_id = ?1 AND id = 'lpl_perpetual'`,
-      accountId,
+       WHERE instance_id = ?1 AND id = 'lpl_perpetual'`,
+      instanceId,
     );
     const stored = await testEnv.d1.prepare(
       `SELECT max_activations, features_json, plan_revision, payment_grace_seconds
-       FROM licenses WHERE account_id = ?1 AND id = ?2`
-    ).bind(accountId, issued.license.id).get();
+       FROM licenses WHERE instance_id = ?1 AND id = ?2`
+    ).bind(instanceId, issued.license.id).get();
     expect(stored).toMatchObject({
       max_activations: 2,
       features_json: '["pro_export"]',
@@ -169,7 +245,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_manual_sub",
       customerEmail: "manual@example.com",
       expiresAt: "2027-01-01T00:00:00.000Z",
@@ -181,7 +257,7 @@ describe("V1 License core contract", () => {
     await expect(issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_manual_sub",
       customerEmail: "invalid@example.com",
       actor: { type: "user", id: userId },
@@ -195,8 +271,8 @@ describe("V1 License core contract", () => {
       ...testEnv.d1,
       batch: async (statements: D1PreparedStatement[]) => {
         testEnv.sqliteDb.prepare(
-          "UPDATE license_plans SET status = 'archived' WHERE account_id = ? AND id = ?",
-        ).run(accountId, "lpl_racing_manual");
+          "UPDATE license_plans SET status = 'archived' WHERE instance_id = ? AND id = ?",
+        ).run(instanceId, "lpl_racing_manual");
         return testEnv.d1.batch(statements);
       },
     } as D1Database;
@@ -204,7 +280,7 @@ describe("V1 License core contract", () => {
     await expect(issueManualLicense({
       db: racingDb,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_racing_manual",
       customerEmail: "racing@example.com",
       actor: { type: "user", id: userId },
@@ -213,11 +289,11 @@ describe("V1 License core contract", () => {
 
     expect(testEnv.sqliteDb.prepare(
       `SELECT
-         (SELECT COUNT(*) FROM customers WHERE account_id = ?) AS customers,
-         (SELECT COUNT(*) FROM licenses WHERE account_id = ?) AS licenses,
-         (SELECT COUNT(*) FROM email_deliveries WHERE account_id = ?) AS deliveries,
-         (SELECT COUNT(*) FROM audit_logs WHERE account_id = ?) AS audits`,
-    ).get(accountId, accountId, accountId, accountId)).toEqual({
+         (SELECT COUNT(*) FROM customers WHERE instance_id = ?) AS customers,
+         (SELECT COUNT(*) FROM licenses WHERE instance_id = ?) AS licenses,
+         (SELECT COUNT(*) FROM email_deliveries WHERE instance_id = ?) AS deliveries,
+         (SELECT COUNT(*) FROM audit_logs WHERE instance_id = ?) AS audits`,
+    ).get(instanceId, instanceId, instanceId, instanceId)).toEqual({
       customers: 0,
       licenses: 0,
       deliveries: 0,
@@ -231,7 +307,7 @@ describe("V1 License core contract", () => {
     await expect(issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_signed_without_key",
       customerEmail: "missing-key@example.com",
       actor: { type: "user", id: userId },
@@ -243,11 +319,11 @@ describe("V1 License core contract", () => {
 
     const counts = await testEnv.d1.prepare(
       `SELECT
-         (SELECT COUNT(*) FROM customers WHERE account_id = ?1) AS customers,
-         (SELECT COUNT(*) FROM licenses WHERE account_id = ?1) AS licenses,
-         (SELECT COUNT(*) FROM email_deliveries WHERE account_id = ?1) AS deliveries,
-         (SELECT COUNT(*) FROM audit_logs WHERE account_id = ?1) AS audits`
-    ).bind(accountId).get();
+         (SELECT COUNT(*) FROM customers WHERE instance_id = ?1) AS customers,
+         (SELECT COUNT(*) FROM licenses WHERE instance_id = ?1) AS licenses,
+         (SELECT COUNT(*) FROM email_deliveries WHERE instance_id = ?1) AS deliveries,
+         (SELECT COUNT(*) FROM audit_logs WHERE instance_id = ?1) AS audits`
+    ).bind(instanceId).get();
     expect(counts).toEqual({ customers: 0, licenses: 0, deliveries: 0, audits: 0 });
   });
 
@@ -256,7 +332,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_opaque",
       customerEmail: "opaque@example.com",
       actor: { type: "user", id: userId },
@@ -265,7 +341,7 @@ describe("V1 License core contract", () => {
     const activated = await activateLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:opaque-device",
@@ -279,7 +355,7 @@ describe("V1 License core contract", () => {
     const validated = await validateActivation({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       activationId: activated.activation_id,
       machineToken: activated.machine_token,
@@ -292,7 +368,7 @@ describe("V1 License core contract", () => {
     await expect(validateActivation({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       activationId: activated.activation_id,
       machineToken: activated.machine_token,
@@ -307,7 +383,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_updates",
       customerEmail: "updates@example.com",
       actor: { type: "user", id: userId },
@@ -315,10 +391,10 @@ describe("V1 License core contract", () => {
     });
     await run(
       `INSERT INTO product_releases (
-         id, account_id, product_id, version, platform, artifact_sha256,
+         id, instance_id, product_id, version, platform, artifact_sha256,
          released_at, created_at, updated_at
        ) VALUES ('rel_v1_200', ?1, ?2, '2.0.0', 'macos-universal', ?3, ?4, ?4, ?4)`,
-      accountId,
+      instanceId,
       productId,
       "b".repeat(64),
       "2026-10-01T00:00:00.000Z",
@@ -326,7 +402,7 @@ describe("V1 License core contract", () => {
     await expect(activateLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:new-release-device",
@@ -344,7 +420,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_one_seat",
       customerEmail: "one-seat@example.com",
       actor: { type: "user", id: userId },
@@ -354,7 +430,7 @@ describe("V1 License core contract", () => {
       activateLicense({
         db: testEnv.d1,
         env: testEnv.env,
-        accountId,
+        instanceId,
         productId,
         licenseKey: issued.license.licenseKey,
         fingerprint: `sha256:${device}`,
@@ -366,8 +442,8 @@ describe("V1 License core contract", () => {
     const rejected = attempts.find((result) => result.status === "rejected") as PromiseRejectedResult;
     expect(rejected.reason).toMatchObject({ code: "LICENSE_ACTIVATION_LIMIT_REACHED" });
     const count = await testEnv.d1.prepare(
-      `SELECT COUNT(*) AS count FROM activations WHERE account_id = ?1 AND status = 'active'`
-    ).bind(accountId).get();
+      `SELECT COUNT(*) AS count FROM activations WHERE instance_id = ?1 AND status = 'active'`
+    ).bind(instanceId).get();
     expect(count.count).toBe(1);
   });
 
@@ -375,18 +451,18 @@ describe("V1 License core contract", () => {
     const keyId = "key_v1_active";
     const keyPair = await generateEd25519KeyPair();
     const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {
-      accountId,
+      instanceId,
       table: "signing_keys",
       rowId: keyId,
       field: "private_key_ciphertext",
     });
     await run(
       `INSERT INTO signing_keys (
-         id, account_id, product_id, algorithm, source, public_key,
+         id, instance_id, product_id, algorithm, source, public_key,
          private_key_ciphertext, status, created_at, retired_at, revoked_at
        ) VALUES (?1, ?2, ?3, 'Ed25519', 'generated', ?4, ?5, 'active', ?6, NULL, NULL)`,
       keyId,
-      accountId,
+      instanceId,
       productId,
       keyPair.publicKeyBase64,
       encrypted,
@@ -396,7 +472,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_signed",
       customerEmail: "signed@example.com",
       actor: { type: "user", id: userId },
@@ -405,7 +481,7 @@ describe("V1 License core contract", () => {
     const activated = await activateLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:signed-device",
@@ -422,31 +498,85 @@ describe("V1 License core contract", () => {
     expect(base64UrlToJson<any>(claimsPart)).toMatchObject({
       lic: issued.license.id,
       act: activated.activation_id,
-      acc: accountId,
+      ins: instanceId,
       prd: productId,
       rel: releaseId,
       ver: "1.0.0",
       plt: "macos-universal",
       rat: Date.parse(releasedAt) / 1000,
     });
+    expect(base64UrlToJson<any>(claimsPart)).not.toHaveProperty("acc");
   });
 
-  it("does not create a seat or replace a machine token when signed token preparation fails", async () => {
-    const keyId = "key_v1_failure_atomicity";
+  it("requires the Instance selector when reading Product signing keys", async () => {
+    const keyId = "key_v1_public";
     const keyPair = await generateEd25519KeyPair();
     const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {
-      accountId,
+      instanceId,
       table: "signing_keys",
       rowId: keyId,
       field: "private_key_ciphertext",
     });
     await run(
       `INSERT INTO signing_keys (
-         id, account_id, product_id, algorithm, source, public_key,
+         id, instance_id, product_id, algorithm, source, public_key,
          private_key_ciphertext, status, created_at, retired_at, revoked_at
        ) VALUES (?1, ?2, ?3, 'Ed25519', 'generated', ?4, ?5, 'active', ?6, NULL, NULL)`,
       keyId,
-      accountId,
+      instanceId,
+      productId,
+      keyPair.publicKeyBase64,
+      encrypted,
+      "2026-09-01T00:00:00.000Z",
+    );
+    const app = clientApp();
+    const missing = await app.request(
+      `https://license.example.test/api/v1/client/products/${productId}/signing-keys`,
+      {},
+      testEnv.env,
+    );
+    expect(missing.status).toBe(400);
+
+    const wrongInstance = await app.request(
+      `https://license.example.test/api/v1/client/products/${productId}/signing-keys?instance_id=ins_other`,
+      {},
+      testEnv.env,
+    );
+    expect(wrongInstance.status).toBe(200);
+    expect(await wrongInstance.json()).toEqual({ success: true, data: { items: [] } });
+
+    const selected = await app.request(
+      `https://license.example.test/api/v1/client/products/${productId}/signing-keys?instance_id=${instanceId}`,
+      {},
+      testEnv.env,
+    );
+    expect(selected.status).toBe(200);
+    expect((await selected.json() as any).data.items).toEqual([
+      expect.objectContaining({ id: keyId, public_key: keyPair.publicKeyBase64, status: "active" }),
+    ]);
+    expect((await (await app.request(
+      `https://license.example.test/api/v1/client/products/${productId}/signing-keys?instanceId=${instanceId}`,
+      {},
+      testEnv.env,
+    )).json() as any).error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("does not create a seat or replace a machine token when signed token preparation fails", async () => {
+    const keyId = "key_v1_failure_atomicity";
+    const keyPair = await generateEd25519KeyPair();
+    const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {
+      instanceId,
+      table: "signing_keys",
+      rowId: keyId,
+      field: "private_key_ciphertext",
+    });
+    await run(
+      `INSERT INTO signing_keys (
+         id, instance_id, product_id, algorithm, source, public_key,
+         private_key_ciphertext, status, created_at, retired_at, revoked_at
+       ) VALUES (?1, ?2, ?3, 'Ed25519', 'generated', ?4, ?5, 'active', ?6, NULL, NULL)`,
+      keyId,
+      instanceId,
       productId,
       keyPair.publicKeyBase64,
       encrypted,
@@ -456,7 +586,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_signed_atomic",
       customerEmail: "signed-atomic@example.com",
       actor: { type: "user", id: userId },
@@ -464,14 +594,14 @@ describe("V1 License core contract", () => {
     });
 
     await run(
-      `UPDATE signing_keys SET private_key_ciphertext = 'not-an-envelope' WHERE account_id = ?1 AND id = ?2`,
-      accountId,
+      `UPDATE signing_keys SET private_key_ciphertext = 'not-an-envelope' WHERE instance_id = ?1 AND id = ?2`,
+      instanceId,
       keyId,
     );
     const activationInput = {
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:signed-atomic-device",
@@ -481,25 +611,25 @@ describe("V1 License core contract", () => {
     };
     await expect(activateLicense(activationInput)).rejects.toThrow("DELIVERY_ENVELOPE_INVALID_JSON");
     const empty = await testEnv.d1.prepare(
-      `SELECT COUNT(*) AS count FROM activations WHERE account_id = ?1 AND license_id = ?2`
-    ).bind(accountId, issued.license.id).get();
+      `SELECT COUNT(*) AS count FROM activations WHERE instance_id = ?1 AND license_id = ?2`
+    ).bind(instanceId, issued.license.id).get();
     expect(empty.count).toBe(0);
 
     await run(
-      `UPDATE signing_keys SET private_key_ciphertext = ?1 WHERE account_id = ?2 AND id = ?3`,
+      `UPDATE signing_keys SET private_key_ciphertext = ?1 WHERE instance_id = ?2 AND id = ?3`,
       encrypted,
-      accountId,
+      instanceId,
       keyId,
     );
     const activated = await activateLicense(activationInput);
     const beforeFailure = await testEnv.d1.prepare(
       `SELECT machine_token_hash, updated_at FROM activations
-       WHERE account_id = ?1 AND license_id = ?2 AND id = ?3`
-    ).bind(accountId, issued.license.id, activated.activation_id).get();
+       WHERE instance_id = ?1 AND license_id = ?2 AND id = ?3`
+    ).bind(instanceId, issued.license.id, activated.activation_id).get();
 
     await run(
-      `UPDATE signing_keys SET private_key_ciphertext = 'not-an-envelope' WHERE account_id = ?1 AND id = ?2`,
-      accountId,
+      `UPDATE signing_keys SET private_key_ciphertext = 'not-an-envelope' WHERE instance_id = ?1 AND id = ?2`,
+      instanceId,
       keyId,
     );
     await expect(activateLicense({
@@ -508,8 +638,8 @@ describe("V1 License core contract", () => {
     })).rejects.toThrow("DELIVERY_ENVELOPE_INVALID_JSON");
     const afterFailure = await testEnv.d1.prepare(
       `SELECT machine_token_hash, updated_at FROM activations
-       WHERE account_id = ?1 AND license_id = ?2 AND id = ?3`
-    ).bind(accountId, issued.license.id, activated.activation_id).get();
+       WHERE instance_id = ?1 AND license_id = ?2 AND id = ?3`
+    ).bind(instanceId, issued.license.id, activated.activation_id).get();
     expect(afterFailure).toEqual(beforeFailure);
   });
 
@@ -518,7 +648,7 @@ describe("V1 License core contract", () => {
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licensePlanId: "lpl_rotate",
       customerEmail: "rotate@example.com",
       actor: { type: "user", id: userId },
@@ -527,7 +657,7 @@ describe("V1 License core contract", () => {
     const activated = await activateLicense({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:rotate-device",
@@ -537,7 +667,7 @@ describe("V1 License core contract", () => {
     const recovered = await rotateLicenseKey({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licenseId: issued.license.id,
       actor: { type: "user", id: userId },
       reason: "recovery",
@@ -546,7 +676,7 @@ describe("V1 License core contract", () => {
     await expect(validateActivation({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       activationId: activated.activation_id,
       machineToken: activated.machine_token,
@@ -557,7 +687,7 @@ describe("V1 License core contract", () => {
     const reset = await rotateLicenseKey({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       licenseId: issued.license.id,
       actor: { type: "user", id: userId },
       reason: "security_reset",
@@ -565,7 +695,7 @@ describe("V1 License core contract", () => {
     await expect(validateActivation({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId,
+      instanceId,
       productId,
       activationId: activated.activation_id,
       machineToken: activated.machine_token,
@@ -577,13 +707,13 @@ describe("V1 License core contract", () => {
     const rows = testEnv.sqliteDb.prepare(
       `SELECT id, notification_type, status, variables_ciphertext
        FROM email_deliveries
-       WHERE account_id = ? AND customer_id = ?
+       WHERE instance_id = ? AND customer_id = ?
        ORDER BY CASE notification_type
          WHEN 'customer.license_issued' THEN 1
          WHEN 'customer.license_recovered' THEN 2
          WHEN 'customer.license_security_reset' THEN 3
          ELSE 4 END`,
-    ).all(accountId, issued.license.customerId) as any[];
+    ).all(instanceId, issued.license.customerId) as any[];
     expect(rows.map((row) => row.notification_type)).toEqual([
       "customer.license_issued",
       "customer.license_recovered",
@@ -598,7 +728,7 @@ describe("V1 License core contract", () => {
         row.variables_ciphertext,
         testEnv.env,
         {
-          accountId,
+          instanceId,
           table: "email_deliveries",
           rowId: row.id,
           field: "variables_ciphertext",
@@ -621,7 +751,7 @@ describe("V1 License core contract", () => {
   it("allows one online-only Trial Claim per product and device", async () => {
     const first = await claimTrial({
       db: testEnv.d1,
-      accountId,
+      instanceId,
       productId,
       fingerprint: "sha256:trial-device",
       releaseVersion: "1.0.0",
@@ -631,7 +761,7 @@ describe("V1 License core contract", () => {
     expect(first.trial_token).toMatch(/^ttk_[0-9a-f]{64}$/);
     await expect(claimTrial({
       db: testEnv.d1,
-      accountId,
+      instanceId,
       productId,
       fingerprint: "sha256:trial-device",
       releaseVersion: "1.0.0",
@@ -639,7 +769,7 @@ describe("V1 License core contract", () => {
     })).rejects.toMatchObject({ code: "TRIAL_ALREADY_CLAIMED" });
     const validated = await validateTrial({
       db: testEnv.d1,
-      accountId,
+      instanceId,
       productId,
       trialId: first.trial_id,
       trialToken: first.trial_token,
@@ -651,15 +781,15 @@ describe("V1 License core contract", () => {
     expect(validated.features).toEqual(["trial_export"]);
     await run(
       `UPDATE trial_claims SET revoked_at = ?1, revoke_reason = 'abuse', updated_at = ?1
-       WHERE account_id = ?2 AND product_id = ?3 AND id = ?4`,
+       WHERE instance_id = ?2 AND product_id = ?3 AND id = ?4`,
       "2026-09-19T10:11:00.000Z",
-      accountId,
+      instanceId,
       productId,
       first.trial_id,
     );
     await expect(validateTrial({
       db: testEnv.d1,
-      accountId,
+      instanceId,
       productId,
       trialId: first.trial_id,
       trialToken: first.trial_token,

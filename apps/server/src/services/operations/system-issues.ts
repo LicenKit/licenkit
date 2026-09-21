@@ -15,7 +15,7 @@ function parseJsonObject(value: string): Record<string, unknown> {
 
 export function prepareSystemIssueUpsert(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   category: SystemIssueCategory;
   sourceType: string;
   sourceId: string;
@@ -26,10 +26,10 @@ export function prepareSystemIssueUpsert(input: {
 }): D1PreparedStatement {
   return input.db.prepare(
     `INSERT INTO system_issues (
-       id, account_id, category, source_type, source_id, operation,
+       id, instance_id, category, source_type, source_id, operation,
        error_code, error_detail_json, occurrence_count, first_seen_at, last_seen_at
      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)
-     ON CONFLICT(account_id, category, source_type, source_id, operation, error_code)
+     ON CONFLICT(instance_id, category, source_type, source_id, operation, error_code)
      DO UPDATE SET
        occurrence_count = system_issues.occurrence_count + 1,
        error_detail_json = excluded.error_detail_json,
@@ -39,7 +39,7 @@ export function prepareSystemIssueUpsert(input: {
        processed_by_user_id = NULL`,
   ).bind(
     `siy_${ulid().toLowerCase()}`,
-    input.accountId,
+    input.instanceId,
     input.category,
     input.sourceType,
     input.sourceId,
@@ -52,17 +52,17 @@ export function prepareSystemIssueUpsert(input: {
 
 export async function listSystemIssues(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
 }): Promise<{ items: Array<Record<string, unknown>> }> {
   const result = await input.db.prepare(
     `SELECT id, category, source_type, source_id, operation, error_code,
             error_detail_json, status, occurrence_count, first_seen_at, last_seen_at,
             processed_at, processed_by_user_id
      FROM system_issues
-     WHERE account_id = ?1
+     WHERE instance_id = ?1
      ORDER BY last_seen_at DESC, id DESC
      LIMIT 200`,
-  ).bind(input.accountId).all<Record<string, any>>();
+  ).bind(input.instanceId).all<Record<string, any>>();
   return {
     items: result.results.map((row) => ({
       id: row.id,

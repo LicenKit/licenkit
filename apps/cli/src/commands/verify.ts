@@ -30,7 +30,7 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
     const { claims } = await verifySignedLicenseToken(token, publicKey);
     const fingerprint = options.fingerprint || (await getMachineFingerprint());
     const evaluation = evaluateSignedLicenseClaims(claims, {
-      accountId: stored.accountId,
+      instanceId: stored.instanceId,
       productId: stored.productId,
       activationId: stored.activationId,
       fingerprint,

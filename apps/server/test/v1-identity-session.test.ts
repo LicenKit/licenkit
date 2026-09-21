@@ -1,21 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppContext } from "../src/types";
 import { errorHandler } from "../src/middleware/error";
 import { setupRouter } from "../src/routes/setup.routes";
 import { authRouter } from "../src/routes/auth.routes";
-import { customerAuthRouter } from "../src/routes/customer-auth.routes";
-import { customerRouter } from "../src/routes/customer.routes";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 import {
-  ADMIN_ACCOUNT_COOKIE,
   ADMIN_CSRF_COOKIE,
   ADMIN_SESSION_COOKIE,
-  CUSTOMER_ACCOUNT_COOKIE,
-  CUSTOMER_CSRF_COOKIE,
-  CUSTOMER_SESSION_COOKIE,
 } from "../src/services/identity/session";
-import { decryptEnvelopeV1 } from "../src/infra/delivery/crypto";
+
+const ORIGIN = "https://license.example.test";
+const SETUP_TOKEN = "initial-setup-token-with-enough-entropy";
 
 function cookieValue(response: Response, name: string): string {
   const header = response.headers.get("set-cookie") ?? "";
@@ -24,471 +20,349 @@ function cookieValue(response: Response, name: string): string {
   return match[1];
 }
 
+function expectOnlySnakeCaseJsonKeys(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) expectOnlySnakeCaseJsonKeys(item);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    expect(key).toMatch(/^[a-z][a-z0-9_]*$/);
+    expectOnlySnakeCaseJsonKeys(nested);
+  }
+}
+
 function identityApp() {
   const app = new Hono<AppContext>();
   app.onError(errorHandler);
   app.route("/api/v1/setup", setupRouter);
   app.route("/api/v1/admin/auth", authRouter);
-  app.route("/api/v1/customer/auth", customerAuthRouter);
-  app.route("/api/v1/customer", customerRouter);
   return app;
 }
 
-describe("V1 identity and sessions", () => {
+function setupBody(suffix = "primary") {
+  return {
+    setup_token: SETUP_TOKEN,
+    user: {
+      name: `Owner ${suffix}`,
+      email: `owner-${suffix}@example.test`,
+      password: `strong-password-${suffix}-123`,
+    },
+    instance: {
+      name: `Example ${suffix}`,
+      slug: `example-${suffix}`,
+      site_url: `${ORIGIN}/site/`,
+    },
+  };
+}
+
+async function postJson(
+  app: ReturnType<typeof identityApp>,
+  path: string,
+  body: unknown,
+  env: TestEnvContext["env"],
+  headers: Record<string, string> = {},
+) {
+  return app.request(
+    `${ORIGIN}${path}`,
+    {
+      method: "POST",
+      headers: { Origin: ORIGIN, "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    },
+    env,
+  );
+}
+
+describe("V1 deployment setup and administrator identity", () => {
   let testEnv: TestEnvContext;
 
   beforeEach(() => {
     testEnv = createTestEnv({
-      INITIAL_SETUP_TOKEN: "initial-setup-token-with-enough-entropy",
-      STORAGE_ENCRYPTION_KEY_ID: "test-primary",
+      INITIAL_SETUP_TOKEN: SETUP_TOKEN,
       ENVIRONMENT: "test",
-      TURNSTILE_SECRET_KEY: "test-turnstile-secret",
-      TURNSTILE_SITE_KEY: "test-turnstile-site-key",
-    } as any);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      success: true,
-      action: "customer_magic_link",
-      hostname: "license.example.test",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    })));
+    });
   });
 
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("rejects an invalid Setup token without leaving partial initialization", async () => {
+  it("verifies the deployment token without persisting state", async () => {
     const app = identityApp();
-    const response = await app.request(
-      "https://license.example.test/api/v1/setup",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          setupToken: "wrong-token",
-          instanceName: "Example Studio",
-          siteUrl: "https://license.example.test",
-          accountSlug: "example-studio",
-          owner: { name: "Owner", email: "owner@example.test", password: "strong-password-123" },
-        }),
-      },
-      testEnv.env
-    );
-    expect(response.status).toBe(401);
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM system_settings").get()).toEqual({ count: 0 });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM accounts").get()).toEqual({ count: 0 });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 0 });
-  });
+    const initialStatus = await app.request(`${ORIGIN}/api/v1/setup/status`, {}, testEnv.env);
+    expect(initialStatus.status).toBe(200);
+    expect(initialStatus.headers.get("cache-control")).toBe("no-store");
+    const initialStatusPayload = await initialStatus.json();
+    expect(initialStatusPayload).toEqual({ success: true, data: { initialized: false } });
+    expectOnlySnakeCaseJsonKeys(initialStatusPayload);
 
-  it("requires the configured Site URL to share the LicenKit app Origin", async () => {
-    const app = identityApp();
-    const response = await app.request(
-      "https://license.example.test/api/v1/setup",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          setupToken: "initial-setup-token-with-enough-entropy",
-          instanceName: "Example Studio",
-          siteUrl: "https://www.example.test",
-          accountSlug: "example-studio",
-          owner: { name: "Owner", email: "owner@example.test", password: "strong-password-123" },
-        }),
-      },
+    const invalid = await postJson(
+      app,
+      "/api/v1/setup/verify-token",
+      { setup_token: "wrong-token" },
       testEnv.env,
     );
+    expect(invalid.status).toBe(401);
+    expect(invalid.headers.get("cache-control")).toBe("no-store");
+    const invalidPayload = await invalid.json() as any;
+    expectOnlySnakeCaseJsonKeys(invalidPayload);
+    expect(invalidPayload.error).toHaveProperty("request_id");
+    expect(invalidPayload.error).not.toHaveProperty("requestId");
 
-    expect(response.status).toBe(400);
-    expect((await response.json() as any).error.code).toBe("SETUP_SITE_URL_ORIGIN_MISMATCH");
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM system_settings").get()).toEqual({ count: 0 });
+    const nonOriginHeader = await postJson(
+      app,
+      "/api/v1/setup/verify-token",
+      { setup_token: SETUP_TOKEN },
+      testEnv.env,
+      { Origin: `${ORIGIN}/not-an-origin` },
+    );
+    expect(nonOriginHeader.status).toBe(403);
+
+    const valid = await postJson(
+      app,
+      "/api/v1/setup/verify-token",
+      { setup_token: SETUP_TOKEN },
+      testEnv.env,
+    );
+    expect(valid.status).toBe(200);
+    const validPayload = await valid.json();
+    expect(validPayload).toEqual({ success: true, data: { valid: true } });
+    expectOnlySnakeCaseJsonKeys(validPayload);
+
+    for (const table of [
+      "users",
+      "instances",
+      "instance_memberships",
+      "admin_sessions",
+      "audit_logs",
+      "deployment_bootstrap",
+    ]) {
+      expect(testEnv.sqliteDb.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+    }
   });
 
-  it("allows exactly one concurrent Setup request to initialize the database", async () => {
+  it("atomically creates the User, Instance, Owner Membership and Session", async () => {
     const app = identityApp();
-    const request = (suffix: string) => app.request(
-      "https://license.example.test/api/v1/setup",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          setupToken: "initial-setup-token-with-enough-entropy",
-          instanceName: `Concurrent ${suffix}`,
-          siteUrl: "https://license.example.test",
-          accountSlug: `concurrent-${suffix}`,
-          owner: {
-            name: `Owner ${suffix}`,
-            email: `owner-${suffix}@example.test`,
-            password: `strong-password-${suffix}-123`,
-          },
-        }),
-      },
-      testEnv.env
-    );
+    const setup = await postJson(app, "/api/v1/setup", setupBody(), testEnv.env);
+    expect(setup.status).toBe(201);
+    expect(setup.headers.get("cache-control")).toBe("no-store");
+    const cookieHeader = setup.headers.get("set-cookie") ?? "";
+    expect(cookieHeader).toContain(ADMIN_SESSION_COOKIE);
+    expect(cookieHeader).toContain(ADMIN_CSRF_COOKIE);
+    expect(cookieHeader).not.toContain("licenkit-admin-account");
 
-    const responses = await Promise.all([request("one"), request("two")]);
+    const payload = await setup.json() as any;
+    expectOnlySnakeCaseJsonKeys(payload);
+    expect(payload.data).toMatchObject({
+      user: { name: "Owner primary", email: "owner-primary@example.test" },
+      instance: {
+        name: "Example primary",
+        slug: "example-primary",
+        site_url: `${ORIGIN}/site`,
+        status: "active",
+      },
+      membership: { role: "owner", status: "active" },
+    });
+    expect(payload.data.instance.id).toMatch(/^ins_/);
+    expect(payload.data.user.id).toMatch(/^usr_/);
+
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 1 });
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM instances").get()).toEqual({ count: 1 });
+    expect(testEnv.sqliteDb.prepare("SELECT role, status, joined_by_invitation_id FROM instance_memberships").get()).toEqual({
+      role: "owner",
+      status: "active",
+      joined_by_invitation_id: null,
+    });
+    expect(testEnv.sqliteDb.prepare("SELECT singleton_key FROM deployment_bootstrap").get()).toEqual({
+      singleton_key: "deployment",
+    });
+    expect(testEnv.sqliteDb.prepare("SELECT scope_type, instance_id, action FROM audit_logs").get()).toEqual({
+      scope_type: "instance",
+      instance_id: payload.data.instance.id,
+      action: "instance.setup_completed",
+    });
+    expect(testEnv.sqliteDb.prepare("SELECT user_id FROM admin_sessions").get()).toEqual({
+      user_id: payload.data.user.id,
+    });
+
+    const status = await app.request(`${ORIGIN}/api/v1/setup/status`, {}, testEnv.env);
+    const statusPayload = await status.json();
+    expect(statusPayload).toEqual({ success: true, data: { initialized: true } });
+    expectOnlySnakeCaseJsonKeys(statusPayload);
+  });
+
+  it("rejects legacy Setup fields and cross-Origin Site URLs before writing", async () => {
+    const app = identityApp();
+    const invalidTokenBody = setupBody();
+    invalidTokenBody.setup_token = "wrong-token";
+    const invalidToken = await postJson(app, "/api/v1/setup", invalidTokenBody, testEnv.env);
+    expect(invalidToken.status).toBe(401);
+
+    const legacy = await postJson(app, "/api/v1/setup", {
+      setupToken: SETUP_TOKEN,
+      instanceName: "Legacy",
+      accountSlug: "legacy",
+      siteUrl: ORIGIN,
+      owner: { name: "Owner", email: "owner@example.test", password: "strong-password-123" },
+    }, testEnv.env);
+    expect(legacy.status).toBe(400);
+    expectOnlySnakeCaseJsonKeys(await legacy.json());
+
+    const body = setupBody();
+    body.instance.site_url = "https://other.example.test";
+    const wrongOrigin = await postJson(app, "/api/v1/setup", body, testEnv.env);
+    expect(wrongOrigin.status).toBe(400);
+    const wrongOriginPayload = await wrongOrigin.json() as any;
+    expect(wrongOriginPayload.error.code).toBe("SETUP_SITE_URL_ORIGIN_MISMATCH");
+    expect(wrongOriginPayload.error.details).toEqual({
+      app_origin: ORIGIN,
+      site_origin: "https://other.example.test",
+    });
+    expectOnlySnakeCaseJsonKeys(wrongOriginPayload);
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 0 });
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM deployment_bootstrap").get()).toEqual({ count: 0 });
+  });
+
+  it("allows exactly one concurrent final Setup submission", async () => {
+    const app = identityApp();
+    const responses = await Promise.all([
+      postJson(app, "/api/v1/setup", setupBody("one"), testEnv.env),
+      postJson(app, "/api/v1/setup", setupBody("two"), testEnv.env),
+    ]);
     expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
     const rejected = responses.find((response) => response.status === 409)!;
     expect((await rejected.json() as any).error.code).toBe("SETUP_ALREADY_COMPLETED");
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM system_settings").get()).toEqual({ count: 1 });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM accounts").get()).toEqual({ count: 1 });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 1 });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM admin_sessions").get()).toEqual({ count: 1 });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 1 });
+    for (const table of ["users", "instances", "instance_memberships", "admin_sessions", "audit_logs", "deployment_bootstrap"]) {
+      expect(testEnv.sqliteDb.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 1 });
+    }
   });
 
-  it("atomically initializes once and uses revocable cookie-backed admin sessions", async () => {
+  it("preserves the original Setup batch failure when bootstrap did not complete", async () => {
     const app = identityApp();
-    const setup = await app.request(
-      "https://license.example.test/api/v1/setup",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          setupToken: "initial-setup-token-with-enough-entropy",
-          instanceName: "Example Studio",
-          siteUrl: "https://license.example.test/site/",
-          accountSlug: "example-studio",
-          owner: { name: "Owner", email: "OWNER@example.test", password: "strong-password-123" },
-        }),
-      },
-      testEnv.env
-    );
-    expect(setup.status).toBe(201);
-    expect(setup.headers.get("set-cookie")).toContain(ADMIN_SESSION_COOKIE);
-    expect(testEnv.sqliteDb.prepare("SELECT app_url, site_url FROM system_settings").get()).toEqual({
-      app_url: "https://license.example.test",
-      site_url: "https://license.example.test/site",
-    });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM accounts").get()).toEqual({ count: 1 });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 1 });
+    const originalBatch = testEnv.d1.batch;
+    testEnv.d1.batch = async () => {
+      throw new Error("ORIGINAL_SETUP_BATCH_FAILURE");
+    };
+    const failed = await postJson(app, "/api/v1/setup", setupBody(), testEnv.env);
+    testEnv.d1.batch = originalBatch;
 
-    const repeated = await app.request(
-      "https://license.example.test/api/v1/setup",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          setupToken: "initial-setup-token-with-enough-entropy",
-          instanceName: "Other",
-          siteUrl: "https://license.example.test",
-          accountSlug: "other",
-          owner: { name: "Other", email: "other@example.test", password: "strong-password-456" },
-        }),
-      },
-      testEnv.env
-    );
-    expect(repeated.status).toBe(409);
-    expect((await repeated.json() as any).error.code).toBe("SETUP_ALREADY_COMPLETED");
+    expect(failed.status).toBe(500);
+    const failedPayload = await failed.json() as any;
+    expect(failedPayload.error.message).toBe("ORIGINAL_SETUP_BATCH_FAILURE");
+    expectOnlySnakeCaseJsonKeys(failedPayload);
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM deployment_bootstrap").get()).toEqual({ count: 0 });
+  });
 
-    const login = await app.request(
-      "https://license.example.test/api/v1/admin/auth/login",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accountSlug: "example-studio",
-          email: "owner@example.test",
-          password: "strong-password-123",
-        }),
-      },
-      testEnv.env
+  it("treats partially initialized relationships as inconsistent", async () => {
+    const now = new Date().toISOString();
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
+       VALUES ('usr_partial', 'partial@example.test', 'unused', 'Partial', ?, ?)`,
+    ).run(now, now);
+    const app = identityApp();
+    const status = await app.request(`${ORIGIN}/api/v1/setup/status`, {}, testEnv.env);
+    expect(status.status).toBe(500);
+    expect((await status.json() as any).error.code).toBe("SETUP_STATE_INCONSISTENT");
+
+    const verify = await postJson(
+      app,
+      "/api/v1/setup/verify-token",
+      { setup_token: SETUP_TOKEN },
+      testEnv.env,
     );
+    expect(verify.status).toBe(500);
+    expect((await verify.json() as any).error.code).toBe("SETUP_STATE_INCONSISTENT");
+  });
+
+  it("logs in with only email/password and resolves the current Membership on every request", async () => {
+    const app = identityApp();
+    const body = setupBody();
+    expect((await postJson(app, "/api/v1/setup", body, testEnv.env)).status).toBe(201);
+
+    const legacyLogin = await postJson(app, "/api/v1/admin/auth/login", {
+      accountSlug: body.instance.slug,
+      email: body.user.email,
+      password: body.user.password,
+    }, testEnv.env);
+    expect(legacyLogin.status).toBe(400);
+
+    const login = await postJson(app, "/api/v1/admin/auth/login", {
+      email: body.user.email.toUpperCase(),
+      password: body.user.password,
+    }, testEnv.env);
     expect(login.status).toBe(200);
+    const loginPayload = await login.json() as any;
+    expectOnlySnakeCaseJsonKeys(loginPayload);
+    expect(loginPayload.data).toMatchObject({
+      user: { email: body.user.email },
+      instance: { slug: body.instance.slug },
+      membership: { role: "owner", status: "active" },
+    });
+    expect(login.headers.get("set-cookie")).not.toContain("licenkit-admin-account");
+
     const sessionToken = cookieValue(login, ADMIN_SESSION_COOKIE);
-    const accountId = cookieValue(login, ADMIN_ACCOUNT_COOKIE);
     const csrfToken = cookieValue(login, ADMIN_CSRF_COOKIE);
-    const cookie = `${ADMIN_SESSION_COOKIE}=${sessionToken}; ${ADMIN_ACCOUNT_COOKIE}=${accountId}; ${ADMIN_CSRF_COOKIE}=${csrfToken}`;
+    const cookie = `${ADMIN_SESSION_COOKIE}=${sessionToken}; ${ADMIN_CSRF_COOKIE}=${csrfToken}`;
+    testEnv.sqliteDb.prepare("UPDATE instances SET status = 'suspended'").run();
+    testEnv.sqliteDb.prepare("UPDATE instance_memberships SET role = 'viewer'").run();
+    testEnv.sqliteDb.prepare("UPDATE instances SET status = 'active'").run();
 
     const session = await app.request(
-      "https://license.example.test/api/v1/admin/auth/session",
+      `${ORIGIN}/api/v1/admin/auth/session`,
       { headers: { Cookie: cookie } },
-      testEnv.env
+      testEnv.env,
     );
     expect(session.status).toBe(200);
+    const sessionPayload = await session.json() as any;
+    expect(sessionPayload.data.membership).toEqual({ role: "viewer", status: "active" });
+    expectOnlySnakeCaseJsonKeys(sessionPayload);
 
     const missingCsrf = await app.request(
-      "https://license.example.test/api/v1/admin/auth/logout",
-      { method: "POST", headers: { Cookie: cookie, Origin: "https://license.example.test" } },
-      testEnv.env
+      `${ORIGIN}/api/v1/admin/auth/logout`,
+      { method: "POST", headers: { Cookie: cookie, Origin: ORIGIN } },
+      testEnv.env,
     );
     expect(missingCsrf.status).toBe(403);
 
     const logout = await app.request(
-      "https://license.example.test/api/v1/admin/auth/logout",
+      `${ORIGIN}/api/v1/admin/auth/logout`,
       {
         method: "POST",
-        headers: { Cookie: cookie, Origin: "https://license.example.test", "X-CSRF-Token": csrfToken },
+        headers: { Cookie: cookie, Origin: ORIGIN, "X-CSRF-Token": csrfToken },
       },
-      testEnv.env
+      testEnv.env,
     );
     expect(logout.status).toBe(200);
+    const logoutPayload = await logout.json() as any;
+    expect(logoutPayload.data).toEqual({ logged_out: true });
+    expectOnlySnakeCaseJsonKeys(logoutPayload);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT COUNT(*) AS count FROM audit_logs WHERE scope_type = 'identity' AND instance_id IS NULL",
+    ).get()).toEqual({ count: 2 });
+
     const revoked = await app.request(
-      "https://license.example.test/api/v1/admin/auth/session",
+      `${ORIGIN}/api/v1/admin/auth/session`,
       { headers: { Cookie: cookie } },
-      testEnv.env
+      testEnv.env,
     );
     expect(revoked.status).toBe(401);
   });
 
-  it("does not enumerate unknown emails and consumes a Magic Link only once", async () => {
+  it("rejects a User immediately after the current Membership is disabled", async () => {
     const app = identityApp();
-    const now = new Date().toISOString();
-    const accountId = "acc_identity";
-    const customerId = "cus_identity";
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at)
-       VALUES ('current', 'Identity', 'https://license.example.test', 'https://license.example.test/site', 'https://license.example.test/api/v1', ?, ?)`
-    ).run(now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, 'Identity', 'identity', 'active', ?, ?)`
-    ).run(accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
-       VALUES (?, ?, 'buyer@example.test', 'Buyer', 'active', ?, ?)`
-    ).run(customerId, accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
-       VALUES ('cus_other', ?, 'other@example.test', 'Other', 'active', ?, ?)`
-    ).run(accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO products (id, account_id, slug, name, status, created_at, updated_at)
-       VALUES ('prd_identity', ?, 'identity-app', 'Identity App', 'active', ?, ?)`
-    ).run(accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO license_plans (
-         id, account_id, product_id, name, license_model, credential_mode,
-         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
-         features_json, status, created_at, updated_at
-       ) VALUES ('lpl_identity', ?, 'prd_identity', 'Lifetime', 'perpetual', 'opaque',
-         0, 0, 1, '[]', 'active', ?, ?)`
-    ).run(accountId, now, now);
-    for (const [licenseId, ownerId, keyHash] of [
-      ["lic_identity", customerId, "hash_identity"],
-      ["lic_other", "cus_other", "hash_other"],
-    ]) {
-      testEnv.sqliteDb.prepare(
-        `INSERT INTO licenses (
-           id, account_id, customer_id, product_id, plan_id, plan_revision,
-           license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
-           payment_grace_seconds, max_activations, features_json, key_hash,
-           source, status, created_at, updated_at
-         ) VALUES (?, ?, ?, 'prd_identity', 'lpl_identity', 1, 'perpetual', 'none',
-           'opaque', 0, 0, 1, '[]', ?, 'manual', 'active', ?, ?)`
-      ).run(licenseId, accountId, ownerId, keyHash, now, now);
-    }
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO activations (
-         id, account_id, license_id, fingerprint_hash, machine_token_hash,
-         name, platform, status, activated_at, updated_at
-       ) VALUES ('act_identity', ?, 'lic_identity', 'fp_identity', 'mt_identity',
-         'Buyer Mac', 'macos', 'active', ?, ?)`
-    ).run(accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO activations (
-         id, account_id, license_id, fingerprint_hash, machine_token_hash,
-         name, platform, status, activated_at, updated_at
-       ) VALUES ('act_other', ?, 'lic_other', 'fp_other', 'mt_other',
-         'Other Mac', 'macos', 'active', ?, ?)`
-    ).run(accountId, now, now);
-    const unknown = await app.request(
-      "https://license.example.test/api/v1/customer/auth/magic-link",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accountSlug: "identity",
-          email: "unknown@example.test",
-          turnstileToken: "turnstile-unknown",
-        }),
-      },
-      testEnv.env
-    );
-    expect(unknown.status).toBe(200);
-    expect(await unknown.json()).toEqual({ success: true, data: { accepted: true } });
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM customer_login_challenges").get()).toEqual({ count: 0 });
+    const body = setupBody();
+    expect((await postJson(app, "/api/v1/setup", body, testEnv.env)).status).toBe(201);
+    const login = await postJson(app, "/api/v1/admin/auth/login", {
+      email: body.user.email,
+      password: body.user.password,
+    }, testEnv.env);
+    const cookie = `${ADMIN_SESSION_COOKIE}=${cookieValue(login, ADMIN_SESSION_COOKIE)}; ${ADMIN_CSRF_COOKIE}=${cookieValue(login, ADMIN_CSRF_COOKIE)}`;
+    testEnv.sqliteDb.prepare("UPDATE instances SET status = 'suspended'").run();
+    testEnv.sqliteDb.prepare("UPDATE instance_memberships SET status = 'disabled'").run();
+    testEnv.sqliteDb.prepare("UPDATE instances SET status = 'active'").run();
 
-    const known = await app.request(
-      "https://license.example.test/api/v1/customer/auth/magic-link",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accountSlug: "identity",
-          email: "buyer@example.test",
-          turnstileToken: "turnstile-known",
-        }),
-      },
-      testEnv.env
+    const session = await app.request(
+      `${ORIGIN}/api/v1/admin/auth/session`,
+      { headers: { Cookie: cookie } },
+      testEnv.env,
     );
-    expect(known.status).toBe(200);
-    expect(await known.json()).toEqual({ success: true, data: { accepted: true } });
-    const challenge = testEnv.sqliteDb.prepare(
-      "SELECT id, token_hash, delivery_id FROM customer_login_challenges WHERE account_id = ?"
-    ).get(accountId) as any;
-    expect(challenge.token_hash).toMatch(/^[0-9a-f]{64}$/);
-    const delivery = testEnv.sqliteDb.prepare(
-      "SELECT variables_ciphertext, status FROM email_deliveries WHERE account_id = ? AND id = ?"
-    ).get(accountId, challenge.delivery_id) as any;
-    expect(delivery.status).toBe("waiting_configuration");
-    const variables = JSON.parse(await decryptEnvelopeV1(delivery.variables_ciphertext, testEnv.env, {
-      accountId,
-      table: "email_deliveries",
-      rowId: challenge.delivery_id,
-      field: "variables_ciphertext",
-    }));
-    const accessUrl = new URL(variables.access_url);
-    expect(accessUrl.pathname).toBe("/site/customer/identity/auth");
-    const token = accessUrl.hash.slice("#token=".length);
-
-    const consume = await app.request(
-      "https://license.example.test/api/v1/customer/auth/magic-link/consume",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({ accountSlug: "identity", token: decodeURIComponent(token) }),
-      },
-      testEnv.env
-    );
-    expect(consume.status).toBe(200);
-    expect(consume.headers.get("set-cookie")).toContain(CUSTOMER_SESSION_COOKIE);
-    expect(consume.headers.get("set-cookie")).toContain(CUSTOMER_ACCOUNT_COOKIE);
-    expect(consume.headers.get("set-cookie")).toContain(CUSTOMER_CSRF_COOKIE);
-    expect(consume.headers.get("set-cookie")).not.toContain(ADMIN_SESSION_COOKIE);
-    const customerSession = cookieValue(consume, CUSTOMER_SESSION_COOKIE);
-    const customerAccount = cookieValue(consume, CUSTOMER_ACCOUNT_COOKIE);
-    const customerCsrf = cookieValue(consume, CUSTOMER_CSRF_COOKIE);
-    const customerCookie = `${CUSTOMER_SESSION_COOKIE}=${customerSession}; ${CUSTOMER_ACCOUNT_COOKIE}=${customerAccount}; ${CUSTOMER_CSRF_COOKIE}=${customerCsrf}`;
-
-    const licenses = await app.request(
-      "https://license.example.test/api/v1/customer/licenses",
-      { headers: { Cookie: customerCookie } },
-      testEnv.env
-    );
-    expect(licenses.status).toBe(200);
-    expect((await licenses.json() as any).data.items.map((item: any) => item.id)).toEqual(["lic_identity"]);
-
-    const crossAccount = await app.request(
-      "https://license.example.test/api/v1/customer/licenses",
-      {
-        headers: {
-          Cookie: `${CUSTOMER_SESSION_COOKIE}=${customerSession}; ${CUSTOMER_ACCOUNT_COOKIE}=acc_foreign; ${CUSTOMER_CSRF_COOKIE}=${customerCsrf}`,
-        },
-      },
-      testEnv.env
-    );
-    expect(crossAccount.status).toBe(401);
-
-    const crossCustomer = await app.request(
-      "https://license.example.test/api/v1/customer/licenses/lic_other/activations/act_other/deactivate",
-      {
-        method: "POST",
-        headers: {
-          Cookie: customerCookie,
-          Origin: "https://license.example.test",
-          "X-CSRF-Token": customerCsrf,
-        },
-      },
-      testEnv.env
-    );
-    expect(crossCustomer.status).toBe(404);
-    expect((testEnv.sqliteDb.prepare("SELECT status FROM activations WHERE id = 'act_other'").get() as any).status).toBe("active");
-
-    const missingOrigin = await app.request(
-      "https://license.example.test/api/v1/customer/licenses/lic_identity/activations/act_identity/deactivate",
-      {
-        method: "POST",
-        headers: { Cookie: customerCookie, "X-CSRF-Token": customerCsrf },
-      },
-      testEnv.env
-    );
-    expect(missingOrigin.status).toBe(403);
-
-    const missingCustomerCsrf = await app.request(
-      "https://license.example.test/api/v1/customer/licenses/lic_identity/activations/act_identity/deactivate",
-      { method: "POST", headers: { Cookie: customerCookie, Origin: "https://license.example.test" } },
-      testEnv.env
-    );
-    expect(missingCustomerCsrf.status).toBe(403);
-
-    const mismatchedCsrf = await app.request(
-      "https://license.example.test/api/v1/customer/licenses/lic_identity/activations/act_identity/deactivate",
-      {
-        method: "POST",
-        headers: {
-          Cookie: customerCookie,
-          Origin: "https://license.example.test",
-          "X-CSRF-Token": "ccf_not-the-cookie-token",
-        },
-      },
-      testEnv.env
-    );
-    expect(mismatchedCsrf.status).toBe(403);
-
-    const forgedCsrf = "ccf_forged-but-header-and-cookie-match";
-    const forgedCsrfCookie = `${CUSTOMER_SESSION_COOKIE}=${customerSession}; ${CUSTOMER_ACCOUNT_COOKIE}=${customerAccount}; ${CUSTOMER_CSRF_COOKIE}=${forgedCsrf}`;
-    const csrfNotBoundToSession = await app.request(
-      "https://license.example.test/api/v1/customer/licenses/lic_identity/activations/act_identity/deactivate",
-      {
-        method: "POST",
-        headers: {
-          Cookie: forgedCsrfCookie,
-          Origin: "https://license.example.test",
-          "X-CSRF-Token": forgedCsrf,
-        },
-      },
-      testEnv.env
-    );
-    expect(csrfNotBoundToSession.status).toBe(403);
-
-    testEnv.sqliteDb.prepare(
-      "UPDATE customer_sessions SET created_at = '2000-01-01T00:00:00.000Z' WHERE account_id = ?"
-    ).run(accountId);
-    const staleRecentAuth = await app.request(
-      "https://license.example.test/api/v1/customer/licenses/lic_identity/activations/act_identity/deactivate",
-      {
-        method: "POST",
-        headers: {
-          Cookie: customerCookie,
-          Origin: "https://license.example.test",
-          "X-CSRF-Token": customerCsrf,
-        },
-      },
-      testEnv.env
-    );
-    expect(staleRecentAuth.status).toBe(401);
-    expect((await staleRecentAuth.json() as any).error.code).toBe("CUSTOMER_RECENT_AUTH_REQUIRED");
-    expect((testEnv.sqliteDb.prepare("SELECT status FROM activations WHERE id = 'act_identity'").get() as any).status).toBe("active");
-    testEnv.sqliteDb.prepare(
-      "UPDATE customer_sessions SET created_at = ? WHERE account_id = ?"
-    ).run(now, accountId);
-
-    const deactivate = await app.request(
-      "https://license.example.test/api/v1/customer/licenses/lic_identity/activations/act_identity/deactivate",
-      {
-        method: "POST",
-        headers: {
-          Cookie: customerCookie,
-          Origin: "https://license.example.test",
-          "X-CSRF-Token": customerCsrf,
-        },
-      },
-      testEnv.env
-    );
-    expect(deactivate.status).toBe(200);
-    expect((testEnv.sqliteDb.prepare("SELECT status FROM activations WHERE id = 'act_identity'").get() as any).status).toBe("deactivated");
-
-    const repeated = await app.request(
-      "https://license.example.test/api/v1/customer/auth/magic-link/consume",
-      {
-        method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({ accountSlug: "identity", token: decodeURIComponent(token) }),
-      },
-      testEnv.env
-    );
-    expect(repeated.status).toBe(400);
-    expect((await repeated.json() as any).error.code).toBe("CUSTOMER_MAGIC_LINK_INVALID");
-    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM customer_sessions").get()).toEqual({ count: 1 });
+    expect(session.status).toBe(401);
   });
 });

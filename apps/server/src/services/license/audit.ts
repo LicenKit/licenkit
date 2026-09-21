@@ -7,7 +7,7 @@ export type LicenseActor =
 
 export function prepareLicenseAudit(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   actor: LicenseActor;
   action: string;
   resourceType: string;
@@ -23,13 +23,13 @@ export function prepareLicenseAudit(input: {
   const actorCustomerId = input.actor.type === "customer" ? input.actor.id : null;
   return input.db.prepare(
     `INSERT INTO audit_logs (
-       id, account_id, actor_type, actor_user_id, actor_customer_id,
+       id, scope_type, instance_id, actor_type, actor_user_id, actor_customer_id,
        action, resource_type, resource_id, request_id, details_redacted_json,
        ip, user_agent, created_at
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`
+     ) VALUES (?1, 'instance', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`
   ).bind(
     id,
-    input.accountId,
+    input.instanceId,
     input.actor.type,
     actorUserId,
     actorCustomerId,

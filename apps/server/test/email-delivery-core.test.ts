@@ -7,7 +7,7 @@ import { runDeliveryScheduler } from "../src/services/delivery/scheduler";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const NOW = new Date("2026-09-20T10:00:00.000Z");
-const ACCOUNT_ID = "acc_email_core";
+const INSTANCE_ID = "acc_email_core";
 const CUSTOMER_ID = "cus_email_core";
 const INTEGRATION_ID = "emi_email_core";
 const BINDING_ID = "etb_email_core";
@@ -37,43 +37,39 @@ describe("email-only Delivery core", () => {
     testEnv = createTestEnv({ STORAGE_ENCRYPTION_KEY_ID: "test-primary" });
     const nowIso = NOW.toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, site_url, initialized_at, updated_at)
-       VALUES ('current', 'LicenKit', 'https://app.example.test', 'https://site.example.test', ?, ?)`,
-    ).run(nowIso, nowIso);
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?, 'Core Instance', 'core-instance', 'https://site.example.test', 'active', ?, ?)`,
+    ).run(INSTANCE_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, 'Core Account', 'core-account', 'active', ?, ?)`,
-    ).run(ACCOUNT_ID, nowIso, nowIso);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
+      `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
        VALUES (?, ?, 'buyer@example.test', 'Buyer', 'active', ?, ?)`,
-    ).run(CUSTOMER_ID, ACCOUNT_ID, nowIso, nowIso);
+    ).run(CUSTOMER_ID, INSTANCE_ID, nowIso, nowIso);
     const credentialCiphertext = await encryptEnvelopeV1(
       JSON.stringify({ version: 1, apiKey: "re_email_core_secret" }),
       testEnv.env,
-      { accountId: ACCOUNT_ID, table: "email_integrations", rowId: INTEGRATION_ID, field: "credential_ciphertext" },
+      { instanceId: INSTANCE_ID, table: "email_integrations", rowId: INTEGRATION_ID, field: "credential_ciphertext" },
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_integrations (
-         id, account_id, provider, name, credential_ciphertext,
+         id, instance_id, provider, name, credential_ciphertext,
          default_from_email, default_from_name, reply_to_email,
          max_automatic_attempts, status, created_at, updated_at
        ) VALUES (?, ?, 'resend', 'Primary', ?, 'licenses@example.test',
          'Core Licenses', 'support@example.test', 4, 'active', ?, ?)`,
-    ).run(INTEGRATION_ID, ACCOUNT_ID, credentialCiphertext, nowIso, nowIso);
+    ).run(INTEGRATION_ID, INSTANCE_ID, credentialCiphertext, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_template_bindings (
-         id, account_id, email_integration_id, notification_type,
+         id, instance_id, email_integration_id, notification_type,
          contract_version, provider_template_ref, status, created_at, updated_at
        ) VALUES (?, ?, ?, ?, 1, 'license-issued-v1', 'active', ?, ?)`,
-    ).run(BINDING_ID, ACCOUNT_ID, INTEGRATION_ID, NOTIFICATION_TYPE, nowIso, nowIso);
+    ).run(BINDING_ID, INSTANCE_ID, INTEGRATION_ID, NOTIFICATION_TYPE, nowIso, nowIso);
   });
 
   async function prepareBusinessDelivery(sendExpiresAt?: string) {
     const prepared = await prepareEmailNotificationDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       customerId: CUSTOMER_ID,
       notificationType: NOTIFICATION_TYPE,
       contractVersion: 1,
@@ -93,7 +89,7 @@ describe("email-only Delivery core", () => {
     const result = await testEmailConfiguration({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       emailIntegrationId: INTEGRATION_ID,
       notificationType: NOTIFICATION_TYPE,
       contractVersion: 1,
@@ -110,23 +106,24 @@ describe("email-only Delivery core", () => {
     expect(JSON.parse(String(request.body))).toMatchObject({
       from: "Core Licenses <licenses@example.test>",
       to: "operator@example.test",
-      template: { id: "license-issued-v1", variables: { account_name: "Core Account" } },
+      template: { id: "license-issued-v1", variables: { instance_name: "Core Instance" } },
     });
   });
 
   it("stores only encrypted event variables and uses the latest configuration when sending", async () => {
     const prepared = await prepareBusinessDelivery();
     const stored = testEnv.sqliteDb.prepare(
-      "SELECT customer_id, variables_ciphertext FROM email_deliveries WHERE id = ?",
+      "SELECT recipient_type, customer_id, variables_ciphertext FROM email_deliveries WHERE id = ?",
     ).get(prepared.deliveryId) as any;
+    expect(stored.recipient_type).toBe("customer");
     expect(stored.customer_id).toBe(CUSTOMER_ID);
     const variables = JSON.parse(await decryptEnvelopeV1(stored.variables_ciphertext, testEnv.env, {
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       table: "email_deliveries",
       rowId: prepared.deliveryId,
       field: "variables_ciphertext",
     }));
-    expect(variables).toMatchObject({ account_name: "Core Account", license_key: BUSINESS_VARIABLES.license_key });
+    expect(variables).toMatchObject({ instance_name: "Core Instance", license_key: BUSINESS_VARIABLES.license_key });
     expect(variables).not.toHaveProperty("recipient_email");
     expect(variables).not.toHaveProperty("provider");
     expect(variables).not.toHaveProperty("provider_template_ref");
@@ -146,7 +143,7 @@ describe("email-only Delivery core", () => {
     await expect(dispatchDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       fetchImpl,
       now: NOW,
@@ -171,17 +168,17 @@ describe("email-only Delivery core", () => {
   it("does not call Provider or consume an attempt when stored variables no longer satisfy the code contract", async () => {
     const prepared = await prepareBusinessDelivery();
     const invalidCiphertext = await encryptEnvelopeV1(JSON.stringify({
-      account_name: "Core Account",
+      instance_name: "Core Instance",
       product_id: BUSINESS_VARIABLES.product_id,
     }), testEnv.env, {
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       table: "email_deliveries",
       rowId: prepared.deliveryId,
       field: "variables_ciphertext",
     });
     testEnv.sqliteDb.prepare("UPDATE email_deliveries SET variables_ciphertext = ? WHERE id = ?").run(invalidCiphertext, prepared.deliveryId);
     const fetchImpl = vi.fn() as unknown as typeof fetch;
-    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, accountId: ACCOUNT_ID, deliveryId: prepared.deliveryId, fetchImpl, now: NOW }))
+    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, instanceId: INSTANCE_ID, deliveryId: prepared.deliveryId, fetchImpl, now: NOW }))
       .resolves.toMatchObject({ status: "waiting_configuration", errorCode: "EMAIL_CONTRACT_VARIABLE_REQUIRED" });
     expect(fetchImpl).not.toHaveBeenCalled();
     const row = testEnv.sqliteDb.prepare("SELECT status, attempt_count, last_error_json FROM email_deliveries WHERE id = ?").get(prepared.deliveryId) as any;
@@ -201,12 +198,12 @@ describe("email-only Delivery core", () => {
       calls.push({ headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
       return responses.shift()!;
     }) as unknown as typeof fetch;
-    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, accountId: ACCOUNT_ID, deliveryId: prepared.deliveryId, fetchImpl, now: NOW }))
+    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, instanceId: INSTANCE_ID, deliveryId: prepared.deliveryId, fetchImpl, now: NOW }))
       .resolves.toMatchObject({ status: "retry_scheduled", attemptNumber: 1 });
     testEnv.sqliteDb.prepare("UPDATE email_integrations SET default_from_name = 'Retry Sender' WHERE id = ?").run(INTEGRATION_ID);
     testEnv.sqliteDb.prepare("UPDATE email_template_bindings SET provider_template_ref = 'retry-template-v2' WHERE id = ?").run(BINDING_ID);
     const retryNow = new Date("2026-09-20T10:01:00.000Z");
-    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, accountId: ACCOUNT_ID, deliveryId: prepared.deliveryId, fetchImpl, now: retryNow }))
+    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, instanceId: INSTANCE_ID, deliveryId: prepared.deliveryId, fetchImpl, now: retryNow }))
       .resolves.toMatchObject({ status: "accepted", attemptNumber: 2 });
     expect(calls[1].body).toMatchObject({ from: "Retry Sender <licenses@example.test>", template: { id: "retry-template-v2" } });
     expect(calls[1].headers.get("idempotency-key")).not.toBe(calls[0].headers.get("idempotency-key"));
@@ -215,7 +212,7 @@ describe("email-only Delivery core", () => {
   it("does not automatically retry an unknown Provider result", async () => {
     const prepared = await prepareBusinessDelivery();
     const fetchImpl = vi.fn(async () => { throw new TypeError("network reset"); }) as unknown as typeof fetch;
-    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, accountId: ACCOUNT_ID, deliveryId: prepared.deliveryId, fetchImpl, now: NOW }))
+    await expect(dispatchDelivery({ db: testEnv.d1, env: testEnv.env, instanceId: INSTANCE_ID, deliveryId: prepared.deliveryId, fetchImpl, now: NOW }))
       .resolves.toMatchObject({ status: "failed", attemptNumber: 1, outcomeUnknown: true });
     const row = testEnv.sqliteDb.prepare("SELECT status, next_attempt_at, last_error_json FROM email_deliveries WHERE id = ?").get(prepared.deliveryId) as any;
     expect(row.status).toBe("failed");
@@ -231,7 +228,7 @@ describe("email-only Delivery core", () => {
     await expect(dispatchDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       fetchImpl,
       now: new Date("2026-09-22T10:00:00.000Z"),
@@ -251,7 +248,7 @@ describe("email-only Delivery core", () => {
     await dispatchDelivery({
       db: testEnv.d1,
       env: { ...testEnv.env, SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS: 60 },
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       fetchImpl,
       now: NOW,
@@ -286,7 +283,7 @@ describe("email-only Delivery core", () => {
     await expect(dispatchDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       now: new Date("2026-09-20T10:01:30.000Z"),
       fetchImpl: vi.fn() as unknown as typeof fetch,
@@ -302,7 +299,7 @@ describe("email-only Delivery core", () => {
     await expect(dispatchDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       now: new Date("2026-09-20T10:02:00.000Z"),
       fetchImpl: vi.fn() as unknown as typeof fetch,
@@ -322,7 +319,7 @@ describe("email-only Delivery core", () => {
     await expect(dispatchDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       fetchImpl,
       now: NOW,
@@ -330,7 +327,7 @@ describe("email-only Delivery core", () => {
     await expect(dispatchDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       fetchImpl,
       now: new Date("2026-09-20T11:00:00.000Z"),
@@ -356,7 +353,7 @@ describe("email-only Delivery core", () => {
     await expect(dispatchDelivery({
       db: testEnv.d1,
       env: { ...testEnv.env, SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS: "invalid" },
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       fetchImpl,
       now: NOW,

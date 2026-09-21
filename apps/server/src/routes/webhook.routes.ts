@@ -34,24 +34,24 @@ function inboundPayloadTtlSeconds(value: string | undefined): number {
  * the same processor used by the Scheduled Worker; the HTTP response never
  * waits for fulfillment to finish.
  */
-webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
-  const accountSlug = c.req.param("accountSlug");
+webhookRouter.post("/payments/:instanceSlug/:billingProviderId", async (c) => {
+  const instanceSlug = c.req.param("instanceSlug");
   const billingProviderId = c.req.param("billingProviderId");
   const route = await c.env.DB.prepare(
-    `SELECT provider.id, provider.account_id, provider.provider, provider.environment,
+    `SELECT provider.id, provider.instance_id, provider.provider, provider.environment,
             provider.client_side_token, provider.webhook_secret_ciphertext,
             provider.api_secret_ciphertext, provider.status,
             provider.created_at, provider.updated_at
      FROM billing_providers AS provider
-     JOIN accounts AS account ON account.id = provider.account_id
-     WHERE account.slug = ?1
-       AND account.status = 'active'
-       AND provider.account_id = account.id
+     JOIN instances AS instance ON instance.id = provider.instance_id
+     WHERE instance.slug = ?1
+       AND instance.status = 'active'
+       AND provider.instance_id = instance.id
        AND provider.id = ?2
        AND provider.provider = 'paddle'
        AND provider.status = 'active'
      LIMIT 1`,
-  ).bind(accountSlug, billingProviderId).first<BillingProviderRecord>();
+  ).bind(instanceSlug, billingProviderId).first<BillingProviderRecord>();
   if (!route) throw new NotFoundError("Paddle webhook destination was not found.");
 
   const rawBody = await c.req.text();
@@ -61,7 +61,7 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_SIGNATURE_OR_BODY_MISSING",
       "Paddle-Signature and a raw request body are required.",
       400,
-      { provider: "paddle", billingProviderId },
+      { provider: "paddle", billing_provider_id: billingProviderId },
     );
   }
 
@@ -71,7 +71,7 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_SIGNATURE_INVALID",
       "Paddle webhook signature verification failed.",
       401,
-      { provider: "paddle", billingProviderId },
+      { provider: "paddle", billing_provider_id: billingProviderId },
     );
   }
 
@@ -89,7 +89,7 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_IDENTIFIER_TOO_LONG",
       "Paddle event ID or event type exceeds the accepted length.",
       400,
-      { provider: "paddle", externalEventIdLength: event.event_id.length, eventTypeLength: event.event_type.length },
+      { provider: "paddle", external_event_id_length: event.event_id.length, event_type_length: event.event_type.length },
     );
   }
 
@@ -103,14 +103,14 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
   const payloadCiphertext = await encryptInboundPayload(
     rawBody,
     c.env,
-    route.account_id,
+    route.instance_id,
     inboundEventId,
   );
   const payloadHash = await hashPaddlePayload(rawBody);
 
   await c.env.DB.prepare(
     `INSERT INTO inbound_events (
-       id, account_id, billing_provider_id, external_event_id, external_event_type,
+       id, instance_id, billing_provider_id, external_event_id, external_event_type,
        external_customer_id, external_transaction_id, external_subscription_id,
        external_adjustment_id, external_occurred_at, payload_ciphertext,
        payload_hash, payload_expires_at, status, attempt_count, next_attempt_at,
@@ -119,10 +119,10 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
        'pending', 0, ?14, ?14, ?14
      )
-     ON CONFLICT(billing_provider_id, external_event_id) DO NOTHING`,
+     ON CONFLICT(instance_id, billing_provider_id, external_event_id) DO NOTHING`,
   ).bind(
     inboundEventId,
-    route.account_id,
+    route.instance_id,
     route.id,
     event.event_id,
     event.event_type,
@@ -140,9 +140,9 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
   const persisted = await c.env.DB.prepare(
     `SELECT id, status, payload_ciphertext, payload_hash, payload_expires_at, received_at
      FROM inbound_events
-     WHERE account_id = ?1 AND billing_provider_id = ?2 AND external_event_id = ?3
+     WHERE instance_id = ?1 AND billing_provider_id = ?2 AND external_event_id = ?3
      LIMIT 1`,
-  ).bind(route.account_id, route.id, event.event_id).first<{
+  ).bind(route.instance_id, route.id, event.event_id).first<{
     id: string;
     status: string;
     payload_ciphertext: string | null;
@@ -155,7 +155,7 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_PERSISTENCE_FAILED",
       "Paddle event was verified but could not be persisted.",
       500,
-      { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
+      { provider: "paddle", external_event_id: event.event_id, billing_provider_id: route.id },
     );
   }
   const duplicate = persisted.id !== inboundEventId;
@@ -164,7 +164,7 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_EVENT_ID_CONFLICT",
       "Paddle event ID was already persisted with a different payload.",
       409,
-      { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
+      { provider: "paddle", external_event_id: event.event_id, billing_provider_id: route.id },
     );
   }
 
@@ -177,21 +177,21 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
     const refreshedCiphertext = await encryptInboundPayload(
       rawBody,
       c.env,
-      route.account_id,
+      route.instance_id,
       persisted.id,
     );
     const refresh = await c.env.DB.prepare(
       `UPDATE inbound_events
        SET payload_ciphertext = ?1, payload_expires_at = ?2,
            payload_cleared_at = NULL, updated_at = ?3
-       WHERE account_id = ?4 AND id = ?5 AND payload_hash = ?6
+       WHERE instance_id = ?4 AND id = ?5 AND payload_hash = ?6
          AND status IN ('pending', 'failed', 'needs_attention')
          AND (payload_ciphertext IS NULL OR payload_expires_at <= ?3)`,
     ).bind(
       refreshedCiphertext,
       payloadExpiresAt,
       nowIso,
-      route.account_id,
+      route.instance_id,
       persisted.id,
       payloadHash,
     ).run();
@@ -207,15 +207,15 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
         "BILLING_WEBHOOK_EXECUTION_CONTEXT_MISSING",
         "Paddle event was persisted, but its immediate background processor could not be registered.",
         500,
-        { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
-        { contextError: error instanceof Error ? error.message : String(error) },
+        { provider: "paddle", external_event_id: event.event_id, billing_provider_id: route.id },
+        { context_error: error instanceof Error ? error.message : String(error) },
       );
     }
   }
   if (executionContext) {
     executionContext.waitUntil(processBillingInboundEvent({
       env: c.env,
-      accountId: route.account_id,
+      instanceId: route.instance_id,
       eventId: persisted.id,
       workerId: `billing_http_${ulid().toLowerCase()}`,
     }).then(() => undefined));
@@ -224,7 +224,7 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_EXECUTION_CONTEXT_MISSING",
       "Paddle event was persisted, but its immediate background processor could not be registered.",
       500,
-      { provider: "paddle", externalEventId: event.event_id, billingProviderId: route.id },
+      { provider: "paddle", external_event_id: event.event_id, billing_provider_id: route.id },
     );
   }
 
@@ -232,11 +232,11 @@ webhookRouter.post("/payments/:accountSlug/:billingProviderId", async (c) => {
     success: true,
     data: {
       received: true,
-      eventId: persisted.id,
-      externalEventId: event.event_id,
+      event_id: persisted.id,
+      external_event_id: event.event_id,
       status: persisted.status,
       duplicate,
-      payloadRefreshed,
+      payload_refreshed: payloadRefreshed,
     },
   }, 200);
 });

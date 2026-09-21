@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import { useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { AlertCircle, CheckCircle2, Info, Loader2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { ApiError, formatApiError } from "../lib/api-client";
@@ -8,6 +8,7 @@ export function Button({ className, variant = "primary", loading, children, disa
     <button
       className={clsx("button", `button-${variant}`, className)}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       {...props}
     >
       {loading ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : null}
@@ -72,14 +73,63 @@ export function StatusBadge({ status, label }: { status?: string | null; label?:
 }
 
 export function Modal({ open, title, description, children, onClose, wide = false }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = dialog?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    );
+    (focusable?.[0] ?? dialog)?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const items = [...dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      )];
+      if (items.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose() }}>
-      <section className={clsx("modal", wide && "modal-wide")} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <section ref={dialogRef} tabIndex={-1} className={clsx("modal", wide && "modal-wide")} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}>
         <header className="modal-header">
           <div>
-            <h2 id="modal-title">{title}</h2>
-            {description ? <p>{description}</p> : null}
+            <h2 id={titleId}>{title}</h2>
+            {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">
             <X className="size-5" />
@@ -117,11 +167,11 @@ export function ErrorPanel({ error, title = "请求失败" }: { error: unknown; 
 
 export function Notice({ children, tone = "info" }: { children: ReactNode; tone?: "info" | "success" | "warning" }) {
   const Icon = tone === "success" ? CheckCircle2 : tone === "warning" ? AlertCircle : Info;
-  return <div className={clsx("notice", `notice-${tone}`)}><Icon className="size-5 shrink-0" /><div>{children}</div></div>;
+  return <div className={clsx("notice", `notice-${tone}`)} role={tone === "success" ? "status" : undefined} aria-live={tone === "success" ? "polite" : undefined}><Icon className="size-5 shrink-0" /><div>{children}</div></div>;
 }
 
 export function LoadingState({ label = "正在加载" }: { label?: string }) {
-  return <div className="state-panel"><Loader2 className="size-5 animate-spin" /><span>{label}</span></div>;
+  return <div className="state-panel" role="status" aria-live="polite"><Loader2 aria-hidden="true" className="size-5 animate-spin" /><span>{label}</span></div>;
 }
 
 export function EmptyState({ title, description, action }: { title: string; description: string; action?: ReactNode }) {

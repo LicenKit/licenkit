@@ -15,7 +15,7 @@ SDK 不决定商业权益，不自行延长 License，也不把网络失败转�
 ```swift
 public struct LicenKitConfiguration: Sendable {
     public let serverURL: URL
-    public let accountID: String
+    public let instanceID: String
     public let productID: String
     public let releaseVersion: String
     public let releasePlatform: String
@@ -73,7 +73,7 @@ SDK 自动在激活和在线校验请求中携带配置中的版本标识与平�
 
 1. 要求 `activation_id`、`machine_token`、`signed_license_token` 和 `signing_key_id`；
 2. 使用内置受信公钥立即验证 Token；
-3. 验证账户、产品、License、Activation、设备指纹、签发时间和到期时间；
+3. 验证 Instance、产品、License、Activation、设备指纹、签发时间和到期时间；
 4. 验证 Token 中的 Release 版本和平台与当前构建完全一致，并使用签名保护的 `released_at` 判定更新权益；
 5. 只有验证成功后才保存凭据并返回成功。
 
@@ -88,7 +88,7 @@ let status = try await LicenKit.shared.startTrial()
 let refreshed = try await LicenKit.shared.validateTrial()
 ```
 
-`startTrial()` 自动提交配置中的 Account、Product、Release 版本与平台，以及当前设备指纹。首次成功后把 `trialID` 和只返回一次的 `trialToken` 写入 Keychain。`TRIAL_ALREADY_CLAIMED` 不能自动改为重新领取，也不能仅凭本地指纹恢复丢失的 Token。
+`startTrial()` 自动提交配置中的 Instance、Product、Release 版本与平台，以及当前设备指纹。首次成功后把 `trialID` 和只返回一次的 `trialToken` 写入 Keychain。`TRIAL_ALREADY_CLAIMED` 不能自动改为重新领取，也不能仅凭本地指纹恢复丢失的 Token。
 
 `validateTrial()` 每次都向服务端提交 Trial ID、Token、同一设备指纹和当前 Release。V1 不为试用签发 Signed License Token，因此试用没有 `.validLocally`：无网络时返回传输错误或 `.onlineValidationRequired`，不能把缓存的未到期时间当作服务端确认有效。
 
@@ -108,7 +108,7 @@ SDK 可以在无网络时验证：
 
 - Ed25519 签名；
 - key ID 是否受信；
-- Token 账户和产品；
+- Token Instance 和产品；
 - Activation 与设备指纹；
 - Token 有效期；
 - License 到期时间；
@@ -136,7 +136,7 @@ public func validate() async throws -> LicenseStatus
 
 请求携带：
 
-- account ID；
+- instance ID；
 - product ID；
 - activation ID；
 - machine token；
@@ -206,6 +206,8 @@ case credentialStorageError(operation: String, status: OSStatus)
 
 不得把所有非 2xx 响应都归一化为 `invalidLicense`，也不得在需要脱敏时丢弃 request ID、错误码和状态链路。服务端返回 `LICENSE_CHECKOUT_VERIFICATION_ONLY` 时，SDK 必须作为独立 API 错误透传；它表示收到的是管理员闭环测试注册码，不是已过期、已吊销或格式错误的客户 License。
 
+Signed License Token 的 Instance 不匹配返回 `TOKEN_INSTANCE_MISMATCH`；旧 `acc` Claim 属于不合法合同，不能转换成 Instance 或作为兼容别名继续接受。
+
 ## 11. Token Claims
 
 Signed License Token 不嵌入注册码。建议 Claims：
@@ -214,7 +216,7 @@ Signed License Token 不嵌入注册码。建议 Claims：
 {
   "lic": "lic_01...",
   "act": "act_01...",
-  "acc": "acc_01...",
+  "ins": "ins_01...",
   "prd": "prd_01...",
   "rel": "rel_01...",
   "ver": "2.4.0",
@@ -235,6 +237,7 @@ Signed License Token 不嵌入注册码。建议 Claims：
 - `rel`、`ver`、`plt`、`rat`：服务端受信 Product Release 的 ID、版本、平台和发布时间；SDK 要求版本与平台匹配当前构建，并比较 `rat <= upd`；
 - `lexp` 非空时，`exp` 不得晚于 `lexp`；
 - `act` 将 Token 绑定到具体 Activation；
+- `ins` 将 Token 绑定到 SDK 配置中的 Instance；旧 `acc` Claim 不接受；
 - `kid` 放在 Token Header，由 SDK 选择公钥。
 
 Token 使用紧凑 JWS，Header 必须同时满足 `alg=EdDSA`、专用 `typ=licenkit-license+jwt` 和已知 `kid`。SDK 不从 Token 自己声明的算法选择验证器，不接受 `none`、其他算法、未知关键 Header 或重复 Claim；Payload 解析和签名验证成功后才解释授权字段。
@@ -255,4 +258,5 @@ SDK 对齐完成需要同时证明：
 - 服务端原始错误码和 request ID 能到达宿主 App；
 - 管理员 Checkout Verification 注册码被服务端以 `LICENSE_CHECKOUT_VERIFICATION_ONLY` 拒绝，SDK 不把它缓存成有效凭证；
 - Swift 单元测试覆盖两种模式、密钥轮换和错误分支。
+- `instanceID` 与 Signed License Token 的 `ins` Claim 完全匹配；旧 `accountID`/`acc` 不作为别名接受。
 - 无需支付方式的 Product/设备试用只能领取一次，Trial Token 只进 Keychain；在线校验覆盖成功、重复领取、错误 Token、设备不匹配、到期、吊销和未知 Release，断网时不宣称试用有效；Paddle 免费订阅试用使用普通 License 激活与校验，不创建 Trial Token。

@@ -1,23 +1,28 @@
 import type { MiddlewareHandler } from "hono";
 import { matchedRoutes } from "hono/route";
-import type { AppContext, UserRole } from "../types";
+import type { AppContext, InstanceRole } from "../types";
 import { AppError, ForbiddenError, UnauthorizedError } from "./error";
 import { sha256Hex, timingSafeEqual } from "../infra/crypto";
 import { readAdminCookies, readCustomerCookies } from "../services/identity/session";
+import { readDeploymentSetupState } from "../services/identity/deployment-provisioning";
 
 interface AdminSessionRow {
   session_id: string;
   csrf_token_hash: string;
-  account_id: string;
   user_id: string;
   email: string;
-  role: UserRole;
+  name: string;
+  instance_id: string;
+  instance_name: string;
+  instance_slug: string;
+  instance_site_url: string;
+  role: InstanceRole;
 }
 
 interface CustomerSessionRow {
   session_id: string;
   csrf_token_hash: string;
-  account_id: string;
+  instance_id: string;
   customer_id: string;
   email: string;
   authenticated_at: string;
@@ -35,17 +40,16 @@ function setContext(c: any, values: Record<string, unknown>): void {
 export const requireExactOrigin: MiddlewareHandler<AppContext> = async (c, next) => {
   const requestOrigin = c.req.header("origin");
   if (!requestOrigin) throw new ForbiddenError("Origin header is required for this request");
-  const configured = await one<{ app_url: string }>(
-    c.env.DB.prepare(`SELECT app_url FROM system_settings WHERE id = 'current'`)
-  );
-  const expectedOrigin = configured ? new URL(configured.app_url).origin : new URL(c.req.url).origin;
-  let normalizedRequestOrigin: string;
+  const expectedOrigin = new URL(c.req.url).origin;
   try {
-    normalizedRequestOrigin = new URL(requestOrigin).origin;
+    const parsedOrigin = new URL(requestOrigin);
+    if (parsedOrigin.origin !== requestOrigin) {
+      throw new Error("Origin header is not an exact serialized Origin");
+    }
   } catch {
     throw new ForbiddenError("Origin header is invalid");
   }
-  if (!timingSafeEqual(normalizedRequestOrigin, expectedOrigin)) {
+  if (!timingSafeEqual(requestOrigin, expectedOrigin)) {
     throw new ForbiddenError("Cross-origin state change is not allowed");
   }
   await next();
@@ -53,7 +57,7 @@ export const requireExactOrigin: MiddlewareHandler<AppContext> = async (c, next)
 
 export const adminSessionAuth: MiddlewareHandler<AppContext> = async (c, next) => {
   const cookies = readAdminCookies(c);
-  if (!cookies.accountId || !cookies.sessionToken) {
+  if (!cookies.sessionToken) {
     throw new UnauthorizedError("Administrator session cookie is missing");
   }
   const tokenHash = await sha256Hex(cookies.sessionToken);
@@ -61,24 +65,36 @@ export const adminSessionAuth: MiddlewareHandler<AppContext> = async (c, next) =
   const row = await one<AdminSessionRow>(
     c.env.DB
       .prepare(
-        `SELECT s.id AS session_id, s.csrf_token_hash, s.account_id,
-                u.id AS user_id, u.email, u.role
+        `WITH active_instance AS (
+           SELECT id, name, slug, site_url
+           FROM instances
+           WHERE status = 'active'
+         )
+         SELECT s.id AS session_id, s.csrf_token_hash,
+                u.id AS user_id, u.email, u.name,
+                instance.id AS instance_id, instance.name AS instance_name,
+                instance.slug AS instance_slug, instance.site_url AS instance_site_url,
+                membership.role
          FROM admin_sessions AS s
-         JOIN users AS u ON u.account_id = s.account_id AND u.id = s.user_id
-         JOIN accounts AS a ON a.id = s.account_id
-         WHERE s.account_id = ?1 AND s.session_token_hash = ?2
-           AND s.revoked_at IS NULL AND s.expires_at > ?3
-           AND u.status = 'active' AND a.status = 'active'
+         JOIN users AS u ON u.id = s.user_id
+         JOIN active_instance AS instance ON 1 = 1
+         JOIN instance_memberships AS membership
+           ON membership.instance_id = instance.id
+          AND membership.user_id = u.id
+          AND membership.status = 'active'
+         WHERE s.session_token_hash = ?1
+           AND s.revoked_at IS NULL AND s.expires_at > ?2
+           AND (SELECT COUNT(*) FROM active_instance) = 1
          LIMIT 1`
       )
-      .bind(cookies.accountId, tokenHash, now)
+      .bind(tokenHash, now)
   );
   if (!row) throw new UnauthorizedError("Administrator session is invalid or expired");
 
   setContext(c, {
-    accountId: row.account_id,
+    instanceId: row.instance_id,
     userId: row.user_id,
-    userRole: row.role,
+    instanceRole: row.role,
     userEmail: row.email,
     adminSessionId: row.session_id,
     sessionCsrfTokenHash: row.csrf_token_hash,
@@ -87,16 +103,16 @@ export const adminSessionAuth: MiddlewareHandler<AppContext> = async (c, next) =
   await c.env.DB
     .prepare(
       `UPDATE admin_sessions SET last_seen_at = ?1
-       WHERE account_id = ?2 AND id = ?3 AND revoked_at IS NULL`
+       WHERE id = ?2 AND user_id = ?3 AND revoked_at IS NULL`
     )
-    .bind(now, row.account_id, row.session_id)
+    .bind(now, row.session_id, row.user_id)
     .run();
   await next();
 };
 
 export const customerSessionAuth: MiddlewareHandler<AppContext> = async (c, next) => {
   const cookies = readCustomerCookies(c);
-  if (!cookies.accountId || !cookies.sessionToken) {
+  if (!cookies.instanceId || !cookies.sessionToken) {
     throw new UnauthorizedError("Customer session cookie is missing");
   }
   const tokenHash = await sha256Hex(cookies.sessionToken);
@@ -104,22 +120,22 @@ export const customerSessionAuth: MiddlewareHandler<AppContext> = async (c, next
   const row = await one<CustomerSessionRow>(
     c.env.DB
       .prepare(
-        `SELECT s.id AS session_id, s.csrf_token_hash, s.account_id,
+        `SELECT s.id AS session_id, s.csrf_token_hash, s.instance_id,
                 s.customer_id, c.email, s.created_at AS authenticated_at
          FROM customer_sessions AS s
-         JOIN customers AS c ON c.account_id = s.account_id AND c.id = s.customer_id
-         JOIN accounts AS a ON a.id = s.account_id
-         WHERE s.account_id = ?1 AND s.session_token_hash = ?2
+         JOIN customers AS c ON c.instance_id = s.instance_id AND c.id = s.customer_id
+         JOIN instances AS instance ON instance.id = s.instance_id
+         WHERE s.instance_id = ?1 AND s.session_token_hash = ?2
            AND s.revoked_at IS NULL AND s.expires_at > ?3
-           AND c.status = 'active' AND a.status = 'active'
+           AND c.status = 'active' AND instance.status = 'active'
          LIMIT 1`
       )
-      .bind(cookies.accountId, tokenHash, now)
+      .bind(cookies.instanceId, tokenHash, now)
   );
   if (!row) throw new UnauthorizedError("Customer session is invalid or expired");
 
   setContext(c, {
-    accountId: row.account_id,
+    instanceId: row.instance_id,
     customerId: row.customer_id,
     customerEmail: row.email,
     customerSessionId: row.session_id,
@@ -130,9 +146,9 @@ export const customerSessionAuth: MiddlewareHandler<AppContext> = async (c, next
   await c.env.DB
     .prepare(
       `UPDATE customer_sessions SET last_seen_at = ?1
-       WHERE account_id = ?2 AND id = ?3 AND revoked_at IS NULL`
+       WHERE instance_id = ?2 AND id = ?3 AND revoked_at IS NULL`
     )
-    .bind(now, row.account_id, row.session_id)
+    .bind(now, row.instance_id, row.session_id)
     .run();
   await next();
 };
@@ -162,7 +178,7 @@ export const customerCsrf = csrfGuard("customer");
 
 const ADMIN_PERMISSION_DECLARATION = Symbol("admin-permission-declaration");
 type DeclaredAdminPermissionHandler = MiddlewareHandler<AppContext> & {
-  [ADMIN_PERMISSION_DECLARATION]?: readonly UserRole[];
+  [ADMIN_PERMISSION_DECLARATION]?: readonly InstanceRole[];
 };
 
 interface AdminRouteLike {
@@ -174,7 +190,7 @@ interface AdminRouteLike {
 export interface DeclaredAdminRoutePermission {
   method: string;
   path: string;
-  allowedRoles: readonly UserRole[];
+  allowedRoles: readonly InstanceRole[];
 }
 
 export interface AdminRoutePermissionInspection {
@@ -183,16 +199,16 @@ export interface AdminRoutePermissionInspection {
   conflicts: Array<{
     method: string;
     path: string;
-    declarations: readonly (readonly UserRole[])[];
+    declarations: readonly (readonly InstanceRole[])[];
   }>;
 }
 
-export function getDeclaredAdminRoles(handler: unknown): readonly UserRole[] | undefined {
+export function getDeclaredAdminRoles(handler: unknown): readonly InstanceRole[] | undefined {
   if (typeof handler !== "function") return undefined;
   return (handler as DeclaredAdminPermissionHandler)[ADMIN_PERMISSION_DECLARATION];
 }
 
-function sameRoles(left: readonly UserRole[], right: readonly UserRole[]): boolean {
+function sameRoles(left: readonly InstanceRole[], right: readonly InstanceRole[]): boolean {
   return left.length === right.length && left.every((role, index) => role === right[index]);
 }
 
@@ -214,7 +230,7 @@ export function inspectAdminRoutePermissions(
   const endpoints = new Map<string, {
     method: string;
     path: string;
-    declarations: Array<readonly UserRole[]>;
+    declarations: Array<readonly InstanceRole[]>;
   }>();
 
   for (const route of routes) {
@@ -272,9 +288,9 @@ export const requireDeclaredAdminPermission: MiddlewareHandler<AppContext> = asy
   await next();
 };
 
-export function requireRole(allowedRoles: UserRole[]): MiddlewareHandler<AppContext> {
+export function requireRole(allowedRoles: InstanceRole[]): MiddlewareHandler<AppContext> {
   const handler: DeclaredAdminPermissionHandler = async (c, next) => {
-    const role = c.get("userRole");
+    const role = c.get("instanceRole");
     if (!role || !allowedRoles.includes(role)) {
       throw new ForbiddenError("Insufficient permissions to perform this action");
     }
@@ -285,17 +301,12 @@ export function requireRole(allowedRoles: UserRole[]): MiddlewareHandler<AppCont
 }
 
 export const setupGuard: MiddlewareHandler<AppContext> = async (c, next) => {
-  const state = await one<{ settings_count: number; account_count: number; user_count: number }>(
-    c.env.DB.prepare(
-      `SELECT
-         (SELECT COUNT(*) FROM system_settings) AS settings_count,
-         (SELECT COUNT(*) FROM accounts) AS account_count,
-         (SELECT COUNT(*) FROM users) AS user_count`
-    )
-  );
-  if (!state) throw new AppError("SETUP_STATE_UNAVAILABLE", "Setup state could not be read", 500);
-  if (state.settings_count !== 0 || state.account_count !== 0 || state.user_count !== 0) {
+  const state = await readDeploymentSetupState(c.env.DB);
+  if (state.status === "completed") {
     throw new AppError("SETUP_ALREADY_COMPLETED", "Instance setup has already completed", 409);
+  }
+  if (state.status === "inconsistent") {
+    throw new AppError("SETUP_STATE_INCONSISTENT", "Database initialization state is inconsistent", 500);
   }
   await next();
 };

@@ -14,7 +14,7 @@ export type PurchaseType = "one_time" | "subscription";
 
 export interface BillingProviderRecord {
   id: string;
-  account_id: string;
+  instance_id: string;
   provider: "paddle";
   environment: BillingEnvironment;
   client_side_token: string;
@@ -69,4 +69,3 @@ export interface CheckoutReadiness {
   publicReasonCodes: string[];
   checks: ReadinessCheck[];
 }
-

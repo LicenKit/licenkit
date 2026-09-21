@@ -7,7 +7,7 @@ export interface SignedLicenseHeader {
 export interface SignedLicenseClaims {
   lic: string;
   act: string;
-  acc: string;
+  ins: string;
   prd: string;
   rel: string;
   ver: string;
@@ -171,7 +171,10 @@ export async function verifySignedLicenseToken(
   if (!verified) throw new SignedTokenError("TOKEN_SIGNATURE_INVALID", "Ed25519 signature verification failed");
 
   const claims = parseStrictObject<Record<string, unknown>>(parts[1]);
-  const requiredStrings = ["lic", "act", "acc", "prd", "rel", "ver", "plt", "fp"] as const;
+  if (Object.prototype.hasOwnProperty.call(claims, "acc")) {
+    throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Legacy Claim 'acc' is not supported");
+  }
+  const requiredStrings = ["lic", "act", "ins", "prd", "rel", "ver", "plt", "fp"] as const;
   for (const field of requiredStrings) {
     if (typeof claims[field] !== "string" || claims[field] === "") {
       throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be a non-empty string`);
@@ -199,7 +202,7 @@ export async function verifySignedLicenseToken(
 }
 
 export interface ClaimsContext {
-  accountId: string;
+  instanceId: string;
   productId: string;
   activationId: string;
   fingerprint: string;
@@ -217,7 +220,7 @@ export interface ClaimsEvaluation {
 export function evaluateSignedLicenseClaims(claims: SignedLicenseClaims, context: ClaimsContext): ClaimsEvaluation {
   const now = context.nowSeconds ?? Math.floor(Date.now() / 1000);
   const comparisons: Array<[boolean, string, string]> = [
-    [claims.acc === context.accountId, "TOKEN_ACCOUNT_MISMATCH", "Token account does not match configuration"],
+    [claims.ins === context.instanceId, "TOKEN_INSTANCE_MISMATCH", "Token instance does not match configuration"],
     [claims.prd === context.productId, "TOKEN_PRODUCT_MISMATCH", "Token product does not match configuration"],
     [claims.act === context.activationId, "TOKEN_ACTIVATION_MISMATCH", "Token activation does not match server response"],
     [claims.fp.toLowerCase() === context.fingerprint.toLowerCase(), "TOKEN_FINGERPRINT_MISMATCH", "Token fingerprint does not match this device"],

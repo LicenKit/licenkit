@@ -143,7 +143,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
         </div>
       )}
 
-      <Modal open={issueModal} onClose={() => setIssueModal(false)} title="手动签发 License" description="客户邮箱必填；服务端按当前账户查找或创建 Customer。">
+      <Modal open={issueModal} onClose={() => setIssueModal(false)} title="手动签发 License" description="客户邮箱必填；服务端按当前 Instance 查找或创建 Customer。">
         <form className="form-stack" onSubmit={issue}>
           <Field label="授权方案"><Select value={issueForm.licensePlanId} onChange={(event) => setIssueForm({ ...issueForm, licensePlanId: event.target.value })} required>{plans.filter((plan) => plan.status === "active").map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {plan.licenseModel}</option>)}</Select></Field>
           <Field label="客户邮箱"><Input type="email" value={issueForm.customerEmail} onChange={(event) => setIssueForm({ ...issueForm, customerEmail: event.target.value })} required /></Field>

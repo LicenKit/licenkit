@@ -7,7 +7,7 @@ import { firstD1 } from "./d1";
 
 interface RotationLicenseRow {
   id: string;
-  account_id: string;
+  instance_id: string;
   customer_id: string;
   product_id: string;
   product_name: string;
@@ -24,7 +24,7 @@ export type LicenseKeyRotationReason = "recovery" | "security_reset";
 export async function prepareLicenseKeyRotation(input: {
   db: D1Database;
   env: { STORAGE_ENCRYPTION_KEY?: string; SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS?: string | number };
-  accountId: string;
+  instanceId: string;
   licenseId: string;
   actor: LicenseActor;
   reason: LicenseKeyRotationReason;
@@ -37,16 +37,16 @@ export async function prepareLicenseKeyRotation(input: {
   const nowIso = now.toISOString();
   const customerConstraint = input.actor.type === "customer" ? "AND l.customer_id = ?3" : "";
   const bindings = input.actor.type === "customer"
-    ? [input.accountId, input.licenseId, input.actor.id]
-    : [input.accountId, input.licenseId];
+    ? [input.instanceId, input.licenseId, input.actor.id]
+    : [input.instanceId, input.licenseId];
   const license = await firstD1<RotationLicenseRow>(input.db.prepare(
-    `SELECT l.id, l.account_id, l.customer_id, l.product_id, p.name AS product_name,
+    `SELECT l.id, l.instance_id, l.customer_id, l.product_id, p.name AS product_name,
             c.email AS customer_email, l.license_model, l.expires_at, l.updates_until,
             l.key_version, l.is_checkout_verification
      FROM licenses l
-     JOIN customers c ON c.account_id = l.account_id AND c.id = l.customer_id
-     JOIN products p ON p.account_id = l.account_id AND p.id = l.product_id
-     WHERE l.account_id = ?1 AND l.id = ?2 ${customerConstraint}
+     JOIN customers c ON c.instance_id = l.instance_id AND c.id = l.customer_id
+     JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
+     WHERE l.instance_id = ?1 AND l.id = ?2 ${customerConstraint}
      LIMIT 1`
   ).bind(...bindings));
   if (!license) throw new NotFoundError("License not found");
@@ -69,7 +69,7 @@ export async function prepareLicenseKeyRotation(input: {
   const delivery = await prepareEmailNotificationDelivery({
     db: input.db,
     env: input.env,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     customerId: license.customer_id,
     notificationType: eventType,
     contractVersion: 1,
@@ -94,26 +94,26 @@ export async function prepareLicenseKeyRotation(input: {
            key_version = CASE WHEN key_version = ?1 THEN ?3 ELSE 0 END,
            key_rotated_at = ?4,
            updated_at = ?4
-       WHERE account_id = ?5 AND id = ?6`
-    ).bind(license.key_version, keyHash, nextKeyVersion, nowIso, input.accountId, license.id),
+       WHERE instance_id = ?5 AND id = ?6`
+    ).bind(license.key_version, keyHash, nextKeyVersion, nowIso, input.instanceId, license.id),
   ];
   if (securityReset) {
     statements.push(input.db.prepare(
       `UPDATE activations
        SET status = 'revoked', revoked_at = ?1, revoke_reason = 'security_reset', updated_at = ?1
-       WHERE account_id = ?2 AND license_id = ?3 AND status = 'active'`
-    ).bind(nowIso, input.accountId, license.id));
+       WHERE instance_id = ?2 AND license_id = ?3 AND status = 'active'`
+    ).bind(nowIso, input.instanceId, license.id));
   }
   statements.push(...delivery.statements);
   statements.push(input.db.prepare(
     `INSERT INTO license_key_rotations (
-       id, account_id, license_id, from_version, to_version, reason,
+       id, instance_id, license_id, from_version, to_version, reason,
        revoked_activations, initiated_by_user_id, initiated_by_customer_id,
        delivery_id, created_at
      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`
   ).bind(
     rotationId,
-    input.accountId,
+    input.instanceId,
     license.id,
     license.key_version,
     nextKeyVersion,
@@ -126,7 +126,7 @@ export async function prepareLicenseKeyRotation(input: {
   ));
   statements.push(prepareLicenseAudit({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     actor: input.actor,
     action: securityReset ? "license.security_reset" : "license.recover_key",
     resourceType: "license",

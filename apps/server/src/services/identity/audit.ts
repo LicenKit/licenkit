@@ -5,6 +5,31 @@ export interface AuditActor {
   id?: string | null;
 }
 
+interface AuditInsertBase {
+  db: D1Database;
+  actor: AuditActor;
+  action: string;
+  resourceType: string;
+  resourceId?: string | null;
+  requestId?: string | null;
+  details?: Record<string, unknown>;
+  ip?: string | null;
+  userAgent?: string | null;
+  now?: string;
+}
+
+type AuditInsertInput = AuditInsertBase & (
+  | {
+      scopeType: "identity";
+      instanceId?: never;
+      actor: { type: "user"; id: string };
+    }
+  | {
+      scopeType?: "instance";
+      instanceId: string;
+    }
+);
+
 const SENSITIVE_KEYS = new Set([
   "password",
   "passwordhash",
@@ -35,34 +60,27 @@ export function serializeRedactedAuditDetails(
   return JSON.stringify(redact(details));
 }
 
-export function prepareAuditInsert(input: {
-  db: D1Database;
-  accountId: string;
-  actor: AuditActor;
-  action: string;
-  resourceType: string;
-  resourceId?: string | null;
-  requestId?: string | null;
-  details?: Record<string, unknown>;
-  ip?: string | null;
-  userAgent?: string | null;
-  now?: string;
-}): D1PreparedStatement {
+export function prepareAuditInsert(input: AuditInsertInput): D1PreparedStatement {
   if (input.actor.type !== "system" && !input.actor.id) {
     throw new Error("Audit actor id is required");
   }
+  if (input.scopeType === "identity" && input.actor.type !== "user") {
+    throw new Error("Identity audit entries require a User actor");
+  }
+  const scopeType = input.scopeType ?? "instance";
   const id = `aud_${ulid().toLowerCase()}`;
   return input.db
     .prepare(
       `INSERT INTO audit_logs (
-         id, account_id, actor_type, actor_user_id, actor_customer_id,
+         id, scope_type, instance_id, actor_type, actor_user_id, actor_customer_id,
          action, resource_type, resource_id, request_id,
          details_redacted_json, ip, user_agent, created_at
-       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`
     )
     .bind(
       id,
-      input.accountId,
+      scopeType,
+      scopeType === "instance" ? input.instanceId : null,
       input.actor.type,
       input.actor.type === "user" ? input.actor.id : null,
       input.actor.type === "customer" ? input.actor.id : null,

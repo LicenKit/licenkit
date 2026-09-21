@@ -9,7 +9,7 @@ export type CredentialMode = "opaque" | "signed";
 export type BillingEnvironment = "sandbox" | "live";
 
 export interface SuccessEnvelope<T> { success: true; data: T }
-interface ErrorPayload { code?: unknown; message?: unknown; details?: unknown; request_id?: unknown; requestId?: unknown }
+interface ErrorPayload { code?: unknown; message?: unknown; details?: unknown; request_id?: unknown }
 interface ErrorEnvelope { success?: false; error?: ErrorPayload }
 
 export class ApiError extends Error {
@@ -94,8 +94,8 @@ async function requestEnvelope<T>(path: string, options: RequestOptions = {}): P
       ...options,
       method,
       headers,
-      credentials: scope === "public" ? "omit" : "include",
-      body: options.body === undefined || options.body instanceof FormData ? options.body : JSON.stringify(options.body),
+      credentials: options.credentials ?? (scope === "public" ? "omit" : "include"),
+      body: options.body === undefined || options.body instanceof FormData ? options.body : JSON.stringify(snakeize(options.body)),
     });
   } catch (error) {
     throw new ApiError({
@@ -116,7 +116,7 @@ async function requestEnvelope<T>(path: string, options: RequestOptions = {}): P
       message: typeof error?.message === "string" ? error.message : response.statusText || "Request failed",
       status: response.status,
       details: error?.details,
-      requestId: typeof error?.request_id === "string" ? error.request_id : typeof error?.requestId === "string" ? error.requestId : response.headers.get("x-request-id"),
+      requestId: typeof error?.request_id === "string" ? error.request_id : response.headers.get("x-request-id"),
       rawResponse: payload,
       method,
       path,
@@ -131,6 +131,17 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) }
 function isSuccessEnvelope<T>(value: unknown): value is SuccessEnvelope<T> { return isRecord(value) && value.success === true && "data" in value }
+function snakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+export function snakeize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(snakeize);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [snakeCaseKey(key), snakeize(item)]));
+}
 function camelize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(camelize);
   if (!isRecord(value)) return value;
@@ -139,9 +150,9 @@ function camelize(value: unknown): unknown {
     camelize(item),
   ]));
 }
-function queryString(params: Record<string, string | number | boolean | null | undefined>): string {
+export function queryString(params: Record<string, string | number | boolean | null | undefined>): string {
   const result = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== "") result.set(key, String(value));
+  for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== "") result.set(snakeCaseKey(key), String(value));
   const query = result.toString();
   return query ? `?${query}` : "";
 }
@@ -149,10 +160,43 @@ function queryString(params: Record<string, string | number | boolean | null | u
 export interface Pagination { page: number; limit: number; total: number; totalPages: number }
 export interface ListResponse<T> { items: T[]; pagination?: Pagination }
 export interface SetupStatus { initialized: boolean }
-export interface AdminUser { id: Identifier; name: string; email: string; role: Role; status?: "active" | "disabled"; createdAt?: IsoDateTime }
-export interface Account { id: Identifier; slug: string; name: string; defaultSubscriptionPaymentGraceSeconds?: number; createdAt?: IsoDateTime }
-export interface AdminSession { user: AdminUser; account: Account; expiresAt?: IsoDateTime }
-export interface SetupResult { account: Pick<Account, "id" | "slug" | "name">; owner: AdminUser }
+export interface User { id: Identifier; name: string; email: string; createdAt?: IsoDateTime; updatedAt?: IsoDateTime }
+export interface Instance {
+  id: Identifier;
+  slug: string;
+  name: string;
+  siteUrl: string;
+  status: "active" | "suspended" | "archived";
+  createdAt?: IsoDateTime;
+  updatedAt?: IsoDateTime;
+}
+export type MembershipStatus = "active" | "disabled" | "removed";
+export interface InstanceMembership {
+  role: Role;
+  status: MembershipStatus;
+}
+export interface InstanceMember extends InstanceMembership {
+  instanceId: Identifier;
+  userId: Identifier;
+  user: User;
+  joinedByInvitationId?: Identifier | null;
+  createdAt?: IsoDateTime;
+  updatedAt?: IsoDateTime;
+}
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+export interface InstanceInvitation {
+  id: Identifier;
+  instanceId: Identifier;
+  email: string;
+  role: Role;
+  status: InvitationStatus;
+  delivery?: DeliveryReference | null;
+  expiresAt: IsoDateTime;
+  acceptedAt?: IsoDateTime | null;
+  revokedAt?: IsoDateTime | null;
+  createdAt: IsoDateTime;
+}
+export interface AdminSession { user: User; instance: Instance; membership: InstanceMembership; expiresAt?: IsoDateTime }
 export interface TrialConfiguration { enabled: boolean; durationSeconds?: number; features: string[] }
 export interface Product {
   id: Identifier; slug: string; name: string; description?: string | null; status: "active" | "archived";
@@ -259,7 +303,8 @@ export interface SystemIssue {
 }
 export interface EmailDelivery {
   id: Identifier;
-  customerId: Identifier;
+  recipientType: "customer" | "instance_invitation";
+  customerId: Identifier | null;
   notificationType: string;
   contractVersion: number;
   recipientEmail: string;
@@ -351,23 +396,45 @@ export interface EmailConfigurationTestResult {
 export const api = {
   setup: {
     status: () => request<SetupStatus>("/setup/status", { scope: "public" }),
-    complete: (body: { setupToken: string; instanceName: string; siteUrl: string; accountSlug: string; owner: { name: string; email: string; password: string } }) => request<SetupResult>("/setup", { method: "POST", body, scope: "admin" }),
+    verifyToken: (setupToken: string) => request<{ valid: true }>("/setup/verify-token", { method: "POST", body: { setupToken }, scope: "public" }),
+    complete: (body: { setupToken: string; user: { name: string; email: string; password: string }; instance: { name: string; slug: string; siteUrl: string } }) => request<AdminSession>("/setup", {
+      method: "POST",
+      body: {
+        setupToken: body.setupToken,
+        user: body.user,
+        instance: body.instance,
+      },
+      scope: "public",
+      credentials: "include",
+    }),
   },
   admin: {
     auth: {
-      login: (body: { accountSlug: string; email: string; password: string }) => request<AdminSession>("/admin/auth/login", { method: "POST", body, scope: "admin" }),
+      login: (body: { email: string; password: string }) => request<AdminSession>("/admin/auth/login", { method: "POST", body, scope: "public", credentials: "include" }),
       session: () => request<AdminSession>("/admin/auth/session", { scope: "admin" }),
       logout: () => request<{ loggedOut: true }>("/admin/auth/logout", { method: "POST", scope: "admin" }),
     },
-    account: {
-      get: () => request<Account>("/admin/account", { scope: "admin" }),
-      update: (body: Partial<Pick<Account, "name" | "defaultSubscriptionPaymentGraceSeconds">>) => request<Account>("/admin/account", { method: "PATCH", body, scope: "admin" }),
+    instance: {
+      get: () => request<Instance>("/admin/instance", { scope: "admin" }),
     },
-    users: {
-      list: () => request<ListResponse<AdminUser>>("/admin/users", { scope: "admin" }),
-      create: (body: { name: string; email: string; password: string; role: Exclude<Role, "owner"> }) => request<AdminUser>("/admin/users", { method: "POST", body, scope: "admin" }),
-      update: (id: string, body: { name?: string; role?: Role; status?: "active" | "disabled"; password?: string }) => request<AdminUser>(`/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
-      revokeSessions: (id: string) => request<{ revoked: true }>(`/admin/users/${encodeURIComponent(id)}/sessions/revoke`, { method: "POST", scope: "admin" }),
+    members: {
+      list: () => request<ListResponse<InstanceMember>>("/admin/members", { scope: "admin" }),
+      update: (userId: string, body: { role?: Role; status?: MembershipStatus }) => request<InstanceMember>(`/admin/members/${encodeURIComponent(userId)}`, { method: "PATCH", body, scope: "admin" }),
+    },
+    invitations: {
+      list: () => request<ListResponse<InstanceInvitation>>("/admin/invitations", { scope: "admin" }),
+      create: (body: { email: string; role: Role }) => request<InstanceInvitation>("/admin/invitations", { method: "POST", body, scope: "admin" }),
+      revoke: (invitationId: string) => request<InstanceInvitation>(`/admin/invitations/${encodeURIComponent(invitationId)}/revoke`, { method: "POST", scope: "admin" }),
+      resend: (invitationId: string) => request<InstanceInvitation>(`/admin/invitations/${encodeURIComponent(invitationId)}/resend`, { method: "POST", scope: "admin" }),
+    },
+    profile: {
+      get: () => request<User>("/admin/profile", { scope: "admin" }),
+      update: (name: string) => request<User>("/admin/profile", { method: "PATCH", body: { name }, scope: "admin" }),
+      changePassword: (body: { currentPassword: string; newPassword: string }) => request<{ passwordChanged: true }>("/admin/profile/password", {
+        method: "POST",
+        body,
+        scope: "admin",
+      }),
     },
     products: {
       list: () => request<ListResponse<Product>>("/admin/products", { scope: "admin" }),
@@ -481,5 +548,20 @@ export const api = {
         process: (id: string) => request<{ id: Identifier; status: "processed"; processedAt: IsoDateTime }>(`/admin/system/issues/${encodeURIComponent(id)}/process`, { method: "POST", scope: "admin" }),
       },
     },
+  },
+  invitations: {
+    acceptCurrentSession: (token: string) => request<AdminSession>("/invitations/accept", { method: "POST", body: { token }, scope: "admin" }),
+    acceptExistingUser: (body: { token: string; email: string; password: string }) => request<AdminSession>("/invitations/accept", {
+      method: "POST",
+      body: { token: body.token, existingUser: { email: body.email, password: body.password } },
+      scope: "public",
+      credentials: "include",
+    }),
+    acceptNewUser: (body: { token: string; name: string; password: string }) => request<AdminSession>("/invitations/accept", {
+      method: "POST",
+      body: { token: body.token, newUser: { name: body.name, password: body.password } },
+      scope: "public",
+      credentials: "include",
+    }),
   },
 };

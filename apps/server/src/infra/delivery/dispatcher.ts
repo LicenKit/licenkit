@@ -31,8 +31,9 @@ type FinalDispatchStatus =
 
 interface DeliveryRow {
   id: string;
-  account_id: string;
-  customer_id: string;
+  instance_id: string;
+  recipient_type: "customer" | "instance_invitation";
+  customer_id: string | null;
   notification_type: string;
   contract_version: number;
   recipient_email: string;
@@ -51,14 +52,14 @@ interface DeliveryRow {
   binding_id: string | null;
   binding_contract_version: number | null;
   provider_template_ref: string | null;
-  account_slug: string;
-  site_url: string | null;
+  instance_slug: string;
+  site_url: string;
 }
 
 interface TestConfigurationRow {
-  account_name: string;
-  account_slug: string;
-  site_url: string | null;
+  instance_name: string;
+  instance_slug: string;
+  site_url: string;
   integration_id: string;
   provider: string;
   credential_ciphertext: string;
@@ -72,7 +73,7 @@ interface TestConfigurationRow {
 export interface DispatchDeliveryInput {
   db: D1Database;
   env: DeliveryCryptoEnv & SensitiveDeliveryRetentionEnv;
-  accountId: string;
+  instanceId: string;
   deliveryId: string;
   workerId?: string;
   manual?: boolean;
@@ -92,7 +93,7 @@ export interface DispatchDeliveryResult {
 export interface TestEmailConfigurationInput {
   db: D1Database;
   env: DeliveryCryptoEnv;
-  accountId: string;
+  instanceId: string;
   emailIntegrationId: string;
   notificationType: string;
   contractVersion: number;
@@ -276,13 +277,13 @@ function retryAfterTime(value: string | undefined, now: Date): number | null {
 
 async function loadDelivery(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   deliveryId: string,
   workerId: string,
 ): Promise<DeliveryRow | undefined> {
   const result = await db
     .prepare(
-      `SELECT delivery.id, delivery.account_id, delivery.customer_id,
+      `SELECT delivery.id, delivery.instance_id, delivery.recipient_type, delivery.customer_id,
               delivery.notification_type, delivery.contract_version,
               delivery.recipient_email, delivery.variables_ciphertext,
               delivery.send_expires_at, delivery.variables_expires_at,
@@ -295,25 +296,24 @@ async function loadDelivery(
               binding.id AS binding_id,
               binding.contract_version AS binding_contract_version,
               binding.provider_template_ref,
-              account.slug AS account_slug,
-              (SELECT site_url FROM system_settings WHERE id = 'current') AS site_url
+              instance.slug AS instance_slug, instance.site_url
        FROM email_deliveries AS delivery
-       JOIN accounts AS account ON account.id = delivery.account_id
+       JOIN instances AS instance ON instance.id = delivery.instance_id
        LEFT JOIN email_integrations AS integration
-         ON integration.account_id = delivery.account_id
+         ON integration.instance_id = delivery.instance_id
         AND integration.status = 'active'
        LEFT JOIN email_template_bindings AS binding
-        ON binding.account_id = delivery.account_id
+        ON binding.instance_id = delivery.instance_id
         AND binding.email_integration_id = integration.id
         AND binding.notification_type = delivery.notification_type
         AND binding.status = 'active'
-       WHERE delivery.account_id = ?1
+       WHERE delivery.instance_id = ?1
          AND delivery.id = ?2
          AND delivery.status = 'processing'
          AND delivery.locked_by = ?3
        LIMIT 1`,
     )
-    .bind(accountId, deliveryId, workerId)
+    .bind(instanceId, deliveryId, workerId)
     .all<DeliveryRow>();
   return result.results[0];
 }
@@ -345,13 +345,13 @@ async function materializeDelivery(
   }
   const [variablesSerialized, credentialSerialized] = await Promise.all([
     decryptEnvelopeV1(row.variables_ciphertext, input.env, {
-      accountId: row.account_id,
+      instanceId: row.instance_id,
       table: "email_deliveries",
       rowId: row.id,
       field: "variables_ciphertext",
     }),
     decryptEnvelopeV1(row.credential_ciphertext, input.env, {
-      accountId: row.account_id,
+      instanceId: row.instance_id,
       table: "email_integrations",
       rowId: row.integration_id,
       field: "credential_ciphertext",
@@ -362,8 +362,8 @@ async function materializeDelivery(
     row.binding_contract_version,
     parseJsonObject(variablesSerialized, "EMAIL_DELIVERY_VARIABLES_INVALID"),
     {
-      ...(row.site_url ? { trustedSiteUrl: row.site_url } : {}),
-      expectedAccountSlug: row.account_slug,
+      trustedSiteUrl: row.site_url,
+      expectedInstanceSlug: row.instance_slug,
     },
   );
   const adapter = adapterFor(row.provider, input.fetchImpl);
@@ -401,7 +401,7 @@ async function releaseAsConfigurationWait(
   await input.db.batch([
     prepareSystemIssueUpsert({
       db: input.db,
-      accountId: input.accountId,
+      instanceId: input.instanceId,
       category: "email",
       sourceType: "email_delivery",
       sourceId: input.deliveryId,
@@ -415,9 +415,9 @@ async function releaseAsConfigurationWait(
        SET status = 'waiting_configuration', next_attempt_at = NULL,
            last_error_json = ?1, locked_by = NULL, locked_until = NULL,
            updated_at = ?2
-       WHERE account_id = ?3 AND id = ?4 AND locked_by = ?5`,
+       WHERE instance_id = ?3 AND id = ?4 AND locked_by = ?5`,
     )
-      .bind(diagnostic, nowIso, input.accountId, input.deliveryId, workerId),
+      .bind(diagnostic, nowIso, input.instanceId, input.deliveryId, workerId),
   ]);
 }
 
@@ -432,7 +432,7 @@ function testVariables(
       .filter((descriptor) => descriptor.required)
       .map((descriptor) => [descriptor.name, descriptor.example]),
   );
-  values.account_name = configuration.account_name;
+  values.instance_name = configuration.instance_name;
   if (Object.prototype.hasOwnProperty.call(values, "access_url")) {
     if (!configuration.site_url) {
       throw new AppError(
@@ -443,7 +443,7 @@ function testVariables(
     }
     values.access_url = buildCustomerPortalAccessUrl({
       trustedSiteUrl: configuration.site_url,
-      accountSlug: configuration.account_slug,
+      instanceSlug: configuration.instance_slug,
       oneTimeToken: `mlk_${"0".repeat(64)}`,
     });
   }
@@ -452,8 +452,8 @@ function testVariables(
     contractVersion,
     values,
     {
-      ...(configuration.site_url ? { trustedSiteUrl: configuration.site_url } : {}),
-      expectedAccountSlug: configuration.account_slug,
+      trustedSiteUrl: configuration.site_url,
+      expectedInstanceSlug: configuration.instance_slug,
     },
   );
 }
@@ -464,29 +464,29 @@ export async function testEmailConfiguration(
 ): Promise<TestEmailConfigurationResult> {
   const result = await input.db
     .prepare(
-      `SELECT account.name AS account_name, account.slug AS account_slug,
-              (SELECT site_url FROM system_settings WHERE id = 'current') AS site_url,
+      `SELECT instance.name AS instance_name, instance.slug AS instance_slug,
+              instance.site_url,
               integration.id AS integration_id, integration.provider,
               integration.credential_ciphertext,
               integration.default_from_email, integration.default_from_name,
               integration.reply_to_email,
               binding.id AS binding_id, binding.provider_template_ref
-       FROM accounts AS account
+       FROM instances AS instance
        JOIN email_integrations AS integration
-         ON integration.account_id = account.id
+         ON integration.instance_id = instance.id
         AND integration.id = ?2
         AND integration.status = 'active'
        JOIN email_template_bindings AS binding
-         ON binding.account_id = account.id
+         ON binding.instance_id = instance.id
         AND binding.email_integration_id = integration.id
         AND binding.notification_type = ?3
         AND binding.contract_version = ?4
         AND binding.status = 'active'
-       WHERE account.id = ?1
+       WHERE instance.id = ?1
        LIMIT 1`,
     )
     .bind(
-      input.accountId,
+      input.instanceId,
       input.emailIntegrationId,
       input.notificationType,
       input.contractVersion,
@@ -512,7 +512,7 @@ export async function testEmailConfiguration(
       configuration.credential_ciphertext,
       input.env,
       {
-        accountId: input.accountId,
+        instanceId: input.instanceId,
         table: "email_integrations",
         rowId: configuration.integration_id,
         field: "credential_ciphertext",
@@ -587,31 +587,31 @@ export async function dispatchDelivery(
        SET status = 'expired', variables_ciphertext = NULL,
            next_attempt_at = NULL, locked_by = NULL, locked_until = NULL,
            last_error_json = ?1, updated_at = ?2
-       WHERE account_id = ?3 AND id = ?4
+       WHERE instance_id = ?3 AND id = ?4
          AND status NOT IN ('accepted', 'expired', 'cancelled')
          AND send_expires_at IS NOT NULL
          AND send_expires_at <= ?2
          AND (status <> 'processing' OR locked_until <= ?2)`,
-    ).bind(expirationDiagnostic, nowIso, input.accountId, input.deliveryId),
+    ).bind(expirationDiagnostic, nowIso, input.instanceId, input.deliveryId),
     input.db.prepare(
       `UPDATE billing_checkout_verifications
        SET status = 'expired', completed_at = NULL,
            last_error_code = 'EMAIL_DELIVERY_SEND_EXPIRED',
            last_error_detail = 'The related email expired before Provider acceptance.',
            updated_at = ?1
-       WHERE account_id = ?2 AND delivery_id = ?3
+       WHERE instance_id = ?2 AND delivery_id = ?3
          AND status = 'delivery_pending'
          AND EXISTS (
            SELECT 1 FROM email_deliveries AS delivery
-           WHERE delivery.account_id = ?2 AND delivery.id = ?3
+           WHERE delivery.instance_id = ?2 AND delivery.id = ?3
              AND delivery.status = 'expired' AND delivery.updated_at = ?1
          )`,
-    ).bind(nowIso, input.accountId, input.deliveryId),
+    ).bind(nowIso, input.instanceId, input.deliveryId),
   ]);
   if (changes(expirationResults[0]) > 0) {
     await prepareSystemIssueUpsert({
       db: input.db,
-      accountId: input.accountId,
+      instanceId: input.instanceId,
       category: "email",
       sourceType: "email_delivery",
       sourceId: input.deliveryId,
@@ -627,7 +627,7 @@ export async function dispatchDelivery(
     .prepare(
       `UPDATE email_deliveries
        SET status = 'processing', locked_by = ?1, locked_until = ?2, updated_at = ?3
-       WHERE account_id = ?4 AND id = ?5
+       WHERE instance_id = ?4 AND id = ?5
          AND variables_ciphertext IS NOT NULL
          AND (send_expires_at IS NULL OR send_expires_at > ?3)
          AND (
@@ -641,11 +641,11 @@ export async function dispatchDelivery(
            ))
          )`,
     )
-    .bind(workerId, lockedUntil, nowIso, input.accountId, input.deliveryId, manual ? 1 : 0)
+    .bind(workerId, lockedUntil, nowIso, input.instanceId, input.deliveryId, manual ? 1 : 0)
     .run();
   if (changes(claim) !== 1) return { claimed: false };
 
-  const row = await loadDelivery(input.db, input.accountId, input.deliveryId, workerId);
+  const row = await loadDelivery(input.db, input.instanceId, input.deliveryId, workerId);
   if (!row) return { claimed: false };
 
   let materialized: MaterializedSend;
@@ -677,7 +677,7 @@ export async function dispatchDelivery(
     await input.db.batch([
       prepareSystemIssueUpsert({
         db: input.db,
-        accountId: row.account_id,
+        instanceId: row.instance_id,
         category: "email",
         sourceType: "email_delivery",
         sourceId: row.id,
@@ -690,9 +690,9 @@ export async function dispatchDelivery(
         `UPDATE email_deliveries
          SET status = 'failed', next_attempt_at = NULL, last_error_json = ?1,
              locked_by = NULL, locked_until = NULL, updated_at = ?2
-         WHERE account_id = ?3 AND id = ?4 AND locked_by = ?5`,
+         WHERE instance_id = ?3 AND id = ?4 AND locked_by = ?5`,
       )
-        .bind(JSON.stringify(error), nowIso, row.account_id, row.id, workerId),
+        .bind(JSON.stringify(error), nowIso, row.instance_id, row.id, workerId),
     ]);
     return {
       claimed: true,
@@ -706,10 +706,10 @@ export async function dispatchDelivery(
     .prepare(
       `UPDATE email_deliveries
        SET attempt_count = ?1, updated_at = ?2
-       WHERE account_id = ?3 AND id = ?4
+       WHERE instance_id = ?3 AND id = ?4
          AND status = 'processing' AND locked_by = ?5 AND attempt_count = ?6`,
     )
-    .bind(attemptNumber, nowIso, row.account_id, row.id, workerId, row.attempt_count)
+    .bind(attemptNumber, nowIso, row.instance_id, row.id, workerId, row.attempt_count)
     .run();
   if (changes(counted) !== 1) return { claimed: false };
 
@@ -738,23 +738,23 @@ export async function dispatchDelivery(
                provider_message_id = ?1, last_error_json = NULL,
                variables_expires_at = ?2, accepted_at = ?3,
                locked_by = NULL, locked_until = NULL, updated_at = ?3
-           WHERE account_id = ?4 AND id = ?5
+           WHERE instance_id = ?4 AND id = ?5
              AND status = 'processing' AND locked_by = ?6`,
         )
-        .bind(sent.providerMessageId, payloadExpiresAt, nowIso, row.account_id, row.id, workerId),
+        .bind(sent.providerMessageId, payloadExpiresAt, nowIso, row.instance_id, row.id, workerId),
       input.db
         .prepare(
           `UPDATE billing_checkout_verifications
            SET status = 'completed', completed_at = ?1, updated_at = ?1
-           WHERE account_id = ?2 AND delivery_id = ?3
+           WHERE instance_id = ?2 AND delivery_id = ?3
              AND status = 'delivery_pending'
              AND EXISTS (
                SELECT 1 FROM email_deliveries AS delivery
-               WHERE delivery.account_id = ?2 AND delivery.id = ?3
+               WHERE delivery.instance_id = ?2 AND delivery.id = ?3
                  AND delivery.status = 'accepted'
              )`,
         )
-        .bind(nowIso, row.account_id, row.id),
+        .bind(nowIso, row.instance_id, row.id),
     ]);
     if (changes(acceptedResults[0]) !== 1) return { claimed: false };
     return {
@@ -788,7 +788,7 @@ export async function dispatchDelivery(
   await input.db.batch([
     prepareSystemIssueUpsert({
       db: input.db,
-      accountId: row.account_id,
+      instanceId: row.instance_id,
       category: "email",
       sourceType: "email_delivery",
       sourceId: row.id,
@@ -802,14 +802,14 @@ export async function dispatchDelivery(
         `UPDATE email_deliveries
          SET status = ?1, next_attempt_at = ?2, last_error_json = ?3,
              locked_by = NULL, locked_until = NULL, updated_at = ?4
-         WHERE account_id = ?5 AND id = ?6 AND locked_by = ?7`,
+         WHERE instance_id = ?5 AND id = ?6 AND locked_by = ?7`,
       )
       .bind(
         status,
         nextAttemptAt,
         JSON.stringify(diagnostic),
         nowIso,
-        row.account_id,
+        row.instance_id,
         row.id,
         workerId,
       ),

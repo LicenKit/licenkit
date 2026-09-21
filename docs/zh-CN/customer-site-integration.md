@@ -16,7 +16,7 @@ LicenKit 只部署 API、Scheduled Worker 和 `/admin` 管理控制台，不提�
 LicenKit 根据 `siteUrl` 生成以下 Magic Link：
 
 ```text
-{siteUrl}/customer/{accountSlug}/auth#token={oneTimeToken}
+{siteUrl}/customer/{instance_slug}/auth#token={oneTimeToken}
 ```
 
 因此使用方必须让这个路径落到自己的 Magic Link 消费页面。LicenKit 部署本身不会处理该页面路由。
@@ -27,8 +27,8 @@ LicenKit 根据 `siteUrl` 生成以下 Magic Link：
 | --- | --- |
 | 产品与价格页 | 静态维护产品、方案、展示价格和 Paddle Price ID；直接使用 Paddle.js 打开 Checkout，不查询 LicenKit 产品或方案列表。 |
 | 购买结果页 | 只展示 Paddle Checkout 结果和后续提示；不能把浏览器回调当作付款或发证成功。 |
-| Magic Link 请求页 | 获取 Turnstile Sitekey，完成 Widget 后提交 Account slug、邮箱和 Turnstile Token；无论邮箱是否存在都展示相同结果。 |
-| Magic Link 落地页 | 匹配 `/customer/:accountSlug/auth`；从 URL Fragment 读取一次性 Token，立即清理地址栏，并在用户明确操作后提交消费请求。 |
+| Magic Link 请求页 | 获取 Turnstile Sitekey，完成 Widget 后提交 Instance slug、邮箱和 Turnstile Token；无论邮箱是否存在都展示相同结果。 |
+| Magic Link 落地页 | 匹配 `/customer/:instance_slug/auth`；从 URL Fragment 读取一次性 Token，立即清理地址栏，并在用户明确操作后提交消费请求。 |
 | Customer Portal 首页 | 读取当前 Customer 和 License 列表；未认证时引导到 Magic Link 请求页。 |
 | License 详情页 | 展示 License 条款、Activation 和 Subscription；只显示服务端允许的动作。 |
 | 最近认证页面或状态 | 服务端返回 `CUSTOMER_RECENT_AUTH_REQUIRED` 时重新请求 Magic Link，不能用普通确认弹窗替代认证。 |
@@ -44,9 +44,9 @@ LicenKit 根据 `siteUrl` 生成以下 Magic Link：
 
 | 方法与路径 | 请求/用途 | 鉴权要求 |
 | --- | --- | --- |
-| `GET /customer/auth/config` | 返回公开的 `turnstileSiteKey`。 | 无 Session；`Cache-Control: no-store`。 |
-| `POST /customer/auth/magic-link` | `{ accountSlug, email, turnstileToken }`；请求发送 Magic Link。 | 精确同源 Origin；服务端验证 Turnstile。公开响应固定为 `accepted=true`，不能据此判断邮箱是否存在。 |
-| `POST /customer/auth/magic-link/consume` | `{ accountSlug, token }`；消费一次性 Token并建立 Customer Session。 | 精确同源 Origin；成功后由服务端设置 Session、Account 和 CSRF Cookie。 |
+| `GET /customer/auth/config` | 返回公开的 `turnstile_site_key`。 | 无 Session；`Cache-Control: no-store`。 |
+| `POST /customer/auth/magic-link` | `{ instance_slug, email, turnstile_token }`；请求发送 Magic Link。 | 精确同源 Origin；服务端验证 Turnstile。公开响应固定为 `accepted=true`，不能据此判断邮箱是否存在。 |
+| `POST /customer/auth/magic-link/consume` | `{ instance_slug, token }`；消费一次性 Token 并建立 Customer Session。 | 精确同源 Origin；成功后由服务端设置 Session、Instance 和 CSRF Cookie。 |
 | `POST /customer/auth/logout` | 吊销当前 Customer Session 并清除 Cookie。 | Customer Session、精确同源 Origin、CSRF。 |
 
 ### 3.2 读取 Customer 资源
@@ -59,7 +59,7 @@ LicenKit 根据 `siteUrl` 生成以下 Magic Link：
 | `GET /customer/licenses/:licenseId/activations` | License 的设备 Activation 列表。 |
 | `GET /customer/licenses/:licenseId/subscription` | License 与支付订阅摘要。 |
 
-这些接口都要求有效 Customer Session。服务端从 Session 确定 Account 和 Customer，前端不能传入或覆盖资源归属。
+这些接口都要求有效 Customer Session。服务端从 Session 确定 Instance 和 Customer，前端不能传入或覆盖资源归属。
 
 ### 3.3 Customer 写操作
 
@@ -85,10 +85,10 @@ await fetch("/api/v1/customer/licenses", {
 Customer Session 使用以下 host-only、Secure、SameSite=Lax Cookie：
 
 - `__Host-licenkit-customer-session`：HttpOnly；
-- `__Host-licenkit-customer-account`：HttpOnly；
+- `__Host-licenkit-customer-instance`：HttpOnly；
 - `__Host-licenkit-customer-csrf`：允许同源页面读取。
 
-Cookie 鉴权写操作必须把 CSRF Cookie 原值放入 `X-CSRF-Token` Header，并保留 `credentials: "include"`。不能从响应或浏览器存储中自行构造 Session、Account 或 CSRF Token。
+Cookie 鉴权写操作必须把 CSRF Cookie 原值放入 `X-CSRF-Token` Header，并保留 `credentials: "include"`。不能从响应或浏览器存储中自行构造 Session、Instance 或 CSRF Token。
 
 ## 5. Magic Link 页面约束
 
@@ -100,6 +100,8 @@ Cookie 鉴权写操作必须把 CSRF Cookie 原值放入 `X-CSRF-Token` Header�
 6. 无效、过期、已消费和已吊销 Token 都按服务端原始错误处理，不在前端归一化成无法诊断的通用错误。
 
 Magic Link 请求的 anti-enumeration 边界也在服务端：Turnstile Siteverify 通过后、查询 Customer 前，服务端先解密并校验当前 active Email Integration 的 Provider 凭证。Customer 不存在、命中冷却、真实 Customer 产生 `waiting_configuration` Delivery 或成功创建新链接时，前端都只能收到相同的 `accepted=true` 公开语义，不能根据 Delivery 细节推断邮箱是否存在。
+
+消费的一次性约束必须在同一个 D1 原子批次中生效：Challenge 的终态更新由数据库约束或 Trigger 在并发争用时直接中止批次，成功方创建唯一 Customer Session；失败方不能留下 Session、审计、Delivery 更新或其他副作用。不能先提交一组语句，再在批次外以条件更新的 `0` 行结果判断失败。
 
 ## 6. 产品页与 Checkout
 

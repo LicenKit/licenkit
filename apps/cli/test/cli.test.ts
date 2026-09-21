@@ -31,7 +31,7 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
   const claims: SignedLicenseClaims = {
     lic: "lic_1",
     act: "act_1",
-    acc: "acc_1",
+    ins: "ins_1",
     prd: "prd_1",
     rel: "rel_1",
     ver: "2.4.0",
@@ -58,7 +58,7 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
 describe("V1 client API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("sends account, product, device and immutable release identity", async () => {
+  it("sends instance, product, device and immutable release identity", async () => {
     let body: Record<string, unknown> = {};
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       body = JSON.parse(String(init?.body));
@@ -69,7 +69,7 @@ describe("V1 client API", () => {
     }));
     await apiActivate({
       serverUrl: "https://license.example.com",
-      accountId: "acc_1",
+      instanceId: "ins_1",
       productId: "prd_1",
       licenseKey: "LK-SECRET",
       fingerprint: "fp",
@@ -78,7 +78,7 @@ describe("V1 client API", () => {
       releasePlatform: "macos-universal",
     });
     expect(body).toMatchObject({
-      account_id: "acc_1",
+      instance_id: "ins_1",
       product_id: "prd_1",
       device_platform: "macos-arm64",
       release_version: "2.4.0",
@@ -97,14 +97,14 @@ describe("V1 client API", () => {
     }));
     await apiDeactivate({
       serverUrl: "https://license.example.com",
-      accountId: "acc_1",
+      instanceId: "ins_1",
       productId: "prd_1",
       activationId: "act_1",
       machineToken: "mtk_secret",
       fingerprint: "fp",
     });
     expect(body).toEqual({
-      account_id: "acc_1",
+      instance_id: "ins_1",
       product_id: "prd_1",
       activation_id: "act_1",
       machine_token: "mtk_secret",
@@ -151,7 +151,7 @@ describe("V1 signed and opaque credentials", () => {
       terms: { max_activations: 1, features: [], updates_until: null },
     };
     await expect(verifyCredentialResponse(response, {}, {
-      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "fp",
+      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "fp",
       releaseVersion: "1.0", releasePlatform: "macos-arm64",
     })).resolves.toBeUndefined();
   });
@@ -168,20 +168,33 @@ describe("V1 signed and opaque credentials", () => {
       terms: { max_activations: 1, features: ["export"], updates_until: null },
     };
     await expect(verifyCredentialResponse(response, {}, {
-      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
     })).rejects.toMatchObject({ code: "TRUSTED_SIGNING_KEY_MISSING" });
     await expect(verifyCredentialResponse(response, { key_v1: signed.publicKey }, {
-      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
     })).resolves.toMatchObject({ lic: "lic_1", rel: "rel_1" });
+  });
+
+  it("rejects the removed acc Claim and reports Instance mismatches explicitly", async () => {
+    const legacy = await signedToken({ ins: "", acc: "acc_1" } as unknown as Partial<SignedLicenseClaims>);
+    await expect(verifySignedLicenseToken(legacy.token, legacy.publicKey))
+      .rejects.toMatchObject({ code: "TOKEN_CLAIMS_INVALID" });
+
+    const current = await signedToken();
+    const verified = await verifySignedLicenseToken(current.token, current.publicKey);
+    expect(evaluateSignedLicenseClaims(verified.claims, {
+      instanceId: "ins_other", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
+    })).toMatchObject({ valid: false, code: "TOKEN_INSTANCE_MISMATCH" });
   });
 
   it("rejects release builds after updates_until independently of expiration", async () => {
     const signed = await signedToken({ rat: 2_000, upd: 1_999, lexp: null });
     const verified = await verifySignedLicenseToken(signed.token, signed.publicKey);
     expect(evaluateSignedLicenseClaims(verified.claims, {
-      accountId: "acc_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
     })).toMatchObject({ valid: false, code: "UPDATE_ENTITLEMENT_REQUIRED" });
   });
@@ -200,7 +213,7 @@ describe("V1 local credential storage", () => {
   it("stores machine credentials without the activation license key", () => {
     saveStoredLicense({
       serverUrl: "https://license.example.com",
-      accountId: "acc_1",
+      instanceId: "ins_1",
       productId: "prd_1",
       releaseVersion: "2.4.0",
       releasePlatform: "macos-arm64",

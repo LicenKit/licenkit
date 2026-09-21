@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { EmailDelivery } from "./api-client";
-import { canRetryDelivery, deliveryStatusExplanation, mayDuplicateOnResend, templateDownload } from "./email-delivery";
+import {
+  canRetryDelivery,
+  deliveryRecipientLabel,
+  deliveryStatusExplanation,
+  mayDuplicateOnResend,
+  templateDownload,
+} from "./email-delivery";
 
 function delivery(overrides: Partial<EmailDelivery> = {}): EmailDelivery {
   return {
     id: "edv_test",
+    recipientType: "customer",
     customerId: "cus_test",
     notificationType: "license.issue",
     contractVersion: 1,
@@ -34,6 +41,11 @@ describe("email delivery presentation", () => {
     expect(canRetryDelivery(delivery())).toBe(true);
     expect(canRetryDelivery(delivery({ status: "accepted" }))).toBe(false);
     expect(canRetryDelivery(delivery({ sendExpiresAt: "2020-01-01T00:00:00.000Z" }))).toBe(false);
+  });
+
+  it("distinguishes customer and Instance Invitation recipients", () => {
+    expect(deliveryRecipientLabel(delivery())).toBe("cus_test");
+    expect(deliveryRecipientLabel(delivery({ recipientType: "instance_invitation", customerId: null }))).toBe("Instance 邀请");
   });
 
   it("preserves the API supplied template filename and source", () => {

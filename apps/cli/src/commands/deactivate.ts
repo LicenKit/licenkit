@@ -15,7 +15,7 @@ export async function deactivateCommand(): Promise<void> {
     const fingerprint = await getMachineFingerprint();
     const response = await apiDeactivate({
       serverUrl: stored.serverUrl,
-      accountId: stored.accountId,
+      instanceId: stored.instanceId,
       productId: stored.productId,
       activationId: stored.activationId,
       machineToken: stored.machineToken,

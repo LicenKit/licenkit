@@ -16,7 +16,7 @@ interface ProductReleaseRow {
 
 interface LicenseRow {
   id: string;
-  account_id: string;
+  instance_id: string;
   product_id: string;
   license_model: "perpetual" | "fixed_term" | "subscription";
   renewal_mode: "none" | "manual" | "billing";
@@ -48,7 +48,7 @@ interface SigningKeyRow {
 
 export async function requireProductRelease(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   productId: string;
   version: string;
   platform: string;
@@ -56,9 +56,9 @@ export async function requireProductRelease(input: {
   const release = await firstD1<ProductReleaseRow>(input.db.prepare(
     `SELECT id, version, platform, released_at
      FROM product_releases
-     WHERE account_id = ?1 AND product_id = ?2 AND version = ?3 AND platform = ?4
+     WHERE instance_id = ?1 AND product_id = ?2 AND version = ?3 AND platform = ?4
      LIMIT 1`
-  ).bind(input.accountId, input.productId, input.version, input.platform));
+  ).bind(input.instanceId, input.productId, input.version, input.platform));
   if (!release) {
     throw new AppError(
       "PRODUCT_RELEASE_UNKNOWN",
@@ -155,16 +155,16 @@ async function createCredentialResponse(input: {
 
   const signingKey = await firstD1<SigningKeyRow>(input.db.prepare(
     `SELECT id, private_key_ciphertext FROM signing_keys
-     WHERE account_id = ?1 AND product_id = ?2 AND status = 'active'
+     WHERE instance_id = ?1 AND product_id = ?2 AND status = 'active'
      LIMIT 1`
-  ).bind(input.license.account_id, input.license.product_id));
+  ).bind(input.license.instance_id, input.license.product_id));
   if (!signingKey) {
     throw new AppError("SIGNING_KEY_NOT_CONFIGURED", "No active signing key is available for this Product.", 500, {
       product_id: input.license.product_id,
     });
   }
   const privateKey = await decryptEnvelopeV1(signingKey.private_key_ciphertext, input.env, {
-    accountId: input.license.account_id,
+    instanceId: input.license.instance_id,
     table: "signing_keys",
     rowId: signingKey.id,
     field: "private_key_ciphertext",
@@ -180,7 +180,7 @@ async function createCredentialResponse(input: {
     claims: {
       lic: input.license.id,
       act: input.activationId,
-      acc: input.license.account_id,
+      ins: input.license.instance_id,
       prd: input.license.product_id,
       rel: input.release.id,
       ver: input.release.version,
@@ -202,7 +202,7 @@ async function createCredentialResponse(input: {
 export async function activateLicense(input: {
   db: D1Database;
   env: { STORAGE_ENCRYPTION_KEY?: string };
-  accountId: string;
+  instanceId: string;
   productId: string;
   licenseKey: string;
   fingerprint: string;
@@ -216,19 +216,19 @@ export async function activateLicense(input: {
   const now = input.now ?? new Date();
   const keyHash = await hashLicenseKey(input.licenseKey);
   const license = await firstD1<LicenseRow>(input.db.prepare(
-    `SELECT id, account_id, product_id, license_model, renewal_mode,
+    `SELECT id, instance_id, product_id, license_model, renewal_mode,
             credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
             max_activations, features_json, is_checkout_verification, status,
             status_reason, expires_at, updates_until, updated_at
      FROM licenses
-     WHERE account_id = ?1 AND product_id = ?2 AND key_hash = ?3
+     WHERE instance_id = ?1 AND product_id = ?2 AND key_hash = ?3
      LIMIT 1`
-  ).bind(input.accountId, input.productId, keyHash));
+  ).bind(input.instanceId, input.productId, keyHash));
   if (!license) throw new AppError("LICENSE_KEY_INVALID", "The License Key is invalid.", 404);
   assertLicenseUsable(license, now);
   const release = await requireProductRelease({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     productId: input.productId,
     version: input.releaseVersion,
     platform: input.releasePlatform,
@@ -241,9 +241,9 @@ export async function activateLicense(input: {
   let activation = await firstD1<ActivationRow>(input.db.prepare(
     `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
      FROM activations
-     WHERE account_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
+     WHERE instance_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
      LIMIT 1`
-  ).bind(input.accountId, license.id, fingerprintHash));
+  ).bind(input.instanceId, license.id, fingerprintHash));
 
   let credentialResponse: Awaited<ReturnType<typeof createCredentialResponse>>;
   if (activation) {
@@ -261,10 +261,10 @@ export async function activateLicense(input: {
       `UPDATE activations
        SET machine_token_hash = ?1, name = COALESCE(?2, name),
            platform = COALESCE(?3, platform), last_validated_at = ?4, updated_at = ?4
-       WHERE account_id = ?5 AND license_id = ?6 AND id = ?7 AND status = 'active'
+       WHERE instance_id = ?5 AND license_id = ?6 AND id = ?7 AND status = 'active'
          AND EXISTS (
            SELECT 1 FROM licenses l
-           WHERE l.account_id = ?5 AND l.id = ?6 AND l.product_id = ?8
+           WHERE l.instance_id = ?5 AND l.id = ?6 AND l.product_id = ?8
              AND l.updated_at = ?9
              AND l.is_checkout_verification = 0 AND l.status = 'active'
              AND (
@@ -278,7 +278,7 @@ export async function activateLicense(input: {
       input.name ?? null,
       input.devicePlatform ?? null,
       now.toISOString(),
-      input.accountId,
+      input.instanceId,
       license.id,
       activation.id,
       input.productId,
@@ -286,12 +286,12 @@ export async function activateLicense(input: {
     ).run();
     if ((refreshed.meta?.changes ?? 0) !== 1) {
       const current = await firstD1<LicenseRow>(input.db.prepare(
-        `SELECT id, account_id, product_id, license_model, renewal_mode,
+        `SELECT id, instance_id, product_id, license_model, renewal_mode,
                 credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
                 max_activations, features_json, is_checkout_verification, status,
                 status_reason, expires_at, updates_until, updated_at
-         FROM licenses WHERE account_id = ?1 AND id = ?2 LIMIT 1`
-      ).bind(input.accountId, license.id));
+         FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+      ).bind(input.instanceId, license.id));
       if (!current) throw new NotFoundError("License not found");
       assertLicenseUsable(current, now);
       throw new AppError("ACTIVATION_CONFLICT", "The Activation changed concurrently.", 409);
@@ -311,13 +311,13 @@ export async function activateLicense(input: {
     try {
       const inserted = await input.db.prepare(
         `INSERT INTO activations (
-           id, account_id, license_id, fingerprint_hash, machine_token_hash,
+           id, instance_id, license_id, fingerprint_hash, machine_token_hash,
            name, platform, first_ip, status, activated_at, last_validated_at,
            deactivated_at, revoked_at, revoke_reason, updated_at
          )
          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?9, NULL, NULL, NULL, ?9
          FROM licenses l
-         WHERE l.account_id = ?2 AND l.id = ?3 AND l.product_id = ?10
+         WHERE l.instance_id = ?2 AND l.id = ?3 AND l.product_id = ?10
            AND l.updated_at = ?11
            AND l.is_checkout_verification = 0 AND l.status = 'active'
            AND (
@@ -327,7 +327,7 @@ export async function activateLicense(input: {
            )`
       ).bind(
         activationId,
-        input.accountId,
+        input.instanceId,
         license.id,
         fingerprintHash,
         machineTokenHash,
@@ -340,12 +340,12 @@ export async function activateLicense(input: {
       ).run();
       if ((inserted.meta?.changes ?? 0) !== 1) {
         const current = await firstD1<LicenseRow>(input.db.prepare(
-          `SELECT id, account_id, product_id, license_model, renewal_mode,
+          `SELECT id, instance_id, product_id, license_model, renewal_mode,
                   credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
                   max_activations, features_json, is_checkout_verification, status,
                   status_reason, expires_at, updates_until, updated_at
-           FROM licenses WHERE account_id = ?1 AND id = ?2 LIMIT 1`
-        ).bind(input.accountId, license.id));
+           FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+        ).bind(input.instanceId, license.id));
         if (!current) throw new NotFoundError("License not found");
         assertLicenseUsable(current, now);
         throw new AppError("LICENSE_STATE_CHANGED", "The License changed while activation was being created.", 409);
@@ -362,8 +362,8 @@ export async function activateLicense(input: {
       if (raw.includes("LICENSE_ACTIVATION_LIMIT_REACHED")) {
         const count = await firstD1<{ count: number }>(input.db.prepare(
           `SELECT COUNT(*) AS count FROM activations
-           WHERE account_id = ?1 AND license_id = ?2 AND status = 'active'`
-        ).bind(input.accountId, license.id));
+           WHERE instance_id = ?1 AND license_id = ?2 AND status = 'active'`
+        ).bind(input.instanceId, license.id));
         throw new AppError(
           "LICENSE_ACTIVATION_LIMIT_REACHED",
           "The License has reached its activation limit.",
@@ -377,13 +377,13 @@ export async function activateLicense(input: {
           { database_error: raw },
         );
       }
-      if (raw.includes("activations.account_id, activations.license_id, activations.fingerprint_hash")) {
+      if (raw.includes("activations.instance_id, activations.license_id, activations.fingerprint_hash")) {
         activation = await firstD1<ActivationRow>(input.db.prepare(
           `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
            FROM activations
-           WHERE account_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
+           WHERE instance_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
            LIMIT 1`
-        ).bind(input.accountId, license.id, fingerprintHash));
+        ).bind(input.instanceId, license.id, fingerprintHash));
         if (activation) {
           credentialResponse = await createCredentialResponse({
             db: input.db,
@@ -397,8 +397,8 @@ export async function activateLicense(input: {
           });
           const refreshed = await input.db.prepare(
             `UPDATE activations SET machine_token_hash = ?1, last_validated_at = ?2, updated_at = ?2
-             WHERE account_id = ?3 AND license_id = ?4 AND id = ?5 AND status = 'active'`
-          ).bind(machineTokenHash, now.toISOString(), input.accountId, license.id, activation.id).run();
+             WHERE instance_id = ?3 AND license_id = ?4 AND id = ?5 AND status = 'active'`
+          ).bind(machineTokenHash, now.toISOString(), input.instanceId, license.id, activation.id).run();
           if ((refreshed.meta?.changes ?? 0) !== 1) {
             throw new AppError("ACTIVATION_CONFLICT", "The Activation changed concurrently.", 409);
           }
@@ -417,7 +417,7 @@ export async function activateLicense(input: {
 export async function validateActivation(input: {
   db: D1Database;
   env: { STORAGE_ENCRYPTION_KEY?: string };
-  accountId: string;
+  instanceId: string;
   productId: string;
   activationId: string;
   machineToken: string;
@@ -430,16 +430,16 @@ export async function validateActivation(input: {
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
   const activation = await firstD1<any>(input.db.prepare(
     `SELECT a.id, a.license_id, a.fingerprint_hash, a.machine_token_hash, a.status,
-            l.account_id, l.product_id, l.license_model, l.renewal_mode,
+            l.instance_id, l.product_id, l.license_model, l.renewal_mode,
             l.credential_mode, l.signed_token_ttl_seconds, l.payment_grace_seconds,
             l.max_activations, l.features_json, l.is_checkout_verification,
             l.status AS license_status, l.status_reason, l.expires_at, l.updates_until,
             l.updated_at AS license_updated_at
      FROM activations a
-     JOIN licenses l ON l.account_id = a.account_id AND l.id = a.license_id
-     WHERE a.account_id = ?1 AND l.product_id = ?2 AND a.id = ?3
+     JOIN licenses l ON l.instance_id = a.instance_id AND l.id = a.license_id
+     WHERE a.instance_id = ?1 AND l.product_id = ?2 AND a.id = ?3
      LIMIT 1`
-  ).bind(input.accountId, input.productId, input.activationId));
+  ).bind(input.instanceId, input.productId, input.activationId));
   if (!activation) throw new NotFoundError("Activation not found");
   if (activation.status === "revoked") throw new AppError("ACTIVATION_REVOKED", "The Activation is revoked.", 403);
   if (activation.status === "deactivated") throw new AppError("ACTIVATION_DEACTIVATED", "The Activation is deactivated.", 403);
@@ -452,7 +452,7 @@ export async function validateActivation(input: {
   }
   const license: LicenseRow = {
     id: activation.license_id,
-    account_id: activation.account_id,
+    instance_id: activation.instance_id,
     product_id: activation.product_id,
     license_model: activation.license_model,
     renewal_mode: activation.renewal_mode,
@@ -471,7 +471,7 @@ export async function validateActivation(input: {
   assertLicenseUsable(license, now);
   const release = await requireProductRelease({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     productId: input.productId,
     version: input.releaseVersion,
     platform: input.releasePlatform,
@@ -489,10 +489,10 @@ export async function validateActivation(input: {
   });
   const refreshed = await input.db.prepare(
     `UPDATE activations SET last_validated_at = ?1, updated_at = ?1
-     WHERE account_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'
+     WHERE instance_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'
        AND EXISTS (
          SELECT 1 FROM licenses l
-         WHERE l.account_id = ?2 AND l.id = ?3 AND l.product_id = ?5
+         WHERE l.instance_id = ?2 AND l.id = ?3 AND l.product_id = ?5
            AND l.updated_at = ?6
            AND l.is_checkout_verification = 0 AND l.status = 'active'
            AND (
@@ -503,7 +503,7 @@ export async function validateActivation(input: {
        )`
   ).bind(
     now.toISOString(),
-    input.accountId,
+    input.instanceId,
     license.id,
     input.activationId,
     input.productId,
@@ -512,18 +512,18 @@ export async function validateActivation(input: {
   if ((refreshed.meta?.changes ?? 0) !== 1) {
     const currentActivation = await firstD1<ActivationRow>(input.db.prepare(
       `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
-       FROM activations WHERE account_id = ?1 AND license_id = ?2 AND id = ?3 LIMIT 1`
-    ).bind(input.accountId, license.id, input.activationId));
+       FROM activations WHERE instance_id = ?1 AND license_id = ?2 AND id = ?3 LIMIT 1`
+    ).bind(input.instanceId, license.id, input.activationId));
     if (!currentActivation) throw new NotFoundError("Activation not found");
     if (currentActivation.status === "revoked") throw new AppError("ACTIVATION_REVOKED", "The Activation is revoked.", 403);
     if (currentActivation.status === "deactivated") throw new AppError("ACTIVATION_DEACTIVATED", "The Activation is deactivated.", 403);
     const currentLicense = await firstD1<LicenseRow>(input.db.prepare(
-      `SELECT id, account_id, product_id, license_model, renewal_mode,
+      `SELECT id, instance_id, product_id, license_model, renewal_mode,
               credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
               max_activations, features_json, is_checkout_verification, status,
               status_reason, expires_at, updates_until, updated_at
-       FROM licenses WHERE account_id = ?1 AND id = ?2 LIMIT 1`
-    ).bind(input.accountId, license.id));
+       FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+    ).bind(input.instanceId, license.id));
     if (!currentLicense) throw new NotFoundError("License not found");
     assertLicenseUsable(currentLicense, now);
     throw new AppError("LICENSE_STATE_CHANGED", "The License changed during online validation.", 409);
@@ -533,7 +533,7 @@ export async function validateActivation(input: {
 
 export async function deactivateActivation(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   productId: string;
   activationId: string;
   machineToken: string;
@@ -545,10 +545,10 @@ export async function deactivateActivation(input: {
   const activation = await firstD1<ActivationRow>(input.db.prepare(
     `SELECT a.id, a.license_id, a.fingerprint_hash, a.machine_token_hash, a.status
      FROM activations a
-     JOIN licenses l ON l.account_id = a.account_id AND l.id = a.license_id
-     WHERE a.account_id = ?1 AND l.product_id = ?2 AND a.id = ?3
+     JOIN licenses l ON l.instance_id = a.instance_id AND l.id = a.license_id
+     WHERE a.instance_id = ?1 AND l.product_id = ?2 AND a.id = ?3
      LIMIT 1`
-  ).bind(input.accountId, input.productId, input.activationId));
+  ).bind(input.instanceId, input.productId, input.activationId));
   if (!activation) throw new NotFoundError("Activation not found");
   if (!timingSafeEqual(tokenHash, activation.machine_token_hash) || !timingSafeEqual(fingerprintHash, activation.fingerprint_hash)) {
     throw new AppError("ACTIVATION_CREDENTIALS_INVALID", "The Activation credentials are invalid.", 401);
@@ -558,8 +558,8 @@ export async function deactivateActivation(input: {
     const now = (input.now ?? new Date()).toISOString();
     await input.db.prepare(
       `UPDATE activations SET status = 'deactivated', deactivated_at = ?1, updated_at = ?1
-       WHERE account_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'`
-    ).bind(now, input.accountId, activation.license_id, activation.id).run();
+       WHERE instance_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'`
+    ).bind(now, input.instanceId, activation.license_id, activation.id).run();
   }
   return { activation_id: activation.id, status: "deactivated" as const };
 }

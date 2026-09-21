@@ -15,8 +15,15 @@ import { adminAuthRouter } from "./routes/auth.routes";
 import { clientRouter } from "./routes/client.routes";
 import { customerAuthRouter } from "./routes/customer-auth.routes";
 import { customerRouter } from "./routes/customer.routes";
-import { adminAccountRouter } from "./routes/admin/settings.routes";
-import { adminUsersRouter } from "./routes/admin/users.routes";
+import { adminInstanceRouter } from "./routes/admin/settings.routes";
+import {
+  adminMembersRouter,
+  adminProfileRouter,
+} from "./routes/admin/users.routes";
+import {
+  adminInvitationsRouter,
+  invitationRouter,
+} from "./routes/invitation.routes";
 import { adminProductsRouter } from "./routes/admin/products.routes";
 import { adminLicensePlansRouter } from "./routes/admin/license-plans.routes";
 import { adminLicensesRouter } from "./routes/admin/licenses.routes";
@@ -34,8 +41,8 @@ import { webhookRouter } from "./routes/webhook.routes";
 import { processDueBillingInboundEvents } from "./services/billing/fulfillment";
 import { runDeliveryScheduler } from "./services/delivery/scheduler";
 import { clearExpiredAcceptedEmailPayloads } from "./services/delivery/retention";
-import { recordSchedulerSuccess } from "./services/runtime/scheduler-health";
 import { clearExpiredInboundEventPayloads } from "./services/runtime/retention";
+import { readDeploymentSetupState } from "./services/identity/deployment-provisioning";
 
 const app = new Hono<AppContext>();
 app.onError(errorHandler);
@@ -78,11 +85,12 @@ api.use("*", async (c, next) => {
     await next();
     return;
   }
-  const initialized = await c.env.DB
-    .prepare(`SELECT id FROM system_settings WHERE id = 'current' LIMIT 1`)
-    .first<{ id: string }>();
-  if (!initialized) {
+  const setupState = await readDeploymentSetupState(c.env.DB);
+  if (setupState.status === "empty") {
     throw new AppError("SETUP_REQUIRED", "LicenKit setup has not completed.", 503);
+  }
+  if (setupState.status === "inconsistent") {
+    throw new AppError("SETUP_STATE_INCONSISTENT", "Database initialization state is inconsistent", 500);
   }
   await next();
 });
@@ -92,6 +100,7 @@ api.route("/client", clientRouter);
 api.route("/customer/auth", customerAuthRouter);
 api.route("/customer", customerRouter);
 api.route("/webhooks", webhookRouter);
+api.route("/invitations", invitationRouter);
 
 const admin = new Hono<AppContext>();
 admin.use("*", adminSessionAuth);
@@ -107,8 +116,10 @@ admin.use("*", async (c, next) => {
     });
   });
 });
-admin.route("/account", adminAccountRouter);
-admin.route("/users", adminUsersRouter);
+admin.route("/instance", adminInstanceRouter);
+admin.route("/members", adminMembersRouter);
+admin.route("/profile", adminProfileRouter);
+admin.route("/invitations", adminInvitationsRouter);
 admin.route("/products", adminProductsRouter);
 admin.route("/license-plans", adminLicensePlansRouter);
 admin.route("/licenses", adminLicensesRouter);
@@ -136,7 +147,6 @@ export { app };
 export default {
   fetch: app.fetch,
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const startedAt = Date.now();
     ctx.waitUntil(
       (async () => {
         await Promise.all([
@@ -147,7 +157,6 @@ export default {
           clearExpiredInboundEventPayloads(env.DB),
           clearExpiredAcceptedEmailPayloads(env.DB),
         ]);
-        await recordSchedulerSuccess(env.DB, startedAt);
       })(),
     );
   },

@@ -1,11 +1,22 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { eq, and, desc, sql, like, or } from "drizzle-orm";
 import type { AppContext } from "../../types";
 import { getTenantDB } from "../../infra/db";
 import { auditLogs } from "../../infra/db/schema";
 import { requireRole } from "../../middleware/auth";
+import { toSnakeCaseJson } from "./snake-case-json";
 
 export const adminAuditRouter = new Hono<AppContext>();
+
+const AuditQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  action: z.string().optional(),
+  resource_type: z.string().optional(),
+  actor_id: z.string().optional(),
+  query: z.string().optional(),
+}).strict();
 
 /**
  * GET /api/v1/admin/audit-logs
@@ -14,21 +25,25 @@ export const adminAuditRouter = new Hono<AppContext>();
  */
 adminAuditRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const userId = c.get("userId")!;
-  const role = c.get("userRole")!;
+  const role = c.get("instanceRole")!;
 
-  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10));
-  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "20", 10)));
+  const input = AuditQuerySchema.parse(c.req.query());
+  const page = input.page;
+  const limit = input.limit;
   const offset = (page - 1) * limit;
 
-  const action = c.req.query("action");
-  const resourceType = c.req.query("resourceType") || c.req.query("resource_type");
-  const actorId = c.req.query("actorId") || c.req.query("actor_id") || c.req.query("userId") || c.req.query("user_id");
-  const query = c.req.query("query");
+  const action = input.action;
+  const resourceType = input.resource_type;
+  const actorId = input.actor_id;
+  const query = input.query;
 
   // Pushdown SQL conditions directly to SQLite / D1
-  const conditions = [eq(auditLogs.accountId, accountId)];
+  const conditions = [
+    eq(auditLogs.scopeType, "instance"),
+    eq(auditLogs.instanceId, instanceId),
+  ];
 
   if (action && action !== "all") {
     conditions.push(eq(auditLogs.action, action));
@@ -88,23 +103,23 @@ adminAuditRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), a
         type: r.actorType,
       },
       action: r.action,
-      resourceType: r.resourceType,
-      resourceId: r.resourceId,
-      createdAt: r.createdAt,
+      resource_type: r.resourceType,
+      resource_id: r.resourceId,
+      created_at: r.createdAt,
     };
     if (role === "viewer") return summary;
     return {
       ...summary,
-      accountId: r.accountId,
+      instance_id: r.instanceId,
       actor: {
         ...summary.actor,
-        userId: r.actorUserId,
-        customerId: r.actorCustomerId,
+        user_id: r.actorUserId,
+        customer_id: r.actorCustomerId,
       },
-      requestId: r.requestId,
-      details: parsedDetails,
+      request_id: r.requestId,
+      details: toSnakeCaseJson(parsedDetails),
       ip: r.ip,
-      userAgent: r.userAgent,
+      user_agent: r.userAgent,
     };
   });
 
@@ -118,9 +133,9 @@ adminAuditRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), a
         page,
         limit,
         total,
-        totalItems: total,
-        totalPages,
-        hasNext: page < totalPages,
+        total_items: total,
+        total_pages: totalPages,
+        has_next: page < totalPages,
       },
     },
   });

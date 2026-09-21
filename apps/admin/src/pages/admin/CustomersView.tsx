@@ -70,7 +70,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
           </div> : null}
         </div>
       )}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="编辑 Customer 联系身份" description="目标邮箱必须在当前 Account 内唯一；不会自动合并 Customer。">
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="编辑 Customer 联系身份" description="目标邮箱必须在当前 Instance 内唯一；不会自动合并 Customer。">
         <form className="form-stack" onSubmit={save}><Field label="姓名"><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="邮箱"><Input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setEditOpen(false)}>取消</Button><Button type="submit" loading={saving}>保存并吊销旧会话</Button></div></form>
       </Modal>
     </div>

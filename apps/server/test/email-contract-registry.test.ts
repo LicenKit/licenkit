@@ -32,7 +32,7 @@ function expectCode(action: () => unknown, code: string): void {
 
 function licenseVariables(extra: Record<string, unknown> = {}) {
   return {
-    account_name: "Example Team",
+    instance_name: "Example Team",
     product_id: PRODUCT_ID,
     product_name: "Example App",
     license_id: LICENSE_ID,
@@ -49,17 +49,18 @@ function placeholders(value: string): string[] {
 }
 
 describe("email contract registry", () => {
-  it("registers the four V1 contracts with the shared public variables", () => {
+  it("registers the V1 contracts with the shared public variables", () => {
     const contracts = listEmailNotificationContracts();
     expect(contracts.map((item) => `${item.notificationType}@${item.version}`)).toEqual([
       "customer.license_issued@1",
       "customer.license_recovered@1",
       "customer.license_security_reset@1",
       "customer.portal_access_requested@1",
+      "instance.member_invited@1",
     ]);
-    expect(COMMON_EMAIL_VARIABLES.map((item) => item.name)).toEqual(["account_name"]);
+    expect(COMMON_EMAIL_VARIABLES.map((item) => item.name)).toEqual(["instance_name"]);
     for (const contract of contracts) {
-      expect(contract.variables[0]?.name).toBe("account_name");
+      expect(contract.variables[0]?.name).toBe("instance_name");
       expect(contract.variables.map((item) => item.name)).not.toContain("recipient_email");
       for (const descriptor of contract.variables) {
         expect(descriptor.example).not.toBe("");
@@ -74,10 +75,11 @@ describe("email contract registry", () => {
         contract.notificationType,
         contract.version,
         fixedExample,
-        contract.notificationType === "customer.portal_access_requested"
+        contract.notificationType === "customer.portal_access_requested" ||
+          contract.notificationType === "instance.member_invited"
           ? {
               trustedSiteUrl: "https://license.example.com",
-              expectedAccountSlug: "example-team",
+              expectedInstanceSlug: "example-team",
             }
           : {},
       );
@@ -179,7 +181,7 @@ describe("email contract registry", () => {
     const trustedSiteUrl = "https://license.example.com/site";
     const accessUrl = buildCustomerPortalAccessUrl({
       trustedSiteUrl,
-      accountSlug: "example-team",
+      instanceSlug: "example-team",
       oneTimeToken: `mlk_${"0".repeat(64)}`,
     });
     expect(accessUrl).toBe(
@@ -190,11 +192,11 @@ describe("email contract registry", () => {
         "customer.portal_access_requested",
         1,
         {
-          account_name: "Example Team",
+          instance_name: "Example Team",
           access_url: accessUrl,
           expires_at: "2026-10-19T10:15:00.000Z",
         },
-        { trustedSiteUrl, expectedAccountSlug: "example-team" },
+        { trustedSiteUrl, expectedInstanceSlug: "example-team" },
       ),
     ).toMatchObject({ access_url: accessUrl });
     expectCode(
@@ -203,7 +205,7 @@ describe("email contract registry", () => {
           "customer.portal_access_requested",
           1,
           {
-            account_name: "Example Team",
+            instance_name: "Example Team",
             access_url: accessUrl,
             expires_at: "2026-10-19T10:15:00.000Z",
           },
@@ -216,11 +218,11 @@ describe("email contract registry", () => {
           "customer.portal_access_requested",
           1,
           {
-            account_name: "Example Team",
+            instance_name: "Example Team",
             access_url: `https://evil.example/customer/example-team/auth#token=${"0".repeat(64)}`,
             expires_at: "2026-10-19T10:15:00.000Z",
           },
-          { trustedSiteUrl, expectedAccountSlug: "example-team" },
+          { trustedSiteUrl, expectedInstanceSlug: "example-team" },
         ),
       "EMAIL_ACCESS_URL_UNTRUSTED",
     );
@@ -236,11 +238,11 @@ describe("email contract registry", () => {
             "customer.portal_access_requested",
             1,
             {
-              account_name: "Example Team",
+              instance_name: "Example Team",
               access_url: untrustedAccessUrl,
               expires_at: "2026-10-19T10:15:00.000Z",
             },
-            { trustedSiteUrl, expectedAccountSlug: "example-team" },
+            { trustedSiteUrl, expectedInstanceSlug: "example-team" },
           ),
         "EMAIL_ACCESS_URL_UNTRUSTED",
       );
@@ -249,7 +251,7 @@ describe("email contract registry", () => {
       () =>
         buildCustomerPortalAccessUrl({
           trustedSiteUrl,
-          accountSlug: "example-team",
+          instanceSlug: "example-team",
           oneTimeToken: `mlk_${"A".repeat(64)}`,
         }),
       "EMAIL_PORTAL_TOKEN_INVALID",
@@ -258,7 +260,7 @@ describe("email contract registry", () => {
 });
 
 describe("email Provider template example registry", () => {
-  it("registers fixed Resend Subject, HTML and Text examples for all four contracts", () => {
+  it("registers fixed Resend Subject, HTML and Text examples for every contract", () => {
     expect(Object.keys(EMAIL_PROVIDER_TEMPLATE_REGISTRY)).toEqual(["resend"]);
     for (const contract of listEmailNotificationContracts()) {
       const registered = getEmailProviderTemplateExample(

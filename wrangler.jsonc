@@ -23,6 +23,9 @@
   "triggers": {
     "crons": ["* * * * *"]
   },
+  "observability": {
+    "enabled": true
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

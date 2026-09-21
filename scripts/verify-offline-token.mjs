@@ -96,9 +96,48 @@ async function verifyOfflineToken(token, publicKeyBase64) {
     const header = base64UrlToJson(headerB64);
     const claims = base64UrlToJson(claimsB64);
 
+    const unsupportedHeaders = Object.keys(header).filter(
+      (key) => !["alg", "typ", "kid"].includes(key),
+    );
+    if (unsupportedHeaders.length > 0) {
+      throw new Error(`Unsupported protected header '${unsupportedHeaders[0]}'`);
+    }
+    if (header.alg !== "EdDSA") throw new Error("Protected alg must be EdDSA");
+    if (header.typ !== "licenkit-license+jwt") {
+      throw new Error("Protected typ must be licenkit-license+jwt");
+    }
+    if (typeof header.kid !== "string" || !header.kid) {
+      throw new Error("Protected kid is required");
+    }
+    if (Object.prototype.hasOwnProperty.call(claims, "acc")) {
+      throw new Error("Legacy Claim 'acc' is not supported");
+    }
+    for (const field of ["lic", "act", "ins", "prd", "rel", "ver", "plt", "fp"]) {
+      if (typeof claims[field] !== "string" || claims[field] === "") {
+        throw new Error(`Claim '${field}' must be a non-empty string`);
+      }
+    }
+    for (const field of ["rat", "iat", "exp"]) {
+      if (!Number.isSafeInteger(claims[field])) {
+        throw new Error(`Claim '${field}' must be an integer timestamp`);
+      }
+    }
+    for (const field of ["lexp", "upd"]) {
+      if (claims[field] !== null && !Number.isSafeInteger(claims[field])) {
+        throw new Error(`Claim '${field}' must be null or an integer timestamp`);
+      }
+    }
+    if (!Array.isArray(claims.fea) || claims.fea.some((feature) => typeof feature !== "string")) {
+      throw new Error("Claim 'fea' must be an array of strings");
+    }
+    if (claims.exp <= claims.iat) throw new Error("Token exp must be later than iat");
+    if (claims.lexp !== null && claims.exp > claims.lexp) {
+      throw new Error("Token exp cannot be later than License expiration");
+    }
+
     return { valid: true, header, claims };
   } catch (err) {
-    return { valid: false, error: err.message };
+    return { valid: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -121,21 +160,25 @@ async function runTests() {
   const myHardwareFingerprint = "sha256:d8e8fca2dc6b1296e38f9024f0d63509988";
 
   const licenseHeader = {
-    alg: "Ed25519",
-    typ: "LK-TOKEN",
-    kid: "kid_01j8x9n4k1l2m3n4p5q6r7s8t9",
+    alg: "EdDSA",
+    typ: "licenkit-license+jwt",
+    kid: "key_01j8x9n4k1l2m3n4p5q6r7s8t9",
   };
 
   const licenseClaims = {
-    typ: "license",
-    lic_id: "lic_01j8x9n6d1e2f3g4h5i6j7k8l9",
-    sub: "LIC-ABCD-1234-EFGH-5678",
-    acc: "acc_01j8x9n2r4z7qw8m3p5v1y6t2c",
+    lic: "lic_01j8x9n6d1e2f3g4h5i6j7k8l9",
+    act: "act_01j8x9n7d1e2f3g4h5i6j7k8l9",
+    ins: "ins_01j8x9n2r4z7qw8m3p5v1y6t2c",
     prd: "prd_01j8x9n3a1b2c3d4e5f6g7h8j9",
-    pol: "pol_01j8x9n5u1v2w3x4y5z6a7b8c9",
+    rel: "rel_01j8x9n5u1v2w3x4y5z6a7b8c9",
+    ver: "1.2.3",
+    plt: "macos-universal",
+    rat: now - 60,
     fp: myHardwareFingerprint,
     iat: now,
     exp: now + 30 * 86400, // 30 days offline grace period
+    lexp: now + 365 * 86400,
+    upd: null,
     fea: ["4k_export", "pro_audio", "cloud_sync"],
   };
 
@@ -146,10 +189,13 @@ async function runTests() {
   // 3. Client Offline Verification (Using Public Key ONLY, zero network)
   const verifyResult = await verifyOfflineToken(token, publicKeyBase64);
   assert.strictEqual(verifyResult.valid, true, "Token signature should be mathematically valid");
-  assert.strictEqual(verifyResult.claims.sub, "LIC-ABCD-1234-EFGH-5678");
+  assert.strictEqual(verifyResult.header.alg, "EdDSA");
+  assert.strictEqual(verifyResult.header.typ, "licenkit-license+jwt");
+  assert.strictEqual(verifyResult.claims.ins, "ins_01j8x9n2r4z7qw8m3p5v1y6t2c");
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(verifyResult.claims, "acc"), false);
   assert.strictEqual(verifyResult.claims.fp, myHardwareFingerprint);
   assert.deepStrictEqual(verifyResult.claims.fea, ["4k_export", "pro_audio", "cloud_sync"]);
-  console.log("✓ Client offline mathematical verification PASSED");
+  console.log("✓ Current Instance-scoped Signed License contract verification PASSED");
 
   // 4. Test Hardware Fingerprint Mismatch (Anti-Spoofing / Device-Binding test)
   const anotherComputerFingerprint = "sha256:different_hardware_uuid_mac_address";
@@ -163,28 +209,17 @@ async function runTests() {
   assert.strictEqual(tamperedResult.valid, false, "Tampered token MUST fail signature verification");
   console.log("✓ Tamper detection PASSED: any modified byte causes cryptographic invalidation");
 
-  // 6. Test Free Trial Token
-  const trialHeader = {
-    alg: "Ed25519",
-    typ: "LK-TRIAL",
-    kid: "kid_01j8x9n4k1l2m3n4p5q6r7s8t9",
-  };
-  const trialClaims = {
-    typ: "trial",
-    acc: "acc_01j8x9n2r4z7qw8m3p5v1y6t2c",
-    prd: "prd_01j8x9n3a1b2c3d4e5f6g7h8j9",
-    fp: myHardwareFingerprint,
-    iat: now,
-    exp: now + 14 * 86400,
-    fea: ["basic_recording"],
-  };
-
-  const trialToken = await signOfflineToken(trialHeader, trialClaims, privateKeyPkcs8Base64);
-  const trialVerify = await verifyOfflineToken(trialToken, publicKeyBase64);
-  assert.strictEqual(trialVerify.valid, true);
-  assert.strictEqual(trialVerify.claims.typ, "trial");
-  assert.deepStrictEqual(trialVerify.claims.fea, ["basic_recording"]);
-  console.log("✓ Trial Token signing & offline verification PASSED");
+  // 6. Reject the retired Account-scoped Claim even when its signature is valid.
+  const { ins: _instance, ...legacyClaims } = licenseClaims;
+  const legacyToken = await signOfflineToken(
+    licenseHeader,
+    { ...legacyClaims, acc: "legacy-instance-id" },
+    privateKeyPkcs8Base64,
+  );
+  const legacyVerify = await verifyOfflineToken(legacyToken, publicKeyBase64);
+  assert.strictEqual(legacyVerify.valid, false);
+  assert.strictEqual(legacyVerify.error, "Legacy Claim 'acc' is not supported");
+  console.log("✓ Retired Account-scoped Claim rejection PASSED");
 
   console.log("\nALL M06 OFFLINE TOKEN TESTS PASSED SUCCESSFULLY! 🚀");
 }

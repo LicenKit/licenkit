@@ -5,7 +5,10 @@ import type { AppContext } from "../types";
 import { hashPassword, timingSafeEqual } from "../infra/crypto";
 import { AppError, UnauthorizedError } from "../middleware/error";
 import { requireExactOrigin, setupGuard } from "../middleware/auth";
-import { prepareAccountWithOwner } from "../services/identity/account-provisioning";
+import {
+  prepareInitialDeployment,
+  readDeploymentSetupState,
+} from "../services/identity/deployment-provisioning";
 import {
   createSessionSecrets,
   positiveIntegerSetting,
@@ -16,17 +19,23 @@ import { prepareAuditInsert } from "../services/identity/audit";
 
 export const setupRouter = new Hono<AppContext>();
 
+const VerifyTokenSchema = z.object({
+  setup_token: z.string().min(1),
+}).strict();
+
 const SetupSchema = z.object({
-  setupToken: z.string().min(1),
-  instanceName: z.string().trim().min(1).max(120),
-  siteUrl: z.string().trim().url().max(2048),
-  accountSlug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(63),
-  owner: z.object({
+  setup_token: z.string().min(1),
+  user: z.object({
     name: z.string().trim().min(1).max(120),
     email: z.string().email().max(320),
     password: z.string().min(12).max(256),
-  }),
-});
+  }).strict(),
+  instance: z.object({
+    name: z.string().trim().min(1).max(120),
+    slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(63),
+    site_url: z.string().trim().url().max(2048),
+  }).strict(),
+}).strict();
 
 function normalizeSameOriginSiteUrl(value: string, appOrigin: string): string {
   const url = new URL(value);
@@ -49,132 +58,145 @@ function normalizeSameOriginSiteUrl(value: string, appOrigin: string): string {
   return `${url.origin}${path === "" || path === "/" ? "" : path}`;
 }
 
-async function setupCounts(db: D1Database) {
-  const result = await db
-    .prepare(
-      `SELECT
-         (SELECT COUNT(*) FROM system_settings) AS settings_count,
-         (SELECT COUNT(*) FROM accounts) AS account_count,
-         (SELECT COUNT(*) FROM users) AS user_count`
-    )
-    .all<{ settings_count: number; account_count: number; user_count: number }>();
-  return result.results[0];
+function requireValidSetupToken(configuredValue: string | undefined, submittedValue: string): void {
+  const configuredToken = configuredValue?.trim();
+  if (!configuredToken) {
+    throw new AppError("SETUP_CONFIGURATION_MISSING", "INITIAL_SETUP_TOKEN is not configured", 500);
+  }
+  if (!timingSafeEqual(submittedValue, configuredToken)) {
+    throw new UnauthorizedError("Setup token is invalid");
+  }
 }
 
+setupRouter.use("*", async (c, next) => {
+  c.header("Cache-Control", "no-store");
+  await next();
+});
+
 setupRouter.get("/status", async (c) => {
-  const counts = await setupCounts(c.env.DB);
-  if (!counts) throw new AppError("SETUP_STATE_UNAVAILABLE", "Setup state could not be read", 500);
-  const empty = counts.settings_count === 0 && counts.account_count === 0 && counts.user_count === 0;
-  const initialized = counts.settings_count === 1 && counts.account_count > 0 && counts.user_count > 0;
-  if (!empty && !initialized) {
+  const state = await readDeploymentSetupState(c.env.DB);
+  if (state.status === "inconsistent") {
     throw new AppError("SETUP_STATE_INCONSISTENT", "Database initialization state is inconsistent", 500);
   }
-  return c.json({ success: true, data: { initialized } });
+  return c.json({ success: true, data: { initialized: state.status === "completed" } });
 });
+
+setupRouter.post(
+  "/verify-token",
+  requireExactOrigin,
+  setupGuard,
+  async (c) => {
+    const input = VerifyTokenSchema.parse(await c.req.json());
+    requireValidSetupToken(c.env.INITIAL_SETUP_TOKEN, input.setup_token);
+    return c.json({ success: true, data: { valid: true } });
+  },
+);
 
 setupRouter.post(
   "/",
   requireExactOrigin,
   setupGuard,
   async (c) => {
-  const input = SetupSchema.parse(await c.req.json());
-  const configuredToken = ((c.env as any).INITIAL_SETUP_TOKEN as string | undefined)?.trim();
-  if (!configuredToken) {
-    throw new AppError("SETUP_CONFIGURATION_MISSING", "INITIAL_SETUP_TOKEN is not configured", 500);
-  }
-  if (!timingSafeEqual(input.setupToken, configuredToken)) {
-    throw new UnauthorizedError("Setup token is invalid");
-  }
+    const input = SetupSchema.parse(await c.req.json());
+    requireValidSetupToken(c.env.INITIAL_SETUP_TOKEN, input.setup_token);
 
-  const now = new Date();
-  const nowIso = now.toISOString();
-  const origin = new URL(c.req.url).origin;
-  const siteUrl = normalizeSameOriginSiteUrl(input.siteUrl, origin);
-  const accountId = `acc_${ulid().toLowerCase()}`;
-  const ownerId = `usr_${ulid().toLowerCase()}`;
-  const sessionId = `ase_${ulid().toLowerCase()}`;
-  const email = input.owner.email.trim().toLowerCase();
-  const [passwordHash, secrets] = await Promise.all([
-    hashPassword(input.owner.password),
-    createSessionSecrets("adm"),
-  ]);
-  const sessionTtl = positiveIntegerSetting(
-    (c.env as any).ADMIN_SESSION_TTL_SECONDS,
-    604_800,
-    "ADMIN_SESSION_TTL_SECONDS"
-  );
-  const expiresAt = new Date(now.getTime() + sessionTtl * 1000).toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const origin = new URL(c.req.url).origin;
+    const siteUrl = normalizeSameOriginSiteUrl(input.instance.site_url, origin);
+    const instanceId = `ins_${ulid().toLowerCase()}`;
+    const userId = `usr_${ulid().toLowerCase()}`;
+    const sessionId = `ase_${ulid().toLowerCase()}`;
+    const email = input.user.email.trim().toLowerCase();
+    const [passwordHash, secrets] = await Promise.all([
+      hashPassword(input.user.password),
+      createSessionSecrets("adm"),
+    ]);
+    const sessionTtl = positiveIntegerSetting(
+      c.env.ADMIN_SESSION_TTL_SECONDS,
+      604_800,
+      "ADMIN_SESSION_TTL_SECONDS",
+    );
+    const expiresAt = new Date(now.getTime() + sessionTtl * 1000).toISOString();
 
-  const statements: D1PreparedStatement[] = [
-    c.env.DB
-      .prepare(
-        `INSERT INTO system_settings (
-           id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at
-         ) VALUES ('current', ?1, ?2, ?3, ?4, ?5, ?5)`
-      )
-      .bind(input.instanceName, origin, siteUrl, `${origin}/api/v1`, nowIso),
-    ...prepareAccountWithOwner({
-      db: c.env.DB,
-      account: { id: accountId, name: input.instanceName, slug: input.accountSlug },
-      owner: { id: ownerId, name: input.owner.name, email, passwordHash },
-      now: nowIso,
-    }),
-    c.env.DB
-      .prepare(
-        `INSERT INTO admin_sessions (
-           id, account_id, user_id, session_token_hash, csrf_token_hash,
-           expires_at, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
-      )
-      .bind(
-        sessionId,
-        accountId,
-        ownerId,
-        secrets.sessionTokenHash,
-        secrets.csrfTokenHash,
-        expiresAt,
-        nowIso
-      ),
-    prepareAuditInsert({
-      db: c.env.DB,
-      accountId,
-      actor: { type: "user", id: ownerId },
-      action: "setup.completed",
-      resourceType: "system_settings",
-      resourceId: "current",
-      details: { accountId, ownerId, siteUrl },
-      ip: requestIp(c),
-      userAgent: c.req.header("user-agent"),
-      now: nowIso,
-    }),
-  ];
+    const statements: D1PreparedStatement[] = [
+      ...prepareInitialDeployment({
+        db: c.env.DB,
+        user: { id: userId, name: input.user.name, email, passwordHash },
+        instance: {
+          id: instanceId,
+          name: input.instance.name,
+          slug: input.instance.slug,
+          siteUrl,
+        },
+        session: {
+          id: sessionId,
+          sessionTokenHash: secrets.sessionTokenHash,
+          csrfTokenHash: secrets.csrfTokenHash,
+          expiresAt,
+        },
+        now: nowIso,
+      }),
+      prepareAuditInsert({
+        db: c.env.DB,
+        scopeType: "instance",
+        instanceId,
+        actor: { type: "user", id: userId },
+        action: "instance.setup_completed",
+        resourceType: "instance",
+        resourceId: instanceId,
+        details: { instance_id: instanceId, user_id: userId, site_url: siteUrl },
+        requestId: c.get("requestId"),
+        ip: requestIp(c),
+        userAgent: c.req.header("user-agent"),
+        now: nowIso,
+      }),
+      c.env.DB
+        .prepare(
+          `INSERT INTO deployment_bootstrap (singleton_key, completed_at)
+           VALUES ('deployment', ?1)`,
+        )
+        .bind(nowIso),
+    ];
 
-  try {
-    await c.env.DB.batch(statements);
-  } catch (error) {
-    const counts = await setupCounts(c.env.DB);
-    if (counts && counts.settings_count > 0) {
-      throw new AppError("SETUP_ALREADY_COMPLETED", "Instance setup has already completed", 409);
+    try {
+      await c.env.DB.batch(statements);
+    } catch (error) {
+      try {
+        const state = await readDeploymentSetupState(c.env.DB);
+        if (state.status === "completed") {
+          throw new AppError("SETUP_ALREADY_COMPLETED", "Instance setup has already completed", 409);
+        }
+      } catch (stateError) {
+        if (stateError instanceof AppError && stateError.code === "SETUP_ALREADY_COMPLETED") {
+          throw stateError;
+        }
+      }
+      throw error;
     }
-    throw error;
-  }
 
-  setAdminCookies(c, {
-    accountId,
-    sessionToken: secrets.sessionToken,
-    csrfToken: secrets.csrfToken,
-    maxAge: sessionTtl,
-  });
-  c.header("Cache-Control", "no-store");
-  return c.json(
-    {
-      success: true,
-      data: {
-        account: { id: accountId, name: input.instanceName, slug: input.accountSlug },
-        owner: { id: ownerId, name: input.owner.name, email, role: "owner" },
+    setAdminCookies(c, {
+      sessionToken: secrets.sessionToken,
+      csrfToken: secrets.csrfToken,
+      maxAge: sessionTtl,
+    });
+    return c.json(
+      {
+        success: true,
+        data: {
+          user: { id: userId, name: input.user.name, email },
+          instance: {
+            id: instanceId,
+            name: input.instance.name,
+            slug: input.instance.slug,
+            site_url: siteUrl,
+            status: "active",
+          },
+          membership: { role: "owner", status: "active" },
+          expires_at: expiresAt,
+        },
       },
-    },
-    201
-  );
-  }
+      201,
+    );
+  },
 );

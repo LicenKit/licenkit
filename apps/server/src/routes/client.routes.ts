@@ -12,7 +12,7 @@ const ReleaseFields = {
 };
 
 const ActivateSchema = z.object({
-  account_id: z.string().min(1),
+  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   license_key: z.string().min(16).max(200),
   fingerprint: z.string().trim().min(8).max(512),
@@ -26,7 +26,7 @@ clientRouter.post("/activate", async (c) => {
   const data = await activateLicense({
     db: c.env.DB,
     env: c.env,
-    accountId: input.account_id,
+    instanceId: input.instance_id,
     productId: input.product_id,
     licenseKey: input.license_key,
     fingerprint: input.fingerprint,
@@ -41,7 +41,7 @@ clientRouter.post("/activate", async (c) => {
 });
 
 const ValidateSchema = z.object({
-  account_id: z.string().min(1),
+  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   activation_id: z.string().min(1),
   machine_token: z.string().min(16),
@@ -55,7 +55,7 @@ clientRouter.post("/validate", async (c) => {
   const data = await validateActivation({
     db: c.env.DB,
     env: c.env,
-    accountId: input.account_id,
+    instanceId: input.instance_id,
     productId: input.product_id,
     activationId: input.activation_id,
     machineToken: input.machine_token,
@@ -68,7 +68,7 @@ clientRouter.post("/validate", async (c) => {
 });
 
 const TrialClaimSchema = z.object({
-  account_id: z.string().min(1),
+  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   fingerprint: z.string().trim().min(8).max(512),
   device_platform: z.string().trim().min(1).max(100).optional(),
@@ -79,7 +79,7 @@ clientRouter.post("/trials/claim", async (c) => {
   const input = TrialClaimSchema.parse(await c.req.json());
   const data = await claimTrial({
     db: c.env.DB,
-    accountId: input.account_id,
+    instanceId: input.instance_id,
     productId: input.product_id,
     fingerprint: input.fingerprint,
     releaseVersion: input.release_version,
@@ -90,7 +90,7 @@ clientRouter.post("/trials/claim", async (c) => {
 });
 
 const TrialValidateSchema = z.object({
-  account_id: z.string().min(1),
+  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   trial_id: z.string().min(1),
   trial_token: z.string().min(16),
@@ -102,7 +102,7 @@ clientRouter.post("/trials/validate", async (c) => {
   const input = TrialValidateSchema.parse(await c.req.json());
   const data = await validateTrial({
     db: c.env.DB,
-    accountId: input.account_id,
+    instanceId: input.instance_id,
     productId: input.product_id,
     trialId: input.trial_id,
     trialToken: input.trial_token,
@@ -115,7 +115,7 @@ clientRouter.post("/trials/validate", async (c) => {
 });
 
 const DeactivateSchema = z.object({
-  account_id: z.string().min(1),
+  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   activation_id: z.string().min(1),
   machine_token: z.string().min(16),
@@ -126,7 +126,7 @@ clientRouter.post("/deactivate", async (c) => {
   const input = DeactivateSchema.parse(await c.req.json());
   const data = await deactivateActivation({
     db: c.env.DB,
-    accountId: input.account_id,
+    instanceId: input.instance_id,
     productId: input.product_id,
     activationId: input.activation_id,
     machineToken: input.machine_token,
@@ -136,15 +136,17 @@ clientRouter.post("/deactivate", async (c) => {
 });
 
 clientRouter.get("/products/:productId/signing-keys", async (c) => {
+  const query = z.object({ instance_id: z.string().min(1) }).strict().parse(c.req.query());
+  const instanceId = query.instance_id;
   const productId = c.req.param("productId");
   const result = await c.env.DB.prepare(
     `SELECT k.id, k.algorithm, k.public_key, k.status, k.created_at, k.retired_at, k.revoked_at
      FROM signing_keys AS k
      JOIN products AS p
-       ON p.account_id = k.account_id AND p.id = k.product_id
-     WHERE k.product_id = ?1 AND k.account_id = p.account_id
+       ON p.instance_id = k.instance_id AND p.id = k.product_id
+     WHERE k.instance_id = ?1 AND k.product_id = ?2
      ORDER BY k.created_at DESC`
-  ).bind(productId).all<{
+  ).bind(instanceId, productId).all<{
     id: string;
     algorithm: string;
     public_key: string;
@@ -156,10 +158,10 @@ clientRouter.get("/products/:productId/signing-keys", async (c) => {
   return c.json({ success: true, data: { items: result.results.map((key) => ({
     id: key.id,
     algorithm: key.algorithm,
-    publicKey: key.public_key,
+    public_key: key.public_key,
     status: key.status,
-    createdAt: key.created_at,
-    retiredAt: key.retired_at,
-    revokedAt: key.revoked_at,
+    created_at: key.created_at,
+    retired_at: key.retired_at,
+    revoked_at: key.revoked_at,
   })) } });
 });

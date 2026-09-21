@@ -16,7 +16,7 @@ function customerAuthApp() {
 describe("V1 Customer Magic Link request contract", () => {
   let testEnv: TestEnvContext;
   let siteverify: ReturnType<typeof vi.fn>;
-  const accountId = "acc_magic";
+  const instanceId = "ins_magic";
   const customerId = "cus_magic";
 
   beforeEach(() => {
@@ -27,18 +27,13 @@ describe("V1 Customer Magic Link request contract", () => {
     } as any);
     const now = new Date().toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, site_url, api_base_url, initialized_at, updated_at)
-       VALUES ('current', 'Magic Link', 'https://license.example.test', 'https://license.example.test',
-               'https://license.example.test/api/v1', ?, ?)`
-    ).run(now, now);
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?, 'Magic Link', 'magic', 'https://license.example.test/site', 'active', ?, ?)`
+    ).run(instanceId, now, now);
     testEnv.sqliteDb.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, 'Magic Link', 'magic', 'active', ?, ?)`
-    ).run(accountId, now, now);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
+      `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
        VALUES (?, ?, 'buyer@example.test', 'Buyer', 'active', ?, ?)`
-    ).run(customerId, accountId, now, now);
+    ).run(customerId, instanceId, now, now);
     siteverify = vi.fn(async () => new Response(JSON.stringify({
       success: true,
       action: "customer_magic_link",
@@ -66,7 +61,7 @@ describe("V1 Customer Magic Link request contract", () => {
           "Content-Type": "application/json",
           "CF-Connecting-IP": "203.0.113.10",
         },
-        body: JSON.stringify({ accountSlug: "magic", email, turnstileToken }),
+        body: JSON.stringify({ instance_slug: "magic", email, turnstile_token: turnstileToken }),
       },
       testEnv.env,
       executionContext,
@@ -84,7 +79,7 @@ describe("V1 Customer Magic Link request contract", () => {
       JSON.stringify({ version: 1, apiKey: "re_magic_secret" }),
       testEnv.env,
       {
-        accountId,
+        instanceId,
         table: "email_integrations",
         rowId: integrationId,
         field: "credential_ciphertext",
@@ -92,20 +87,20 @@ describe("V1 Customer Magic Link request contract", () => {
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_integrations (
-         id, account_id, provider, name, credential_ciphertext,
+         id, instance_id, provider, name, credential_ciphertext,
          default_from_email, default_from_name, max_automatic_attempts,
          status, created_at, updated_at
        ) VALUES (?, ?, 'resend', 'Primary', ?, 'licenses@example.test',
          'Magic Link', 4, 'active', ?, ?)`,
-    ).run(integrationId, accountId, credentialCiphertext, now, now);
+    ).run(integrationId, instanceId, credentialCiphertext, now, now);
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_template_bindings (
-         id, account_id, email_integration_id, notification_type,
+         id, instance_id, email_integration_id, notification_type,
          contract_version, provider_template_ref,
          status, created_at, updated_at
        ) VALUES (?, ?, ?, 'customer.portal_access_requested', 1,
          'portal-access-v1', 'active', ?, ?)`,
-    ).run(bindingId, accountId, integrationId, now, now);
+    ).run(bindingId, instanceId, integrationId, now, now);
     return { integrationId, bindingId };
   }
 
@@ -127,15 +122,27 @@ describe("V1 Customer Magic Link request contract", () => {
 
   async function magicToken(deliveryId: string): Promise<string> {
     const row = testEnv.sqliteDb.prepare(
-      "SELECT variables_ciphertext FROM email_deliveries WHERE account_id = ? AND id = ?"
-    ).get(accountId, deliveryId) as any;
+      "SELECT variables_ciphertext FROM email_deliveries WHERE instance_id = ? AND id = ?"
+    ).get(instanceId, deliveryId) as any;
     const variables = JSON.parse(await decryptEnvelopeV1(row.variables_ciphertext, testEnv.env, {
-      accountId,
+      instanceId,
       table: "email_deliveries",
       rowId: deliveryId,
       field: "variables_ciphertext",
     }));
     return decodeURIComponent(new URL(variables.access_url).hash.slice("#token=".length));
+  }
+
+  async function consumeMagicLink(token: string): Promise<Response> {
+    return customerAuthApp().request(
+      "https://license.example.test/api/v1/customer/auth/magic-link/consume",
+      {
+        method: "POST",
+        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        body: JSON.stringify({ instance_slug: "magic", token }),
+      },
+      testEnv.env,
+    );
   }
 
   it("returns the runtime Turnstile Sitekey without caching it", async () => {
@@ -149,7 +156,7 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({
       success: true,
-      data: { turnstileSiteKey: "turnstile-site-key" },
+      data: { turnstile_site_key: "turnstile-site-key" },
     });
 
     delete (testEnv.env as any).TURNSTILE_SITE_KEY;
@@ -161,6 +168,44 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(missing.status).toBe(503);
     expect(missing.headers.get("cache-control")).toBe("no-store");
     expect((await missing.json() as any).error.code).toBe("TURNSTILE_CONFIGURATION_ERROR");
+  });
+
+  it("accepts only the public instance_slug selector", async () => {
+    const response = await customerAuthApp().request(
+      "https://license.example.test/api/v1/customer/auth/magic-link",
+      {
+        method: "POST",
+        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instanceSlug: "magic",
+          email: "buyer@example.test",
+          turnstile_token: "legacy-instance-selector",
+        }),
+      },
+      testEnv.env,
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json() as any).error.code).toBe("VALIDATION_ERROR");
+    expect(siteverify).not.toHaveBeenCalled();
+  });
+
+  it("rejects the legacy camelCase Turnstile field", async () => {
+    const response = await customerAuthApp().request(
+      "https://license.example.test/api/v1/customer/auth/magic-link",
+      {
+        method: "POST",
+        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instance_slug: "magic",
+          email: "buyer@example.test",
+          turnstileToken: "legacy-turnstile-field",
+        }),
+      },
+      testEnv.env,
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json() as any).error.code).toBe("VALIDATION_ERROR");
+    expect(siteverify).not.toHaveBeenCalled();
   });
 
   it("verifies Turnstile before creating one Challenge and Delivery", async () => {
@@ -341,17 +386,17 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(providerCalls[0].body.template).toMatchObject({
       id: "portal-access-v1",
       variables: {
-        account_name: "Magic Link",
+        instance_name: "Magic Link",
         expires_at: expect.stringMatching(/Z$/),
         access_url: expect.stringMatching(
-          /^https:\/\/license\.example\.test\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
+          /^https:\/\/license\.example\.test\/site\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
         ),
       },
     });
     expect(Object.keys(providerCalls[0].body.template.variables).sort()).toEqual([
       "access_url",
-      "account_name",
       "expires_at",
+      "instance_name",
     ]);
     expect(JSON.stringify(providerCalls[0].body)).not.toContain(":null");
     const acceptedDelivery = testEnv.sqliteDb.prepare(
@@ -407,7 +452,7 @@ describe("V1 Customer Magic Link request contract", () => {
       {
         method: "POST",
         headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({ accountSlug: "magic", token: originalToken }),
+        body: JSON.stringify({ instance_slug: "magic", token: originalToken }),
       },
       testEnv.env,
     );
@@ -448,10 +493,51 @@ describe("V1 Customer Magic Link request contract", () => {
       {
         method: "POST",
         headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
-        body: JSON.stringify({ accountSlug: "magic", token: originalToken }),
+        body: JSON.stringify({ instance_slug: "magic", token: originalToken }),
       },
       testEnv.env,
     );
     expect(consumeOld.status).toBe(200);
+  });
+
+  it("rolls back every loser-side effect when two consumers race for one Magic Link", async () => {
+    expect((await requestMagicLink()).status).toBe(200);
+    const challenge = challengeRows()[0];
+    const token = await magicToken(challenge.delivery_id);
+    const originalBatch = testEnv.d1.batch.bind(testEnv.d1);
+    let releaseFirstBatch: (() => void) | undefined;
+    let batchCalls = 0;
+    testEnv.d1.batch = async (statements: any[]) => {
+      batchCalls += 1;
+      if (batchCalls === 1) {
+        await new Promise<void>((resolve) => { releaseFirstBatch = resolve; });
+      } else if (batchCalls === 2) {
+        releaseFirstBatch?.();
+      }
+      return originalBatch(statements);
+    };
+
+    const responses = await Promise.all([consumeMagicLink(token), consumeMagicLink(token)]);
+    testEnv.d1.batch = originalBatch;
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 400]);
+    const rejected = responses.find((response) => response.status === 400)!;
+    const rejectedBody = await rejected.json() as any;
+    expect(rejectedBody.error.code).toBe("CUSTOMER_MAGIC_LINK_INVALID");
+    expect(rejectedBody.error.details.database_error).toContain(
+      "CUSTOMER_LOGIN_CHALLENGE_NOT_CONSUMABLE",
+    );
+
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT COUNT(*) AS count FROM customer_sessions WHERE instance_id = ? AND login_challenge_id = ?",
+    ).get(instanceId, challenge.id)).toEqual({ count: 1 });
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT COUNT(*) AS count FROM audit_logs WHERE instance_id = ? AND action = 'customer.magic_link.consumed'",
+    ).get(instanceId)).toEqual({ count: 1 });
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT consumed_at, revoked_at FROM customer_login_challenges WHERE instance_id = ? AND id = ?",
+    ).get(instanceId, challenge.id)).toMatchObject({
+      consumed_at: expect.any(String),
+      revoked_at: null,
+    });
   });
 });

@@ -3,7 +3,7 @@ import { jsonToBase64Url, signEd25519, base64ToBase64Url } from "../../infra/cry
 export interface SignedLicenseClaims {
   lic: string;
   act: string;
-  acc: string;
+  ins: string;
   prd: string;
   rel: string;
   ver: string;

@@ -32,7 +32,7 @@ export interface BillingWorkerEnv {
 
 interface InboundEventRow {
   id: string;
-  account_id: string;
+  instance_id: string;
   billing_provider_id: string;
   external_event_id: string;
   external_event_type: string;
@@ -151,8 +151,8 @@ function processingResultStatement(
          last_error_code = NULL, last_error_detail = NULL,
          next_attempt_at = NULL, locked_by = NULL, locked_until = NULL,
          processed_at = ?3, updated_at = ?3
-     WHERE account_id = ?4 AND id = ?5 AND status = 'processing' AND locked_by = ?6`,
-  ).bind(resultType, resultReferenceId, nowIso, event.account_id, event.id, workerId);
+     WHERE instance_id = ?4 AND id = ?5 AND status = 'processing' AND locked_by = ?6`,
+  ).bind(resultType, resultReferenceId, nowIso, event.instance_id, event.id, workerId);
 }
 
 async function markProcessed(
@@ -182,7 +182,7 @@ async function loadEventPayload(
   const raw = await decryptInboundPayload(
     event.payload_ciphertext,
     env,
-    event.account_id,
+    event.instance_id,
     event.id,
   );
   const parsed = parsePaddleWebhook(raw);
@@ -211,17 +211,17 @@ async function loadCorrelatedEvent(
   referenceValue: string,
 ): Promise<{ row: InboundEventRow; payload: PaddleWebhookEnvelope } | null> {
   const row = await env.DB.prepare(
-    `SELECT id, account_id, billing_provider_id, external_event_id, external_event_type,
+    `SELECT id, instance_id, billing_provider_id, external_event_id, external_event_type,
             external_customer_id, external_transaction_id, external_subscription_id,
             external_adjustment_id, external_occurred_at, payload_ciphertext,
             payload_expires_at, status,
             attempt_count, locked_by, received_at
      FROM inbound_events
-     WHERE account_id = ?1 AND billing_provider_id = ?2
+     WHERE instance_id = ?1 AND billing_provider_id = ?2
        AND external_event_type = ?3 AND ${referenceColumn} = ?4
      ORDER BY received_at DESC
      LIMIT 1`,
-  ).bind(event.account_id, event.billing_provider_id, type, referenceValue).first<InboundEventRow>();
+  ).bind(event.instance_id, event.billing_provider_id, type, referenceValue).first<InboundEventRow>();
   if (!row) return null;
   return { row, payload: await loadEventPayload(env, row) };
 }
@@ -249,7 +249,7 @@ async function processCustomerEvent(
   }
   const result = await syncTrustedBillingCustomer({
     db: env.DB,
-    accountId: event.account_id,
+    instanceId: event.instance_id,
     billingProviderId: event.billing_provider_id,
     source: "webhook",
     now,
@@ -290,7 +290,7 @@ async function resolveCustomerForNewPurchase(
   }
   let mapping = await getBillingCustomerByExternalId(
     env.DB,
-    event.account_id,
+    event.instance_id,
     event.billing_provider_id,
     externalCustomerId,
   );
@@ -299,7 +299,7 @@ async function resolveCustomerForNewPurchase(
       const customer = await fetchPaddleCustomer(provider, externalCustomerId, env);
       mapping = await syncTrustedBillingCustomer({
         db: env.DB,
-        accountId: event.account_id,
+        instanceId: event.instance_id,
         billingProviderId: event.billing_provider_id,
         source: "api",
         now,
@@ -358,9 +358,9 @@ async function resolveCustomerForNewPurchase(
   }
   const customer = await env.DB.prepare(
     `SELECT email, status FROM customers
-     WHERE account_id = ?1 AND id = ?2
+     WHERE instance_id = ?1 AND id = ?2
      LIMIT 1`,
-  ).bind(event.account_id, mapping.customer_id).first<{ email: string; status: string }>();
+  ).bind(event.instance_id, mapping.customer_id).first<{ email: string; status: string }>();
   if (!customer || customer.status !== "active") {
     throw new BillingProcessingError(
       "BILLING_CUSTOMER_DISABLED",
@@ -374,7 +374,7 @@ async function resolveCustomerForNewPurchase(
 
 async function getExistingSubscription(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   providerId: string,
   externalSubscriptionId: string,
 ): Promise<ExistingSubscriptionRow | null> {
@@ -385,18 +385,18 @@ async function getExistingSubscription(
             license.status AS license_status, license.status_reason
      FROM billing_subscriptions AS subscription
      JOIN licenses AS license
-       ON license.account_id = subscription.account_id AND license.id = subscription.license_id
-     WHERE subscription.account_id = ?1
+       ON license.instance_id = subscription.instance_id AND license.id = subscription.license_id
+     WHERE subscription.instance_id = ?1
        AND subscription.billing_provider_id = ?2
        AND subscription.external_subscription_id = ?3
      LIMIT 1`,
-  ).bind(accountId, providerId, externalSubscriptionId).first<ExistingSubscriptionRow>();
+  ).bind(instanceId, providerId, externalSubscriptionId).first<ExistingSubscriptionRow>();
   return row ?? null;
 }
 
 async function lookupOffer(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   providerId: string,
   externalPriceId: string,
   status: "active" | "draft",
@@ -412,17 +412,17 @@ async function lookupOffer(
             provider.environment AS provider_environment
      FROM billing_offers AS offer
      JOIN products AS product
-       ON product.account_id = offer.account_id AND product.id = offer.product_id
+       ON product.instance_id = offer.instance_id AND product.id = offer.product_id
      JOIN license_plans AS plan
-       ON plan.account_id = offer.account_id
+       ON plan.instance_id = offer.instance_id
       AND plan.product_id = offer.product_id
       AND plan.id = offer.license_plan_id
      JOIN billing_providers AS provider
-       ON provider.account_id = offer.account_id AND provider.id = offer.billing_provider_id
-     WHERE offer.account_id = ?1 AND offer.billing_provider_id = ?2
+       ON provider.instance_id = offer.instance_id AND provider.id = offer.billing_provider_id
+     WHERE offer.instance_id = ?1 AND offer.billing_provider_id = ?2
        AND offer.external_price_id = ?3 AND offer.status = ?4
      LIMIT 1`,
-  ).bind(accountId, providerId, externalPriceId, status).first<LicensePlanOfferRow>();
+  ).bind(instanceId, providerId, externalPriceId, status).first<LicensePlanOfferRow>();
   return row ?? null;
 }
 
@@ -487,7 +487,7 @@ async function resolveOfferAndVerification(input: {
   if (!verificationToken) {
     const offer = await lookupOffer(
       input.env.DB,
-      input.event.account_id,
+      input.event.instance_id,
       input.event.billing_provider_id,
       input.priceId,
       "active",
@@ -515,12 +515,12 @@ async function resolveOfferAndVerification(input: {
             offer.id AS offer_id
      FROM billing_checkout_verifications AS verification
      JOIN billing_offers AS offer
-       ON offer.account_id = verification.account_id
+       ON offer.instance_id = verification.instance_id
       AND offer.id = verification.billing_offer_id
      JOIN billing_providers AS provider
-       ON provider.account_id = offer.account_id
+       ON provider.instance_id = offer.instance_id
       AND provider.id = offer.billing_provider_id
-     WHERE verification.account_id = ?1
+     WHERE verification.instance_id = ?1
        AND verification.token_hash = ?2
        AND offer.billing_provider_id = ?3
        AND offer.external_price_id = ?4
@@ -528,7 +528,7 @@ async function resolveOfferAndVerification(input: {
        AND provider.environment = 'sandbox'
      LIMIT 1`,
   ).bind(
-    input.event.account_id,
+    input.event.instance_id,
     tokenHash,
     input.event.billing_provider_id,
     input.priceId,
@@ -549,7 +549,7 @@ async function resolveOfferAndVerification(input: {
   }
   const offer = await lookupOffer(
     input.env.DB,
-    input.event.account_id,
+    input.event.instance_id,
     input.event.billing_provider_id,
     input.priceId,
     "draft",
@@ -632,10 +632,10 @@ async function fulfillInitialPurchase(input: {
   }
   const alreadyIssued = await input.env.DB.prepare(
     `SELECT id FROM licenses
-     WHERE account_id = ?1 AND source_billing_provider_id = ?2
+     WHERE instance_id = ?1 AND source_billing_provider_id = ?2
        AND source_external_transaction_id = ?3
      LIMIT 1`,
-  ).bind(input.event.account_id, input.event.billing_provider_id, transactionId).first<{ id: string }>();
+  ).bind(input.event.instance_id, input.event.billing_provider_id, transactionId).first<{ id: string }>();
   if (alreadyIssued) {
     await markProcessed(
       input.env.DB,
@@ -673,7 +673,7 @@ async function fulfillInitialPurchase(input: {
     purchaseType,
     now: input.now,
   });
-  const provider = await getBillingProvider(input.env.DB, input.event.account_id, input.event.billing_provider_id);
+  const provider = await getBillingProvider(input.env.DB, input.event.instance_id, input.event.billing_provider_id);
   if (!provider) throw new BillingProcessingError("BILLING_PROVIDER_NOT_FOUND", "Billing Provider no longer exists.", "needs_attention");
   const externalCustomerId = stringOrNull(input.transaction.data.customer_id)
     ?? (input.subscription ? stringOrNull(input.subscription.data.customer_id) : null);
@@ -709,7 +709,7 @@ async function fulfillInitialPurchase(input: {
   const delivery = await prepareEmailNotificationDelivery({
     db: input.env.DB,
     env: input.env,
-    accountId: input.event.account_id,
+    instanceId: input.event.instance_id,
     customerId: customer.customerId,
     notificationType: "customer.license_issued",
     contractVersion: 1,
@@ -728,7 +728,7 @@ async function fulfillInitialPurchase(input: {
 
   const statements: D1PreparedStatement[] = [input.env.DB.prepare(
     `INSERT INTO licenses (
-       id, account_id, customer_id, product_id, plan_id, plan_revision,
+       id, instance_id, customer_id, product_id, plan_id, plan_revision,
        license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
        payment_grace_seconds, max_activations, features_json, key_hash,
        key_version, source, source_billing_provider_id, source_external_transaction_id,
@@ -740,7 +740,7 @@ async function fulfillInitialPurchase(input: {
      )`,
   ).bind(
     licenseId,
-    input.event.account_id,
+    input.event.instance_id,
     customer.customerId,
     offer.product_id,
     offer.plan_id,
@@ -768,7 +768,7 @@ async function fulfillInitialPurchase(input: {
     const subscriptionId = `bsu_${ulid().toLowerCase()}`;
     statements.push(input.env.DB.prepare(
       `INSERT INTO billing_subscriptions (
-         id, account_id, billing_provider_id, license_id,
+         id, instance_id, billing_provider_id, license_id,
          external_subscription_id, external_customer_id, external_price_id,
          status, current_period_start, current_period_end, next_billed_at,
          trial_type, trial_started_at, trial_ends_at, cancel_at_period_end,
@@ -779,7 +779,7 @@ async function fulfillInitialPurchase(input: {
        )`,
     ).bind(
       subscriptionId,
-      input.event.account_id,
+      input.event.instance_id,
       input.event.billing_provider_id,
       licenseId,
       subscriptionFacts.externalSubscriptionId,
@@ -804,9 +804,9 @@ async function fulfillInitialPurchase(input: {
       `UPDATE billing_checkout_verifications
        SET status = 'delivery_pending', external_transaction_id = ?1,
            license_id = ?2, delivery_id = ?3, updated_at = ?4
-       WHERE account_id = ?5 AND id = ?6 AND status = 'pending' AND expires_at > ?4`,
+       WHERE instance_id = ?5 AND id = ?6 AND status = 'pending' AND expires_at > ?4`,
     ).bind(transactionId, licenseId, delivery.deliveryId, nowIso,
-      input.event.account_id, resolved.verificationId));
+      input.event.instance_id, resolved.verificationId));
   }
   statements.push(processingResultStatement(
     input.env.DB,
@@ -818,7 +818,7 @@ async function fulfillInitialPurchase(input: {
   ));
   statements.push(prepareLicenseAudit({
     db: input.env.DB,
-    accountId: input.event.account_id,
+    instanceId: input.event.instance_id,
     actor: { type: "system" },
     action: isVerification ? "billing.checkout_verification.fulfilled" : "billing.license.fulfilled",
     resourceType: "license",
@@ -855,10 +855,10 @@ async function fulfillInitialPurchase(input: {
     if (String(error).includes("UNIQUE")) {
       const raced = await input.env.DB.prepare(
         `SELECT id FROM licenses
-         WHERE account_id = ?1 AND source_billing_provider_id = ?2
+         WHERE instance_id = ?1 AND source_billing_provider_id = ?2
            AND source_external_transaction_id = ?3
          LIMIT 1`,
-      ).bind(input.event.account_id, input.event.billing_provider_id, transactionId).first<{ id: string }>();
+      ).bind(input.event.instance_id, input.event.billing_provider_id, transactionId).first<{ id: string }>();
       if (raced) {
         await markProcessed(input.env.DB, input.event, input.workerId, "duplicate_transaction", raced.id, nowIso);
         return;
@@ -871,7 +871,7 @@ async function fulfillInitialPurchase(input: {
       await dispatchDelivery({
         db: input.env.DB,
         env: input.env,
-        accountId: input.event.account_id,
+        instanceId: input.event.instance_id,
         deliveryId: delivery.deliveryId,
         now: input.now,
       });
@@ -881,7 +881,7 @@ async function fulfillInitialPurchase(input: {
       // immediate trigger failure must not rewrite those durable facts.
       console.error("Billing fulfillment email Delivery immediate trigger failed", {
         code: "EMAIL_DELIVERY_IMMEDIATE_TRIGGER_FAILED",
-        accountId: input.event.account_id,
+        instanceId: input.event.instance_id,
         deliveryId: delivery.deliveryId,
         errorType: error instanceof Error ? error.name : typeof error,
       });
@@ -920,7 +920,7 @@ async function processExistingSubscriptionUpdate(input: {
          current_period_end = ?4, next_billed_at = ?5, trial_type = ?6,
          trial_started_at = ?7, trial_ends_at = ?8, cancel_at_period_end = ?9,
          last_external_occurred_at = ?10, last_external_event_id = ?11, updated_at = ?12
-     WHERE account_id = ?13 AND id = ?14`,
+     WHERE instance_id = ?13 AND id = ?14`,
   ).bind(
     items[0].priceId,
     facts.status,
@@ -934,7 +934,7 @@ async function processExistingSubscriptionUpdate(input: {
     input.payload.occurred_at,
     input.payload.event_id,
     nowIso,
-    input.event.account_id,
+    input.event.instance_id,
     input.existing.id,
   )];
   if (!input.existing.is_checkout_verification) {
@@ -946,21 +946,21 @@ async function processExistingSubscriptionUpdate(input: {
              status_reason = CASE WHEN status = 'suspended' AND status_reason = 'payment_past_due' THEN NULL ELSE status_reason END,
              suspended_at = CASE WHEN status = 'suspended' AND status_reason = 'payment_past_due' THEN NULL ELSE suspended_at END,
              updated_at = ?2
-         WHERE account_id = ?3 AND id = ?4 AND renewal_mode = 'billing'`,
-      ).bind(facts.periodEnd, nowIso, input.event.account_id, input.existing.license_id));
+         WHERE instance_id = ?3 AND id = ?4 AND renewal_mode = 'billing'`,
+      ).bind(facts.periodEnd, nowIso, input.event.instance_id, input.existing.license_id));
     } else if (facts.status === "paused") {
       statements.push(input.env.DB.prepare(
         `UPDATE licenses
          SET status = 'suspended', status_reason = 'billing_paused', suspended_at = ?1, updated_at = ?1
-         WHERE account_id = ?2 AND id = ?3 AND renewal_mode = 'billing' AND status <> 'revoked'`,
-      ).bind(nowIso, input.event.account_id, input.existing.license_id));
+         WHERE instance_id = ?2 AND id = ?3 AND renewal_mode = 'billing' AND status <> 'revoked'`,
+      ).bind(nowIso, input.event.instance_id, input.existing.license_id));
     } else {
       // past_due keeps access through the paid period plus the snapshotted grace.
       // canceled keeps the trusted period end; validation expires it by time.
       statements.push(input.env.DB.prepare(
         `UPDATE licenses SET expires_at = ?1, updated_at = ?2
-         WHERE account_id = ?3 AND id = ?4 AND renewal_mode = 'billing'`,
-      ).bind(facts.periodEnd, nowIso, input.event.account_id, input.existing.license_id));
+         WHERE instance_id = ?3 AND id = ?4 AND renewal_mode = 'billing'`,
+      ).bind(facts.periodEnd, nowIso, input.event.instance_id, input.existing.license_id));
     }
   }
   statements.push(processingResultStatement(
@@ -992,9 +992,9 @@ async function processTransactionForExistingSubscription(input: {
            current_period_start = COALESCE(?1, current_period_start),
            current_period_end = ?2, last_external_occurred_at = ?3,
            last_external_event_id = ?4, updated_at = ?5
-       WHERE account_id = ?6 AND id = ?7`,
+       WHERE instance_id = ?6 AND id = ?7`,
     ).bind(period.start, period.end, input.payload.occurred_at, input.payload.event_id,
-      nowIso, input.event.account_id, input.existing.id));
+      nowIso, input.event.instance_id, input.existing.id));
     if (!input.existing.is_checkout_verification) {
       statements.push(input.env.DB.prepare(
         `UPDATE licenses
@@ -1003,8 +1003,8 @@ async function processTransactionForExistingSubscription(input: {
              status_reason = CASE WHEN status = 'suspended' AND status_reason = 'payment_past_due' THEN NULL ELSE status_reason END,
              suspended_at = CASE WHEN status = 'suspended' AND status_reason = 'payment_past_due' THEN NULL ELSE suspended_at END,
              updated_at = ?2
-         WHERE account_id = ?3 AND id = ?4 AND renewal_mode = 'billing'`,
-      ).bind(period.end, nowIso, input.event.account_id, input.existing.license_id));
+         WHERE instance_id = ?3 AND id = ?4 AND renewal_mode = 'billing'`,
+      ).bind(period.end, nowIso, input.event.instance_id, input.existing.license_id));
     }
   }
   statements.push(processingResultStatement(
@@ -1027,7 +1027,7 @@ async function processTransactionEvent(
 ): Promise<void> {
   const subscriptionId = stringOrNull(payload.data.subscription_id);
   if (subscriptionId) {
-    const existing = await getExistingSubscription(env.DB, event.account_id, event.billing_provider_id, subscriptionId);
+    const existing = await getExistingSubscription(env.DB, event.instance_id, event.billing_provider_id, subscriptionId);
     if (existing) {
       await processTransactionForExistingSubscription({ env, event, payload, existing, workerId, now });
       return;
@@ -1064,7 +1064,7 @@ async function processSubscriptionCreatedEvent(
   if (!subscriptionId) {
     throw new BillingProcessingError("BILLING_SUBSCRIPTION_ID_MISSING", "Paddle Subscription ID is missing.", "needs_attention");
   }
-  const existing = await getExistingSubscription(env.DB, event.account_id, event.billing_provider_id, subscriptionId);
+  const existing = await getExistingSubscription(env.DB, event.instance_id, event.billing_provider_id, subscriptionId);
   if (existing) {
     await processExistingSubscriptionUpdate({ env, event, payload, existing, workerId, now });
     return;
@@ -1105,7 +1105,7 @@ async function processSubscriptionUpdatedEvent(
 ): Promise<void> {
   const subscriptionId = stringOrNull(payload.data.id);
   if (!subscriptionId) throw new BillingProcessingError("BILLING_SUBSCRIPTION_ID_MISSING", "Paddle Subscription ID is missing.", "needs_attention");
-  const existing = await getExistingSubscription(env.DB, event.account_id, event.billing_provider_id, subscriptionId);
+  const existing = await getExistingSubscription(env.DB, event.instance_id, event.billing_provider_id, subscriptionId);
   if (!existing) {
     throw new BillingProcessingError(
       "BILLING_DEPENDENCY_PENDING",
@@ -1182,9 +1182,9 @@ async function processAdjustmentEvent(
   const existing = await env.DB.prepare(
     `SELECT id, last_external_occurred_at
      FROM billing_adjustments
-     WHERE account_id = ?1 AND billing_provider_id = ?2 AND external_adjustment_id = ?3
+     WHERE instance_id = ?1 AND billing_provider_id = ?2 AND external_adjustment_id = ?3
      LIMIT 1`,
-  ).bind(event.account_id, event.billing_provider_id, externalAdjustmentId).first<{
+  ).bind(event.instance_id, event.billing_provider_id, externalAdjustmentId).first<{
     id: string; last_external_occurred_at: string;
   }>();
   if (existing && existing.last_external_occurred_at >= payload.occurred_at) {
@@ -1194,10 +1194,10 @@ async function processAdjustmentEvent(
   const license = await env.DB.prepare(
     `SELECT id, is_checkout_verification
      FROM licenses
-     WHERE account_id = ?1 AND source_billing_provider_id = ?2
+     WHERE instance_id = ?1 AND source_billing_provider_id = ?2
        AND source_external_transaction_id = ?3
      LIMIT 1`,
-  ).bind(event.account_id, event.billing_provider_id, externalTransactionId).first<{
+  ).bind(event.instance_id, event.billing_provider_id, externalTransactionId).first<{
     id: string; is_checkout_verification: number;
   }>();
   const baseSemantic = adjustmentSemantics(action, type, status);
@@ -1211,7 +1211,7 @@ async function processAdjustmentEvent(
   const nowIso = now.toISOString();
   const statements: D1PreparedStatement[] = [env.DB.prepare(
     `INSERT INTO billing_adjustments (
-       id, account_id, billing_provider_id, license_id, external_adjustment_id,
+       id, instance_id, billing_provider_id, license_id, external_adjustment_id,
        external_transaction_id, external_subscription_id, external_customer_id,
        provider_action, adjustment_type, provider_status, currency_code,
        total_amount, provider_reason, automatic_effect, review_status,
@@ -1220,7 +1220,7 @@ async function processAdjustmentEvent(
        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
        ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?19
      )
-     ON CONFLICT(billing_provider_id, external_adjustment_id) DO UPDATE SET
+     ON CONFLICT(instance_id, billing_provider_id, external_adjustment_id) DO UPDATE SET
        license_id = excluded.license_id,
        external_transaction_id = excluded.external_transaction_id,
        external_subscription_id = excluded.external_subscription_id,
@@ -1240,7 +1240,7 @@ async function processAdjustmentEvent(
        updated_at = excluded.updated_at`,
   ).bind(
     adjustmentId,
-    event.account_id,
+    event.instance_id,
     event.billing_provider_id,
     license?.id ?? null,
     externalAdjustmentId,
@@ -1263,8 +1263,8 @@ async function processAdjustmentEvent(
     statements.push(env.DB.prepare(
       `UPDATE licenses
        SET status = 'suspended', status_reason = 'billing_adjustment', suspended_at = ?1, updated_at = ?1
-       WHERE account_id = ?2 AND id = ?3 AND status <> 'revoked'`,
-    ).bind(nowIso, event.account_id, license.id));
+       WHERE instance_id = ?2 AND id = ?3 AND status <> 'revoked'`,
+    ).bind(nowIso, event.instance_id, license.id));
   }
   if (semantic.eventStatus === "processed") {
     statements.push(processingResultStatement(env.DB, event, workerId, "billing_adjustment_recorded", adjustmentId, nowIso));
@@ -1275,20 +1275,20 @@ async function processAdjustmentEvent(
            result_reference_id = ?1, last_error_code = ?2, last_error_detail = ?3,
            next_attempt_at = NULL, locked_by = NULL, locked_until = NULL,
            processed_at = ?4, updated_at = ?4
-       WHERE account_id = ?5 AND id = ?6 AND status = 'processing' AND locked_by = ?7`,
+       WHERE instance_id = ?5 AND id = ?6 AND status = 'processing' AND locked_by = ?7`,
     ).bind(
       adjustmentId,
       "BILLING_ADJUSTMENT_REVIEW_REQUIRED",
       serializeBillingDiagnostic({ provider: "paddle", externalAdjustmentId, action, type, status, licenseId: license?.id ?? null }),
       nowIso,
-      event.account_id,
+      event.instance_id,
       event.id,
       workerId,
     ));
   }
   statements.push(prepareLicenseAudit({
     db: env.DB,
-    accountId: event.account_id,
+    instanceId: event.instance_id,
     actor: { type: "system" },
     action: "billing.adjustment.recorded",
     resourceType: "billing_adjustment",
@@ -1341,7 +1341,7 @@ async function scheduleFailure(
   await env.DB.batch([
     prepareSystemIssueUpsert({
       db: env.DB,
-      accountId: event.account_id,
+      instanceId: event.instance_id,
       category: "webhook",
       sourceType: "inbound_event",
       sourceId: event.id,
@@ -1355,14 +1355,14 @@ async function scheduleFailure(
        SET status = ?1, next_attempt_at = ?2, locked_by = NULL, locked_until = NULL,
            last_error_code = ?3, last_error_detail = ?4, updated_at = ?5,
            processed_at = CASE WHEN ?1 IN ('failed', 'needs_attention') THEN ?5 ELSE processed_at END
-       WHERE account_id = ?6 AND id = ?7 AND status = 'processing' AND locked_by = ?8`,
+       WHERE instance_id = ?6 AND id = ?7 AND status = 'processing' AND locked_by = ?8`,
     ).bind(
       status,
       nextAttemptAt,
       normalized.code,
       detailJson,
       nowIso,
-      event.account_id,
+      event.instance_id,
       event.id,
       workerId,
     ),
@@ -1371,7 +1371,7 @@ async function scheduleFailure(
 
 export async function processBillingInboundEvent(input: {
   env: BillingWorkerEnv;
-  accountId: string;
+  instanceId: string;
   eventId: string;
   workerId: string;
   leaseSeconds?: number;
@@ -1379,15 +1379,15 @@ export async function processBillingInboundEvent(input: {
 }): Promise<{ processed: boolean; status: string }> {
   const now = input.now ?? new Date();
   const selectEvent = () => input.env.DB.prepare(
-    `SELECT id, account_id, billing_provider_id, external_event_id, external_event_type,
+    `SELECT id, instance_id, billing_provider_id, external_event_id, external_event_type,
             external_customer_id, external_transaction_id, external_subscription_id,
             external_adjustment_id, external_occurred_at, payload_ciphertext,
             payload_expires_at, status,
             attempt_count, locked_by, received_at
      FROM inbound_events
-     WHERE account_id = ?1 AND id = ?2
+     WHERE instance_id = ?1 AND id = ?2
      LIMIT 1`,
-  ).bind(input.accountId, input.eventId).first<InboundEventRow>();
+  ).bind(input.instanceId, input.eventId).first<InboundEventRow>();
   let event = await selectEvent();
   if (!event) return { processed: false, status: "not_found" };
   if (event.status === "pending") {
@@ -1397,9 +1397,9 @@ export async function processBillingInboundEvent(input: {
       `UPDATE inbound_events
        SET status = 'processing', locked_by = ?1, locked_until = ?2,
            attempt_count = attempt_count + 1, updated_at = ?3
-       WHERE account_id = ?4 AND id = ?5 AND status = 'pending'
+       WHERE instance_id = ?4 AND id = ?5 AND status = 'pending'
          AND (next_attempt_at IS NULL OR next_attempt_at <= ?3)`,
-    ).bind(input.workerId, lockedUntil, now.toISOString(), input.accountId, input.eventId).run();
+    ).bind(input.workerId, lockedUntil, now.toISOString(), input.instanceId, input.eventId).run();
     if ((claim.meta.changes ?? 0) !== 1) {
       event = await selectEvent();
     } else {
@@ -1412,7 +1412,7 @@ export async function processBillingInboundEvent(input: {
 
   try {
     const payload = await loadEventPayload(input.env, event, now);
-    const provider = await getBillingProvider(input.env.DB, event.account_id, event.billing_provider_id);
+    const provider = await getBillingProvider(input.env.DB, event.instance_id, event.billing_provider_id);
     if (!provider || provider.provider !== "paddle") {
       throw new BillingProcessingError(
         "BILLING_PROVIDER_UNAVAILABLE",
@@ -1447,7 +1447,7 @@ export async function processBillingInboundEvent(input: {
     if (error instanceof PaddleHttpError && error.code === "BILLING_PROVIDER_API_AUTH_INVALID") {
       await recordInboundEventProviderAuthIssue({
         db: input.env.DB,
-        accountId: event.account_id,
+        instanceId: event.instance_id,
         billingProviderId: event.billing_provider_id,
         inboundEventId: event.id,
         workerId: input.workerId,
@@ -1460,14 +1460,14 @@ export async function processBillingInboundEvent(input: {
     }
   }
   const final = await input.env.DB.prepare(
-    `SELECT status FROM inbound_events WHERE account_id = ?1 AND id = ?2 LIMIT 1`,
-  ).bind(input.accountId, input.eventId).first<{ status: string }>();
+    `SELECT status FROM inbound_events WHERE instance_id = ?1 AND id = ?2 LIMIT 1`,
+  ).bind(input.instanceId, input.eventId).first<{ status: string }>();
   return { processed: final?.status === "processed", status: final?.status ?? "not_found" };
 }
 
 async function enforcePaymentGraceDeadlines(
   env: BillingWorkerEnv,
-  accountId: string,
+  instanceId: string,
   now: Date,
   limit: number,
 ): Promise<number> {
@@ -1475,24 +1475,24 @@ async function enforcePaymentGraceDeadlines(
     `SELECT license.id
      FROM billing_subscriptions AS subscription
      JOIN licenses AS license
-       ON license.account_id = subscription.account_id AND license.id = subscription.license_id
-     WHERE subscription.account_id = ?1
+       ON license.instance_id = subscription.instance_id AND license.id = subscription.license_id
+     WHERE subscription.instance_id = ?1
        AND subscription.status = 'past_due'
        AND license.status = 'active'
        AND license.is_checkout_verification = 0
        AND datetime(license.expires_at, '+' || license.payment_grace_seconds || ' seconds') <= datetime(?2)
      ORDER BY license.expires_at ASC
      LIMIT ?3`,
-  ).bind(accountId, now.toISOString(), limit).all<{ id: string }>();
+  ).bind(instanceId, now.toISOString(), limit).all<{ id: string }>();
   let suspended = 0;
   for (const license of due.results) {
     const result = await env.DB.prepare(
       `UPDATE licenses
        SET status = 'suspended', status_reason = 'payment_past_due',
            suspended_at = ?1, updated_at = ?1
-       WHERE account_id = ?2 AND id = ?3 AND status = 'active'
+       WHERE instance_id = ?2 AND id = ?3 AND status = 'active'
          AND is_checkout_verification = 0`,
-    ).bind(now.toISOString(), accountId, license.id).run();
+    ).bind(now.toISOString(), instanceId, license.id).run();
     suspended += result.meta.changes ?? 0;
   }
   return suspended;
@@ -1501,83 +1501,83 @@ async function enforcePaymentGraceDeadlines(
 export async function processDueBillingInboundEvents(
   env: BillingWorkerEnv,
   options: {
-    accountLimit?: number;
-    eventLimitPerAccount?: number;
-    graceLimitPerAccount?: number;
+    instanceLimit?: number;
+    eventLimitPerInstance?: number;
+    graceLimitPerInstance?: number;
     leaseSeconds?: number;
     now?: Date;
     workerId?: string;
   } = {},
-): Promise<{ accounts: number; claimed: number; processed: number; needsAttention: number; failed: number; graceSuspended: number }> {
+): Promise<{ instances: number; claimed: number; processed: number; needsAttention: number; failed: number; graceSuspended: number }> {
   const now = options.now ?? new Date();
-  const accountPageSize = Math.min(500, Math.max(1, options.accountLimit ?? 100));
-  const eventLimit = Math.min(100, Math.max(1, options.eventLimitPerAccount ?? 25));
-  const graceLimit = Math.min(100, Math.max(1, options.graceLimitPerAccount ?? 25));
+  const instancePageSize = Math.min(500, Math.max(1, options.instanceLimit ?? 100));
+  const eventLimit = Math.min(100, Math.max(1, options.eventLimitPerInstance ?? 25));
+  const graceLimit = Math.min(100, Math.max(1, options.graceLimitPerInstance ?? 25));
   const leaseSeconds = Math.min(300, Math.max(15, options.leaseSeconds ?? 60));
   const workerId = options.workerId ?? `billing_${ulid().toLowerCase()}`;
-  const summary = { accounts: 0, claimed: 0, processed: 0, needsAttention: 0, failed: 0, graceSuspended: 0 };
-  let accountCursor = "";
+  const summary = { instances: 0, claimed: 0, processed: 0, needsAttention: 0, failed: 0, graceSuspended: 0 };
+  let instanceCursor = "";
   while (true) {
-    const accounts = await env.DB.prepare(
-      `SELECT candidate.account_id AS id
+    const instances = await env.DB.prepare(
+      `SELECT candidate.instance_id AS id
        FROM (
-         SELECT event.account_id
+         SELECT event.instance_id
          FROM inbound_events AS event
-         JOIN accounts AS account ON account.id = event.account_id
-         WHERE account.status = 'active'
+         JOIN instances AS instance ON instance.id = event.instance_id
+         WHERE instance.status = 'active'
            AND (
              (event.status = 'pending'
                AND (event.next_attempt_at IS NULL OR event.next_attempt_at <= ?2))
              OR (event.status = 'processing' AND event.locked_until <= ?2)
            )
          UNION
-         SELECT license.account_id
+         SELECT license.instance_id
          FROM billing_subscriptions AS subscription
          JOIN licenses AS license
-           ON license.account_id = subscription.account_id
+           ON license.instance_id = subscription.instance_id
           AND license.id = subscription.license_id
-         JOIN accounts AS account ON account.id = license.account_id
-         WHERE account.status = 'active'
+         JOIN instances AS instance ON instance.id = license.instance_id
+         WHERE instance.status = 'active'
            AND subscription.status = 'past_due'
            AND license.status = 'active'
            AND license.is_checkout_verification = 0
            AND datetime(license.expires_at, '+' || license.payment_grace_seconds || ' seconds') <= datetime(?2)
        ) AS candidate
-       WHERE candidate.account_id > ?1
-       ORDER BY candidate.account_id
+       WHERE candidate.instance_id > ?1
+       ORDER BY candidate.instance_id
        LIMIT ?3`,
-    ).bind(accountCursor, now.toISOString(), accountPageSize).all<{ id: string }>();
-    if (accounts.results.length === 0) break;
-    summary.accounts += accounts.results.length;
-    for (const account of accounts.results) {
+    ).bind(instanceCursor, now.toISOString(), instancePageSize).all<{ id: string }>();
+    if (instances.results.length === 0) break;
+    summary.instances += instances.results.length;
+    for (const instance of instances.results) {
       const due = await env.DB.prepare(
         `SELECT id
          FROM inbound_events
-         WHERE account_id = ?1
+         WHERE instance_id = ?1
            AND (
              (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?2))
              OR (status = 'processing' AND locked_until <= ?2)
            )
          ORDER BY received_at ASC
          LIMIT ?3`,
-      ).bind(account.id, now.toISOString(), eventLimit).all<{ id: string }>();
+      ).bind(instance.id, now.toISOString(), eventLimit).all<{ id: string }>();
       for (const candidate of due.results) {
         const lockedUntil = new Date(now.getTime() + leaseSeconds * 1000).toISOString();
         const claim = await env.DB.prepare(
           `UPDATE inbound_events
            SET status = 'processing', locked_by = ?1, locked_until = ?2,
                attempt_count = attempt_count + 1, updated_at = ?3
-           WHERE account_id = ?4 AND id = ?5
+           WHERE instance_id = ?4 AND id = ?5
              AND (
                (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?3))
                OR (status = 'processing' AND locked_until <= ?3)
              )`,
-        ).bind(workerId, lockedUntil, now.toISOString(), account.id, candidate.id).run();
+        ).bind(workerId, lockedUntil, now.toISOString(), instance.id, candidate.id).run();
         if ((claim.meta.changes ?? 0) !== 1) continue;
         summary.claimed++;
         const result = await processBillingInboundEvent({
           env,
-          accountId: account.id,
+          instanceId: instance.id,
           eventId: candidate.id,
           workerId,
           now,
@@ -1586,9 +1586,9 @@ export async function processDueBillingInboundEvents(
         else if (result.status === "needs_attention") summary.needsAttention++;
         else if (result.status === "failed") summary.failed++;
       }
-      summary.graceSuspended += await enforcePaymentGraceDeadlines(env, account.id, now, graceLimit);
+      summary.graceSuspended += await enforcePaymentGraceDeadlines(env, instance.id, now, graceLimit);
     }
-    accountCursor = accounts.results[accounts.results.length - 1].id;
+    instanceCursor = instances.results[instances.results.length - 1].id;
   }
   return summary;
 }

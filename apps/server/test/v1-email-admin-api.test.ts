@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import type { AppContext, UserRole } from "../src/types";
+import type { AppContext, InstanceRole } from "../src/types";
 import { sha256Hex } from "../src/infra/crypto";
 import { decryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 import { dispatchDelivery } from "../src/infra/delivery/dispatcher";
@@ -17,7 +17,7 @@ const NOW = "2026-09-20T10:00:00.000Z";
 const ORIGIN = "https://license.example.test";
 const CSRF_TOKEN = "acf_email_admin_test_token";
 const API_KEY = "re_email_admin_api_secret";
-const ACCOUNT_ID = "acc_email_admin";
+const INSTANCE_ID = "acc_email_admin";
 const CUSTOMER_ID = "cus_email_admin";
 
 const VARIABLES = Object.freeze({
@@ -29,14 +29,14 @@ const VARIABLES = Object.freeze({
   expires_at: "2026-10-19T10:00:00.000Z",
 });
 
-function createAdminRouteApp(role: UserRole = "owner") {
+function createAdminRouteApp(role: InstanceRole = "owner") {
   const app = new Hono<AppContext>();
   app.onError(errorHandler);
   app.use("*", async (c, next) => {
     c.set("requestId", "req_email_admin");
-    c.set("accountId", ACCOUNT_ID);
+    c.set("instanceId", INSTANCE_ID);
     c.set("userId", "usr_email_owner");
-    c.set("userRole", role);
+    c.set("instanceRole", role);
     c.set("userEmail", "owner@example.test");
     c.set("sessionNamespace", "admin");
     c.set("sessionCsrfTokenHash", await sha256Hex(CSRF_TOKEN));
@@ -65,6 +65,18 @@ async function json(response: Response): Promise<any> {
   return response.json() as Promise<any>;
 }
 
+function expectNoCamelCaseKeys(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach(expectNoCamelCaseKeys);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value)) {
+    expect(key).not.toMatch(/[a-z][A-Z]/);
+    expectNoCamelCaseKeys(item);
+  }
+}
+
 describe("Admin Email API", () => {
   let testEnv: TestEnvContext;
 
@@ -73,38 +85,34 @@ describe("Admin Email API", () => {
     vi.unstubAllGlobals();
     testEnv = createTestEnv({ ENVIRONMENT: "test", STORAGE_ENCRYPTION_KEY_ID: "test-primary" });
     testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (id, instance_name, app_url, site_url, initialized_at, updated_at)
-       VALUES ('current', 'Email Admin', ?, 'https://site.example.test', ?, ?)`,
-    ).run(ORIGIN, NOW, NOW);
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?, 'Email Admin', 'email-admin', 'https://site.example.test', 'active', ?, ?)`,
+    ).run(INSTANCE_ID, NOW, NOW);
     testEnv.sqliteDb.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, 'Email Admin', 'email-admin', 'active', ?, ?)`,
-    ).run(ACCOUNT_ID, NOW, NOW);
+      `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
+       VALUES ('usr_email_owner', 'owner@example.test', 'hash', 'Owner', ?, ?)`,
+    ).run(NOW, NOW);
     testEnv.sqliteDb.prepare(
-      `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-       VALUES ('usr_email_owner', ?, 'owner@example.test', 'hash', 'Owner', 'owner', 'active', ?, ?)`,
-    ).run(ACCOUNT_ID, NOW, NOW);
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
+      `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
        VALUES (?, ?, 'buyer@example.test', 'Buyer', 'active', ?, ?)`,
-    ).run(CUSTOMER_ID, ACCOUNT_ID, NOW, NOW);
+    ).run(CUSTOMER_ID, INSTANCE_ID, NOW, NOW);
   });
 
   async function createConfiguration(app = createAdminRouteApp()) {
     const integrationResponse = await app.request(`${ORIGIN}/email-integrations`, requestInit("POST", {
       provider: "resend",
       name: "Resend Primary",
-      apiKey: API_KEY,
-      defaultFromEmail: "licenses@example.test",
-      defaultFromName: "Example Licenses",
-      replyToEmail: "support@example.test",
-      maxAutomaticAttempts: 4,
+      api_key: API_KEY,
+      default_from_email: "licenses@example.test",
+      default_from_name: "Example Licenses",
+      reply_to_email: "support@example.test",
+      max_automatic_attempts: 4,
     }), testEnv.env);
     expect(integrationResponse.status).toBe(201);
     const integration = (await json(integrationResponse)).data;
     const bindingResponse = await app.request(
       `${ORIGIN}/email-integrations/${integration.id}/template-bindings/customer.license_issued`,
-      requestInit("PUT", { contractVersion: 1, providerTemplateRef: "license-issued-v1" }),
+      requestInit("PUT", { contract_version: 1, provider_template_ref: "license-issued-v1" }),
       testEnv.env,
     );
     expect(bindingResponse.status).toBe(201);
@@ -116,34 +124,39 @@ describe("Admin Email API", () => {
     const contractsResponse = await app.request(`${ORIGIN}/email-template-contracts`, requestInit(), testEnv.env);
     expect(contractsResponse.status).toBe(200);
     const contracts = (await json(contractsResponse)).data.items;
-    expect(contracts.map((item: any) => item.notificationType)).toEqual([
+    expect(contracts.map((item: any) => item.notification_type)).toEqual([
       "customer.license_issued",
       "customer.license_recovered",
       "customer.license_security_reset",
       "customer.portal_access_requested",
+      "instance.member_invited",
     ]);
     const exampleResponse = await app.request(
       `${ORIGIN}/email-template-contracts/customer.license_issued/versions/1/examples/resend`,
       requestInit(),
       testEnv.env,
     );
-    expect((await json(exampleResponse)).data).toMatchObject({
-      placeholderSyntax: "{{{variable_name}}}",
-      fileName: "customer-license-issued-v1.resend.html",
+    const exampleBody = await json(exampleResponse);
+    expect(exampleBody.data).toMatchObject({
+      placeholder_syntax: "{{{variable_name}}}",
+      file_name: "customer-license-issued-v1.resend.html",
     });
+    expectNoCamelCaseKeys(exampleBody);
   });
 
   it("encrypts credentials and exposes no revision or persisted test evidence", async () => {
     const app = createAdminRouteApp();
     const { integration, binding } = await createConfiguration(app);
-    expect(integration).toMatchObject({ provider: "resend", credentialConfigured: true, status: "active" });
-    expect(integration).not.toHaveProperty("configurationRevision");
-    expect(binding).not.toHaveProperty("bindingRevision");
-    expect(binding).not.toHaveProperty("lastTestDeliveryId");
+    expect(integration).toMatchObject({ provider: "resend", credential_configured: true, status: "active" });
+    expect(integration).not.toHaveProperty("configuration_revision");
+    expect(binding).not.toHaveProperty("binding_revision");
+    expect(binding).not.toHaveProperty("last_test_delivery_id");
+    expectNoCamelCaseKeys(integration);
+    expectNoCamelCaseKeys(binding);
     const stored = testEnv.sqliteDb.prepare("SELECT credential_ciphertext FROM email_integrations WHERE id = ?").get(integration.id) as any;
     expect(stored.credential_ciphertext).not.toContain(API_KEY);
     expect(JSON.parse(await decryptEnvelopeV1(stored.credential_ciphertext, testEnv.env, {
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       table: "email_integrations",
       rowId: integration.id,
       field: "credential_ciphertext",
@@ -165,10 +178,12 @@ describe("Admin Email API", () => {
     })));
     const response = await app.request(
       `${ORIGIN}/email-integrations/${integration.id}/template-bindings/customer.license_issued/test`,
-      requestInit("POST", { recipientEmail: "operator@example.test" }),
+      requestInit("POST", { recipient_email: "operator@example.test" }),
       testEnv.env,
     );
-    expect(await json(response)).toMatchObject({ data: { providerAccepted: true, providerMessageId: "email_test" } });
+    const body = await json(response);
+    expect(body).toMatchObject({ data: { provider_accepted: true, provider_message_id: "email_test" } });
+    expectNoCamelCaseKeys(body);
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM email_deliveries").get()).toEqual({ count: 0 });
   });
 
@@ -181,13 +196,13 @@ describe("Admin Email API", () => {
 
     const response = await app.request(
       `${ORIGIN}/email-integrations/${integration.id}/template-bindings/customer.license_issued/test`,
-      requestInit("POST", { recipientEmail: "operator@example.test" }),
+      requestInit("POST", { recipient_email: "operator@example.test" }),
       testEnv.env,
     );
     expect(response.status).toBe(200);
     expect(await json(response)).toMatchObject({
       data: {
-        providerAccepted: false,
+        provider_accepted: false,
         error: { source: "licenkit" },
       },
     });
@@ -200,7 +215,7 @@ describe("Admin Email API", () => {
     const prepared = await prepareEmailNotificationDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       customerId: CUSTOMER_ID,
       notificationType: "customer.license_issued",
       contractVersion: 1,
@@ -212,19 +227,21 @@ describe("Admin Email API", () => {
     await dispatchDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       deliveryId: prepared.deliveryId,
       fetchImpl: vi.fn(async () => { throw new TypeError("connection reset"); }) as unknown as typeof fetch,
       now: new Date(NOW),
     });
-    const denied = await app.request(`${ORIGIN}/email-deliveries/${prepared.deliveryId}/retry`, requestInit("POST", { confirmPossibleDuplicate: false }), testEnv.env);
+    const denied = await app.request(`${ORIGIN}/email-deliveries/${prepared.deliveryId}/retry`, requestInit("POST", { confirm_possible_duplicate: false }), testEnv.env);
     expect(denied.status).toBe(409);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ id: "email_manual" }), {
       status: 200,
       headers: { "content-type": "application/json" },
     })));
-    const confirmed = await app.request(`${ORIGIN}/email-deliveries/${prepared.deliveryId}/retry`, requestInit("POST", { confirmPossibleDuplicate: true }), testEnv.env);
-    expect(await json(confirmed)).toMatchObject({ data: { id: prepared.deliveryId, status: "accepted", attemptCount: 2 } });
+    const confirmed = await app.request(`${ORIGIN}/email-deliveries/${prepared.deliveryId}/retry`, requestInit("POST", { confirm_possible_duplicate: true }), testEnv.env);
+    const confirmedBody = await json(confirmed);
+    expect(confirmedBody).toMatchObject({ data: { id: prepared.deliveryId, status: "accepted", attempt_count: 2 } });
+    expectNoCamelCaseKeys(confirmedBody);
   });
 
   it("does not requeue waiting Deliveries through a disabled configuration", async () => {
@@ -233,7 +250,7 @@ describe("Admin Email API", () => {
     const prepared = await prepareEmailNotificationDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       customerId: CUSTOMER_ID,
       notificationType: "customer.license_issued",
       contractVersion: 1,
@@ -266,7 +283,7 @@ describe("Admin Email API", () => {
     const prepared = await prepareEmailNotificationDelivery({
       db: testEnv.d1,
       env: testEnv.env,
-      accountId: ACCOUNT_ID,
+      instanceId: INSTANCE_ID,
       customerId: CUSTOMER_ID,
       notificationType: "customer.license_issued",
       contractVersion: 1,
@@ -299,19 +316,32 @@ describe("Admin Email API", () => {
     });
     expect(testEnv.sqliteDb.prepare(
       `SELECT action, resource_id FROM audit_logs
-       WHERE account_id = ? AND action = 'email.delivery.cancel'`,
-    ).get(ACCOUNT_ID)).toEqual({
+       WHERE instance_id = ? AND action = 'email.delivery.cancel'`,
+    ).get(INSTANCE_ID)).toEqual({
       action: "email.delivery.cancel",
       resource_id: prepared.deliveryId,
     });
 
     const retry = await app.request(
       `${ORIGIN}/email-deliveries/${prepared.deliveryId}/retry`,
-      requestInit("POST", { confirmPossibleDuplicate: false }),
+      requestInit("POST", { confirm_possible_duplicate: false }),
       testEnv.env,
     );
     expect(retry.status).toBe(409);
     expect((await json(retry)).error.code).toBe("EMAIL_DELIVERY_NOT_RETRYABLE");
+  });
+
+  it("rejects legacy camelCase request bodies", async () => {
+    const app = createAdminRouteApp();
+    const response = await app.request(`${ORIGIN}/email-integrations`, requestInit("POST", {
+      provider: "resend",
+      name: "Legacy",
+      apiKey: API_KEY,
+      defaultFromEmail: "licenses@example.test",
+    }), testEnv.env);
+    expect(response.status).toBe(400);
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM email_integrations").get())
+      .toEqual({ count: 0 });
   });
 
 });

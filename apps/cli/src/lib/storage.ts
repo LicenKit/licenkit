@@ -5,7 +5,7 @@ import type { CredentialMode, LicenseTerms } from "./client-api";
 
 export interface StoredLicenseData {
   serverUrl: string;
-  accountId: string;
+  instanceId: string;
   productId: string;
   releaseVersion: string;
   releasePlatform: string;
@@ -36,7 +36,7 @@ function isStoredLicenseData(value: unknown): value is StoredLicenseData {
   const candidate = value as Partial<StoredLicenseData>;
   return (
     typeof candidate.serverUrl === "string" &&
-    typeof candidate.accountId === "string" &&
+    typeof candidate.instanceId === "string" &&
     typeof candidate.productId === "string" &&
     typeof candidate.releaseVersion === "string" &&
     typeof candidate.releasePlatform === "string" &&

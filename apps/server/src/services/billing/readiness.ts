@@ -8,11 +8,10 @@ import { assertPaddleClientToken } from "../../infra/billing/paddle";
 import { EMAIL_NOTIFICATION_CONTRACTS } from "../../domain/email/contracts";
 import { decryptEnvelopeV1, type DeliveryCryptoEnv } from "../../infra/delivery/crypto";
 import { getEmailProviderAdapter } from "../../infra/email/provider";
-import { readSchedulerHealth } from "../runtime/scheduler-health";
 
 export interface BillingOfferReadinessRow {
   id: string;
-  account_id: string;
+  instance_id: string;
   external_price_id: string;
   product_id: string;
   license_plan_id: string;
@@ -36,12 +35,12 @@ function check(key: string, ready: boolean, reasonCode?: string, details?: Recor
 
 export async function getBillingOfferReadinessRow(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   offerId: string,
 ): Promise<BillingOfferReadinessRow | null> {
   const row = await db.prepare(
     `SELECT
-       offer.id, offer.account_id, offer.external_price_id, offer.product_id,
+       offer.id, offer.instance_id, offer.external_price_id, offer.product_id,
        offer.license_plan_id, offer.purchase_type, offer.status AS offer_status,
        product.status AS product_status, product.billing_environment,
        plan.license_model, plan.credential_mode, plan.status AS plan_status,
@@ -50,22 +49,22 @@ export async function getBillingOfferReadinessRow(
        provider.client_side_token, provider.updated_at AS provider_updated_at
      FROM billing_offers AS offer
      JOIN products AS product
-       ON product.account_id = offer.account_id AND product.id = offer.product_id
+       ON product.instance_id = offer.instance_id AND product.id = offer.product_id
      JOIN license_plans AS plan
-       ON plan.account_id = offer.account_id
+       ON plan.instance_id = offer.instance_id
       AND plan.product_id = offer.product_id
       AND plan.id = offer.license_plan_id
      JOIN billing_providers AS provider
-       ON provider.account_id = offer.account_id AND provider.id = offer.billing_provider_id
-     WHERE offer.account_id = ?1 AND offer.id = ?2
+       ON provider.instance_id = offer.instance_id AND provider.id = offer.billing_provider_id
+     WHERE offer.instance_id = ?1 AND offer.id = ?2
      LIMIT 1`,
-  ).bind(accountId, offerId).first<BillingOfferReadinessRow>();
+  ).bind(instanceId, offerId).first<BillingOfferReadinessRow>();
   return row ?? null;
 }
 
 async function getReceivedRequiredEventTypes(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   providerId: string,
   after: string,
 ): Promise<Set<string>> {
@@ -73,11 +72,11 @@ async function getReceivedRequiredEventTypes(
   const result = await db.prepare(
     `SELECT DISTINCT external_event_type
      FROM inbound_events
-     WHERE account_id = ?1
+     WHERE instance_id = ?1
        AND billing_provider_id = ?2
        AND received_at >= ?3
        AND external_event_type IN (${placeholders})`,
-  ).bind(accountId, providerId, after, ...PADDLE_REQUIRED_EVENT_TYPES).all<{ external_event_type: string }>();
+  ).bind(instanceId, providerId, after, ...PADDLE_REQUIRED_EVENT_TYPES).all<{ external_event_type: string }>();
   return new Set(result.results.map((row) => row.external_event_type));
 }
 
@@ -102,7 +101,7 @@ const OFFER_ACTIVATION_EMAIL_CONTRACTS = Object.freeze([{
 async function emailDeliveryReadiness(
   db: D1Database,
   env: DeliveryCryptoEnv,
-  accountId: string,
+  instanceId: string,
 ): Promise<{
   integrationReady: boolean;
   credentialReady: boolean;
@@ -124,15 +123,15 @@ async function emailDeliveryReadiness(
             COUNT(DISTINCT binding.notification_type || '@' || binding.contract_version) AS active_binding_count
      FROM email_integrations AS integration
      LEFT JOIN email_template_bindings AS binding
-       ON binding.account_id = integration.account_id
+       ON binding.instance_id = integration.instance_id
       AND binding.email_integration_id = integration.id
       AND binding.status = 'active'
       AND (${contractPredicate("binding")})
-     WHERE integration.account_id = ?1
+     WHERE integration.instance_id = ?1
        AND integration.status = 'active'
      GROUP BY integration.id, integration.provider, integration.credential_ciphertext
      LIMIT 1`,
-  ).bind(accountId, ...bindings).all<EmailDeliveryReadinessRow>();
+  ).bind(instanceId, ...bindings).all<EmailDeliveryReadinessRow>();
   const row = result.results[0];
   if (!row) {
     return {
@@ -147,7 +146,7 @@ async function emailDeliveryReadiness(
   let credentialErrorCode: string | undefined;
   try {
     const serialized = await decryptEnvelopeV1(row.credential_ciphertext, env, {
-      accountId,
+      instanceId,
       table: "email_integrations",
       rowId: row.integration_id,
       field: "credential_ciphertext",
@@ -172,18 +171,18 @@ async function emailDeliveryReadiness(
   };
 }
 
-async function processingBacklogHealthy(db: D1Database, accountId: string, now: Date): Promise<boolean> {
+async function processingBacklogHealthy(db: D1Database, instanceId: string, now: Date): Promise<boolean> {
   const staleBefore = new Date(now.getTime() - 5 * 60_000).toISOString();
   const result = await db.prepare(
     `SELECT 1 AS unavailable
      FROM inbound_events
-     WHERE account_id = ?1
+     WHERE instance_id = ?1
        AND (
          (status = 'pending' AND COALESCE(next_attempt_at, received_at) < ?2)
          OR (status = 'processing' AND locked_until < ?3)
        )
      LIMIT 1`,
-  ).bind(accountId, staleBefore, now.toISOString()).all<{ unavailable: number }>();
+  ).bind(instanceId, staleBefore, now.toISOString()).all<{ unavailable: number }>();
   return !result.results[0];
 }
 
@@ -195,12 +194,12 @@ async function checkoutVerificationReady(
     `SELECT verification.id
      FROM billing_checkout_verifications AS verification
      JOIN billing_offers AS evidence_offer
-       ON evidence_offer.account_id = verification.account_id
+       ON evidence_offer.instance_id = verification.instance_id
       AND evidence_offer.id = verification.billing_offer_id
      JOIN billing_providers AS evidence_provider
-       ON evidence_provider.account_id = evidence_offer.account_id
+       ON evidence_provider.instance_id = evidence_offer.instance_id
       AND evidence_provider.id = evidence_offer.billing_provider_id
-     WHERE verification.account_id = ?1
+     WHERE verification.instance_id = ?1
        AND verification.status = 'completed'
        AND evidence_offer.product_id = ?2
        AND evidence_offer.license_plan_id = ?3
@@ -208,7 +207,7 @@ async function checkoutVerificationReady(
        AND evidence_provider.environment = 'sandbox'
      ORDER BY verification.completed_at DESC
      LIMIT 1`,
-  ).bind(row.account_id, row.product_id, row.license_plan_id, row.purchase_type)
+  ).bind(row.instance_id, row.product_id, row.license_plan_id, row.purchase_type)
     .all<{ id: string }>();
   return Boolean(result.results[0]);
 }
@@ -246,7 +245,7 @@ export async function evaluateBillingOfferReadiness(
 
   const received = await getReceivedRequiredEventTypes(
     db,
-    row.account_id,
+    row.instance_id,
     row.provider_id,
     row.provider_updated_at,
   );
@@ -258,7 +257,7 @@ export async function evaluateBillingOfferReadiness(
     { missingEventTypes: missingEvents },
   ));
 
-  const email = await emailDeliveryReadiness(db, options.env, row.account_id);
+  const email = await emailDeliveryReadiness(db, options.env, row.instance_id);
   checks.push(check(
     "email_integration",
     email.integrationReady,
@@ -280,25 +279,16 @@ export async function evaluateBillingOfferReadiness(
       activeCount: email.activeBindingCount,
     },
   ));
-  const processingReady = await processingBacklogHealthy(db, row.account_id, now);
+  const processingReady = await processingBacklogHealthy(db, row.instance_id, now);
   checks.push(check("processing_backlog", processingReady, "CHECKOUT_PROCESSING_UNAVAILABLE"));
-  const schedulerHealth = await readSchedulerHealth(db, now);
-  checks.push(check(
-    "scheduled_worker_health",
-    schedulerHealth.ready,
-    "CHECKOUT_PROCESSING_UNAVAILABLE",
-    schedulerHealth.record
-      ? { completedAt: schedulerHealth.record.completedAt, durationMs: schedulerHealth.record.durationMs }
-      : { evidence: "not_recorded" },
-  ));
 
   let signingKeyReady = true;
   if (row.credential_mode === "signed") {
     const key = await db.prepare(
       `SELECT id FROM signing_keys
-       WHERE account_id = ?1 AND product_id = ?2 AND status = 'active'
+       WHERE instance_id = ?1 AND product_id = ?2 AND status = 'active'
        LIMIT 1`,
-    ).bind(row.account_id, row.product_id).first<{ id: string }>();
+    ).bind(row.instance_id, row.product_id).first<{ id: string }>();
     signingKeyReady = Boolean(key);
   }
   checks.push(check("signing_key", signingKeyReady, "CHECKOUT_CONFIGURATION_PENDING"));
@@ -319,7 +309,7 @@ export async function evaluateBillingOfferReadiness(
 export function toProviderRecord(row: BillingOfferReadinessRow): BillingProviderRecord {
   return {
     id: row.provider_id,
-    account_id: row.account_id,
+    instance_id: row.instance_id,
     provider: "paddle",
     environment: row.provider_environment,
     client_side_token: row.client_side_token,

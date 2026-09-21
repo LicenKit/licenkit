@@ -18,16 +18,16 @@ export const adminProductsRouter = new Hono<AppContext>();
 
 const SlugSchema = z.string().min(1).max(80)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "slug must be lower-case and URL-safe");
-const TrialConfigSchema = z.object({
+const ExternalTrialConfigSchema = z.object({
   enabled: z.boolean(),
-  durationSeconds: z.number().int().positive().nullable().optional(),
+  duration_seconds: z.number().int().positive().nullable().optional(),
   features: z.array(z.string().min(1)).default([]),
-}).superRefine((value, ctx) => {
-  if (value.enabled && !value.durationSeconds) {
+}).strict().superRefine((value, ctx) => {
+  if (value.enabled && !value.duration_seconds) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ["durationSeconds"],
-      message: "durationSeconds is required when trial is enabled",
+      path: ["duration_seconds"],
+      message: "duration_seconds is required when trial is enabled",
     });
   }
 });
@@ -35,65 +35,97 @@ const CreateProductSchema = z.object({
   slug: SlugSchema,
   name: z.string().trim().min(1).max(100),
   description: z.string().trim().max(4000).nullable().optional(),
-  billingEnvironment: z.enum(["sandbox", "live"]).nullable().optional(),
-  trial: TrialConfigSchema.optional(),
-});
+  billing_environment: z.enum(["sandbox", "live"]).nullable().optional(),
+  payment_grace_seconds: z.number().int().nonnegative().default(0),
+  trial: ExternalTrialConfigSchema.optional(),
+}).strict().transform((value) => ({
+  slug: value.slug,
+  name: value.name,
+  description: value.description,
+  billingEnvironment: value.billing_environment,
+  paymentGraceSeconds: value.payment_grace_seconds,
+  trial: value.trial ? {
+    enabled: value.trial.enabled,
+    durationSeconds: value.trial.duration_seconds,
+    features: value.trial.features,
+  } : undefined,
+}));
 const UpdateProductSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   description: z.string().trim().max(4000).nullable().optional(),
-  billingEnvironment: z.enum(["sandbox", "live"]).nullable().optional(),
-  trial: TrialConfigSchema.optional(),
-}).strict();
+  billing_environment: z.enum(["sandbox", "live"]).nullable().optional(),
+  payment_grace_seconds: z.number().int().nonnegative().optional(),
+  trial: ExternalTrialConfigSchema.optional(),
+}).strict().transform((value) => ({
+  name: value.name,
+  description: value.description,
+  billingEnvironment: value.billing_environment,
+  paymentGraceSeconds: value.payment_grace_seconds,
+  trial: value.trial ? {
+    enabled: value.trial.enabled,
+    durationSeconds: value.trial.duration_seconds,
+    features: value.trial.features,
+  } : undefined,
+}));
 const CreateReleaseSchema = z.object({
   version: z.string().trim().min(1).max(100),
   platform: z.string().trim().min(1).max(100),
   description: z.string().trim().max(4000).nullable().optional(),
-  downloadUrl: z.string().url().nullable().optional(),
-  artifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  releasedAt: z.string().datetime({ offset: true }),
-});
+  download_url: z.string().url().nullable().optional(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  released_at: z.string().datetime({ offset: true }),
+}).strict().transform((value) => ({
+  version: value.version,
+  platform: value.platform,
+  description: value.description,
+  downloadUrl: value.download_url,
+  artifactSha256: value.artifact_sha256,
+  releasedAt: value.released_at,
+}));
 const UpdateReleaseSchema = z.object({
   description: z.string().trim().max(4000).nullable().optional(),
-  downloadUrl: z.string().url().nullable().optional(),
-}).strict().refine((value) => Object.keys(value).length > 0, "at least one mutable field is required");
+  download_url: z.string().url().nullable().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, "at least one mutable field is required")
+  .transform((value) => ({ description: value.description, downloadUrl: value.download_url }));
 
 function formatProduct(product: any) {
   return {
     id: product.id,
-    accountId: product.accountId,
+    instance_id: product.instanceId,
     slug: product.slug,
     name: product.name,
     description: product.description,
-    billingEnvironment: product.billingEnvironment,
+    billing_environment: product.billingEnvironment,
+    payment_grace_seconds: product.paymentGraceSeconds,
     status: product.status,
     trial: {
       enabled: Boolean(product.trialEnabled),
-      durationSeconds: product.trialDurationSeconds,
+      duration_seconds: product.trialDurationSeconds,
       features: parseFeatures(product.trialFeaturesJson),
     },
-    createdAt: product.createdAt,
-    updatedAt: product.updatedAt,
+    created_at: product.createdAt,
+    updated_at: product.updatedAt,
   };
 }
 
 function formatRelease(release: any) {
   return {
     id: release.id,
-    productId: release.productId,
+    product_id: release.productId,
     version: release.version,
     platform: release.platform,
     description: release.description,
-    downloadUrl: release.downloadUrl,
-    artifactSha256: release.artifactSha256,
-    releasedAt: release.releasedAt,
-    createdAt: release.createdAt,
-    updatedAt: release.updatedAt,
+    download_url: release.downloadUrl,
+    artifact_sha256: release.artifactSha256,
+    released_at: release.releasedAt,
+    created_at: release.createdAt,
+    updated_at: release.updatedAt,
   };
 }
 
-async function requireProduct(db: any, accountId: string, productId: string) {
+async function requireProduct(db: any, instanceId: string, productId: string) {
   const product = await db.select().from(products).where(and(
-    eq(products.accountId, accountId), eq(products.id, productId),
+    eq(products.instanceId, instanceId), eq(products.id, productId),
   )).get();
   if (!product) throw new NotFoundError("Product not found");
   return product;
@@ -102,7 +134,7 @@ async function requireProduct(db: any, accountId: string, productId: string) {
 adminProductsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
   const db = getTenantDB(c);
   const items = await db.select().from(products)
-    .where(eq(products.accountId, c.get("accountId")!))
+    .where(eq(products.instanceId, c.get("instanceId")!))
     .orderBy(desc(products.createdAt)).all();
   return c.json({ success: true, data: { items: items.map(formatProduct) } });
 });
@@ -110,7 +142,7 @@ adminProductsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"])
 adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
   const input = CreateProductSchema.parse(await c.req.json());
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = `prd_${ulid().toLowerCase()}`;
   const signingKeyId = `key_${ulid().toLowerCase()}`;
   const now = new Date().toISOString();
@@ -119,18 +151,19 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
   const privateKeyCiphertext = await encryptEnvelopeV1(
     keyPair.privateKeyPkcs8Base64,
     c.env,
-    { accountId, table: "signing_keys", rowId: signingKeyId, field: "private_key_ciphertext" },
+    { instanceId, table: "signing_keys", rowId: signingKeyId, field: "private_key_ciphertext" },
   );
 
   try {
     await db.batch([
       db.insert(products).values({
         id: productId,
-        accountId,
+        instanceId,
         slug: input.slug,
         name: input.name,
         description: input.description ?? null,
         billingEnvironment: input.billingEnvironment ?? null,
+        paymentGraceSeconds: input.paymentGraceSeconds,
         trialEnabled: trial.enabled,
         trialDurationSeconds: trial.enabled ? trial.durationSeconds! : null,
         trialFeaturesJson: JSON.stringify(trial.features),
@@ -140,7 +173,7 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
       }),
       db.insert(signingKeys).values({
         id: signingKeyId,
-        accountId,
+        instanceId,
         productId,
         algorithm: "Ed25519",
         source: "generated",
@@ -153,7 +186,7 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
       }),
     ]);
   } catch (error) {
-    if (String(error).includes("products.account_id, products.slug")) {
+    if (String(error).includes("products.instance_id, products.slug")) {
       throw new ConflictError("PRODUCT_SLUG_EXISTS", "The product slug is already in use.");
     }
     throw error;
@@ -163,23 +196,23 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     c, action: "product.create", resourceType: "product", resourceId: productId,
     details: { slug: input.slug, billingEnvironment: input.billingEnvironment ?? null },
   });
-  const created = await requireProduct(db, accountId, productId);
+  const created = await requireProduct(db, instanceId, productId);
   return c.json({
     success: true,
     data: {
       ...formatProduct(created),
-      signingKey: { id: signingKeyId, publicKey: keyPair.publicKeyBase64, status: "active" },
+      signing_key: { id: signingKeyId, public_key: keyPair.publicKeyBase64, status: "active" },
     },
   }, 201);
 });
 
 adminProductsRouter.get("/:productId/releases", requireRole(["owner", "admin"]), async (c) => {
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
-  await requireProduct(db, accountId, productId);
+  await requireProduct(db, instanceId, productId);
   const items = await db.select().from(productReleases).where(and(
-    eq(productReleases.accountId, accountId), eq(productReleases.productId, productId),
+    eq(productReleases.instanceId, instanceId), eq(productReleases.productId, productId),
   )).orderBy(desc(productReleases.releasedAt)).all();
   return c.json({ success: true, data: { items: items.map(formatRelease) } });
 });
@@ -187,15 +220,15 @@ adminProductsRouter.get("/:productId/releases", requireRole(["owner", "admin"]),
 adminProductsRouter.post("/:productId/releases", requireRole(["owner", "admin"]), async (c) => {
   const input = CreateReleaseSchema.parse(await c.req.json());
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
-  await requireProduct(db, accountId, productId);
+  await requireProduct(db, instanceId, productId);
   const releaseId = `rel_${ulid().toLowerCase()}`;
   const now = new Date().toISOString();
   try {
     await db.insert(productReleases).values({
       id: releaseId,
-      accountId,
+      instanceId,
       productId,
       version: input.version,
       platform: input.platform,
@@ -207,7 +240,7 @@ adminProductsRouter.post("/:productId/releases", requireRole(["owner", "admin"])
       updatedAt: now,
     });
   } catch (error) {
-    if (String(error).includes("product_releases.account_id, product_releases.product_id, product_releases.version, product_releases.platform")) {
+    if (String(error).includes("product_releases.instance_id, product_releases.product_id, product_releases.version, product_releases.platform")) {
       throw new ConflictError("PRODUCT_RELEASE_EXISTS", "This product version and platform already exist.");
     }
     throw error;
@@ -217,7 +250,7 @@ adminProductsRouter.post("/:productId/releases", requireRole(["owner", "admin"])
     details: { productId, version: input.version, platform: input.platform, releasedAt: input.releasedAt },
   });
   const created = await db.select().from(productReleases).where(and(
-    eq(productReleases.accountId, accountId), eq(productReleases.id, releaseId),
+    eq(productReleases.instanceId, instanceId), eq(productReleases.id, releaseId),
   )).get();
   return c.json({ success: true, data: formatRelease(created) }, 201);
 });
@@ -225,7 +258,7 @@ adminProductsRouter.post("/:productId/releases", requireRole(["owner", "admin"])
 adminProductsRouter.get("/:productId/releases/:releaseId", requireRole(["owner", "admin"]), async (c) => {
   const db = getTenantDB(c);
   const release = await db.select().from(productReleases).where(and(
-    eq(productReleases.accountId, c.get("accountId")!),
+    eq(productReleases.instanceId, c.get("instanceId")!),
     eq(productReleases.productId, c.req.param("productId")),
     eq(productReleases.id, c.req.param("releaseId")),
   )).get();
@@ -236,11 +269,11 @@ adminProductsRouter.get("/:productId/releases/:releaseId", requireRole(["owner",
 adminProductsRouter.patch("/:productId/releases/:releaseId", requireRole(["owner", "admin"]), async (c) => {
   const input = UpdateReleaseSchema.parse(await c.req.json());
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
   const releaseId = c.req.param("releaseId");
   const existing = await db.select().from(productReleases).where(and(
-    eq(productReleases.accountId, accountId), eq(productReleases.productId, productId), eq(productReleases.id, releaseId),
+    eq(productReleases.instanceId, instanceId), eq(productReleases.productId, productId), eq(productReleases.id, releaseId),
   )).get();
   if (!existing) throw new NotFoundError("Product Release not found");
   await db.update(productReleases).set({
@@ -248,23 +281,23 @@ adminProductsRouter.patch("/:productId/releases/:releaseId", requireRole(["owner
     ...(input.downloadUrl !== undefined ? { downloadUrl: input.downloadUrl } : {}),
     updatedAt: new Date().toISOString(),
   }).where(and(
-    eq(productReleases.accountId, accountId), eq(productReleases.productId, productId), eq(productReleases.id, releaseId),
+    eq(productReleases.instanceId, instanceId), eq(productReleases.productId, productId), eq(productReleases.id, releaseId),
   ));
   await recordAuditLog({
     c, action: "product_release.update", resourceType: "product_release", resourceId: releaseId,
     details: { productId, updatedFields: Object.keys(input) },
   });
   const updated = await db.select().from(productReleases).where(and(
-    eq(productReleases.accountId, accountId), eq(productReleases.id, releaseId),
+    eq(productReleases.instanceId, instanceId), eq(productReleases.id, releaseId),
   )).get();
   return c.json({ success: true, data: formatRelease(updated) });
 });
 
 adminProductsRouter.get("/:productId/trials", requireRole(["owner", "admin"]), async (c) => {
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
-  await requireProduct(db, accountId, productId);
+  await requireProduct(db, instanceId, productId);
   const items = await db.select({
     id: trialClaims.id,
     productId: trialClaims.productId,
@@ -275,39 +308,56 @@ adminProductsRouter.get("/:productId/trials", requireRole(["owner", "admin"]), a
     revokeReason: trialClaims.revokeReason,
     featuresJson: trialClaims.featuresJson,
   }).from(trialClaims).where(and(
-    eq(trialClaims.accountId, accountId), eq(trialClaims.productId, productId),
+    eq(trialClaims.instanceId, instanceId), eq(trialClaims.productId, productId),
   )).orderBy(desc(trialClaims.claimedAt)).all();
-  return c.json({ success: true, data: { items: items.map(({ featuresJson, ...item }) => ({
-    ...item, features: parseFeatures(featuresJson),
+  return c.json({ success: true, data: { items: items.map((item) => ({
+    id: item.id,
+    product_id: item.productId,
+    claimed_at: item.claimedAt,
+    expires_at: item.expiresAt,
+    last_validated_at: item.lastValidatedAt,
+    revoked_at: item.revokedAt,
+    revoke_reason: item.revokeReason,
+    features: parseFeatures(item.featuresJson),
   })) } });
 });
 
 adminProductsRouter.get("/:productId/trials/:trialId", requireRole(["owner", "admin"]), async (c) => {
   const db = getTenantDB(c);
   const trial = await db.select().from(trialClaims).where(and(
-    eq(trialClaims.accountId, c.get("accountId")!),
+    eq(trialClaims.instanceId, c.get("instanceId")!),
     eq(trialClaims.productId, c.req.param("productId")),
     eq(trialClaims.id, c.req.param("trialId")),
   )).get();
   if (!trial) throw new NotFoundError("Trial Claim not found");
-  const { trialTokenHash: _token, fingerprintHash: _fingerprint, featuresJson, ...safe } = trial;
-  return c.json({ success: true, data: { ...safe, features: parseFeatures(featuresJson) } });
+  return c.json({ success: true, data: {
+    id: trial.id,
+    instance_id: trial.instanceId,
+    product_id: trial.productId,
+    claimed_at: trial.claimedAt,
+    expires_at: trial.expiresAt,
+    last_validated_at: trial.lastValidatedAt,
+    revoked_at: trial.revokedAt,
+    revoke_reason: trial.revokeReason,
+    updated_at: trial.updatedAt,
+    features: parseFeatures(trial.featuresJson),
+  } });
 });
 
 adminProductsRouter.post("/:productId/trials/:trialId/revoke", requireRole(["owner", "admin"]), async (c) => {
-  const input = z.object({ reason: z.string().trim().min(1).max(1000) }).parse(await c.req.json());
+  const input = z.object({ reason: z.string().trim().min(1).max(1000) }).strict().parse(await c.req.json());
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
   const trialId = c.req.param("trialId");
   const trial = await db.select().from(trialClaims).where(and(
-    eq(trialClaims.accountId, accountId), eq(trialClaims.productId, productId), eq(trialClaims.id, trialId),
+    eq(trialClaims.instanceId, instanceId), eq(trialClaims.productId, productId), eq(trialClaims.id, trialId),
   )).get();
   if (!trial) throw new NotFoundError("Trial Claim not found");
   if (!trial.revokedAt) {
     const now = new Date().toISOString();
     await db.update(trialClaims).set({ revokedAt: now, revokeReason: input.reason, updatedAt: now }).where(and(
-      eq(trialClaims.accountId, accountId), eq(trialClaims.productId, productId), eq(trialClaims.id, trialId),
+      eq(trialClaims.instanceId, instanceId), eq(trialClaims.productId, productId), eq(trialClaims.id, trialId),
       sql`${trialClaims.revokedAt} IS NULL`,
     ));
     await recordAuditLog({
@@ -316,37 +366,37 @@ adminProductsRouter.post("/:productId/trials/:trialId/revoke", requireRole(["own
     });
   }
   const updated = await db.select().from(trialClaims).where(and(
-    eq(trialClaims.accountId, accountId), eq(trialClaims.productId, productId), eq(trialClaims.id, trialId),
+    eq(trialClaims.instanceId, instanceId), eq(trialClaims.productId, productId), eq(trialClaims.id, trialId),
   )).get();
   return c.json({ success: true, data: {
-    id: updated!.id, revokedAt: updated!.revokedAt, revokeReason: updated!.revokeReason,
+    id: updated!.id, revoked_at: updated!.revokedAt, revoke_reason: updated!.revokeReason,
   } });
 });
 
 adminProductsRouter.get("/:productId", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
-  const product = await requireProduct(getTenantDB(c), c.get("accountId")!, c.req.param("productId"));
+  const product = await requireProduct(getTenantDB(c), c.get("instanceId")!, c.req.param("productId"));
   return c.json({ success: true, data: formatProduct(product) });
 });
 
 adminProductsRouter.patch("/:productId", requireRole(["owner", "admin"]), async (c) => {
   const input = UpdateProductSchema.parse(await c.req.json());
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
-  const existing = await requireProduct(db, accountId, productId);
+  const existing = await requireProduct(db, instanceId, productId);
 
   if (input.billingEnvironment !== undefined && input.billingEnvironment !== existing.billingEnvironment) {
     const lock = await db.select({
       activeOfferCount: sql<number>`(
         SELECT COUNT(*) FROM billing_offers
-        WHERE account_id = ${accountId} AND product_id = ${productId} AND status = 'active'
+        WHERE instance_id = ${instanceId} AND product_id = ${productId} AND status = 'active'
       )`,
       paymentLicenseCount: sql<number>`(
         SELECT COUNT(*) FROM licenses
-        WHERE account_id = ${accountId} AND product_id = ${productId}
+        WHERE instance_id = ${instanceId} AND product_id = ${productId}
           AND source = 'payment' AND is_checkout_verification = 0
       )`,
-    }).from(products).where(and(eq(products.accountId, accountId), eq(products.id, productId))).get();
+    }).from(products).where(and(eq(products.instanceId, instanceId), eq(products.id, productId))).get();
     if ((lock?.activeOfferCount ?? 0) > 0 || (lock?.paymentLicenseCount ?? 0) > 0) {
       throw new ConflictError(
         "PRODUCT_BILLING_ENVIRONMENT_LOCKED",
@@ -360,27 +410,28 @@ adminProductsRouter.patch("/:productId", requireRole(["owner", "admin"]), async 
     ...(input.name !== undefined ? { name: input.name } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
     ...(input.billingEnvironment !== undefined ? { billingEnvironment: input.billingEnvironment } : {}),
+    ...(input.paymentGraceSeconds !== undefined ? { paymentGraceSeconds: input.paymentGraceSeconds } : {}),
     ...(trial !== undefined ? {
       trialEnabled: trial.enabled,
       trialDurationSeconds: trial.enabled ? trial.durationSeconds! : null,
       trialFeaturesJson: JSON.stringify(trial.features),
     } : {}),
     updatedAt: new Date().toISOString(),
-  }).where(and(eq(products.accountId, accountId), eq(products.id, productId)));
+  }).where(and(eq(products.instanceId, instanceId), eq(products.id, productId)));
   await recordAuditLog({
     c, action: "product.update", resourceType: "product", resourceId: productId,
     details: { updatedFields: Object.keys(input) },
   });
-  return c.json({ success: true, data: formatProduct(await requireProduct(db, accountId, productId)) });
+  return c.json({ success: true, data: formatProduct(await requireProduct(db, instanceId, productId)) });
 });
 
 adminProductsRouter.post("/:productId/archive", requireRole(["owner", "admin"]), async (c) => {
   const db = getTenantDB(c);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
-  await requireProduct(db, accountId, productId);
+  await requireProduct(db, instanceId, productId);
   await db.update(products).set({ status: "archived", updatedAt: new Date().toISOString() }).where(and(
-    eq(products.accountId, accountId), eq(products.id, productId),
+    eq(products.instanceId, instanceId), eq(products.id, productId),
   ));
   await recordAuditLog({ c, action: "product.archive", resourceType: "product", resourceId: productId });
   return c.json({ success: true, data: { id: productId, status: "archived" } });

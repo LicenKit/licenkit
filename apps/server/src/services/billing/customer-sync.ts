@@ -17,7 +17,7 @@ export interface TrustedBillingCustomerSnapshot {
 
 interface BillingCustomerRow {
   id: string;
-  account_id: string;
+  instance_id: string;
   billing_provider_id: string;
   customer_id: string | null;
   external_customer_id: string;
@@ -42,49 +42,49 @@ export function normalizeCustomerEmail(email: string): string {
 
 export async function getBillingProvider(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   billingProviderId: string,
 ): Promise<BillingProviderRecord | null> {
   const row = await db.prepare(
-    `SELECT id, account_id, provider, environment, client_side_token,
+    `SELECT id, instance_id, provider, environment, client_side_token,
             webhook_secret_ciphertext, api_secret_ciphertext, status, created_at, updated_at
      FROM billing_providers
-     WHERE account_id = ?1 AND id = ?2
+     WHERE instance_id = ?1 AND id = ?2
      LIMIT 1`,
-  ).bind(accountId, billingProviderId).first<BillingProviderRecord>();
+  ).bind(instanceId, billingProviderId).first<BillingProviderRecord>();
   return row ?? null;
 }
 
 export async function getBillingCustomerByExternalId(
   db: D1Database,
-  accountId: string,
+  instanceId: string,
   billingProviderId: string,
   externalCustomerId: string,
 ): Promise<BillingCustomerRow | null> {
   const row = await db.prepare(
-    `SELECT id, account_id, billing_provider_id, customer_id, external_customer_id,
+    `SELECT id, instance_id, billing_provider_id, customer_id, external_customer_id,
             provider_email, provider_status, link_status, external_updated_at
      FROM billing_customers
-     WHERE account_id = ?1 AND billing_provider_id = ?2 AND external_customer_id = ?3
+     WHERE instance_id = ?1 AND billing_provider_id = ?2 AND external_customer_id = ?3
      LIMIT 1`,
-  ).bind(accountId, billingProviderId, externalCustomerId).first<BillingCustomerRow>();
+  ).bind(instanceId, billingProviderId, externalCustomerId).first<BillingCustomerRow>();
   return row ?? null;
 }
 
 export async function syncTrustedBillingCustomer(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   billingProviderId: string;
   snapshot: TrustedBillingCustomerSnapshot;
   source: BillingCustomerSyncSource;
   now?: Date;
 }): Promise<BillingCustomerRow & { ignoredAsStale: boolean }> {
-  const { db, accountId, billingProviderId, snapshot, source } = input;
+  const { db, instanceId, billingProviderId, snapshot, source } = input;
   const now = (input.now ?? new Date()).toISOString();
   const email = normalizeCustomerEmail(snapshot.email);
   const current = await getBillingCustomerByExternalId(
     db,
-    accountId,
+    instanceId,
     billingProviderId,
     snapshot.externalCustomerId,
   );
@@ -95,9 +95,9 @@ export async function syncTrustedBillingCustomer(input: {
   if (current?.customer_id) {
     const customer = await db.prepare(
       `SELECT email, status FROM customers
-       WHERE account_id = ?1 AND id = ?2
+       WHERE instance_id = ?1 AND id = ?2
        LIMIT 1`,
-    ).bind(accountId, current.customer_id).first<{ email: string; status: "active" | "disabled" }>();
+    ).bind(instanceId, current.customer_id).first<{ email: string; status: "active" | "disabled" }>();
     if (!customer) {
       throw new BillingProcessingError(
         "BILLING_CUSTOMER_LINK_BROKEN",
@@ -114,7 +114,7 @@ export async function syncTrustedBillingCustomer(input: {
        SET provider_email = ?1, provider_name = ?2, provider_status = ?3,
            link_status = ?4, last_sync_source = ?5, external_updated_at = ?6,
            last_external_event_id = ?7, updated_at = ?8
-       WHERE account_id = ?9 AND billing_provider_id = ?10 AND external_customer_id = ?11`,
+       WHERE instance_id = ?9 AND billing_provider_id = ?10 AND external_customer_id = ?11`,
     ).bind(
       email,
       snapshot.name,
@@ -124,7 +124,7 @@ export async function syncTrustedBillingCustomer(input: {
       snapshot.externalUpdatedAt,
       snapshot.externalEventId,
       now,
-      accountId,
+      instanceId,
       billingProviderId,
       snapshot.externalCustomerId,
     ).run();
@@ -146,50 +146,50 @@ export async function syncTrustedBillingCustomer(input: {
          SET provider_email = ?1, provider_name = ?2, provider_status = 'archived',
              link_status = 'needs_attention', last_sync_source = ?3,
              external_updated_at = ?4, last_external_event_id = ?5, updated_at = ?6
-         WHERE account_id = ?7 AND id = ?8`,
+         WHERE instance_id = ?7 AND id = ?8`,
       ).bind(email, snapshot.name, source, snapshot.externalUpdatedAt, snapshot.externalEventId,
-        now, accountId, current.id).run();
+        now, instanceId, current.id).run();
     } else {
       await db.prepare(
         `INSERT INTO billing_customers (
-           id, account_id, billing_provider_id, customer_id, external_customer_id,
+           id, instance_id, billing_provider_id, customer_id, external_customer_id,
            provider_email, provider_name, provider_status, link_status,
            last_sync_source, external_updated_at, last_external_event_id, created_at, updated_at
          ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, 'archived', 'needs_attention', ?7, ?8, ?9, ?10, ?10)`,
-      ).bind(billingCustomerId, accountId, billingProviderId, snapshot.externalCustomerId,
+      ).bind(billingCustomerId, instanceId, billingProviderId, snapshot.externalCustomerId,
         email, snapshot.name, source, snapshot.externalUpdatedAt, snapshot.externalEventId, now).run();
     }
-    const row = await getBillingCustomerByExternalId(db, accountId, billingProviderId, snapshot.externalCustomerId);
+    const row = await getBillingCustomerByExternalId(db, instanceId, billingProviderId, snapshot.externalCustomerId);
     if (!row) throw new Error("Billing Customer insert did not persist.");
     return { ...row, ignoredAsStale: false };
   }
 
   const newCustomerId = `cus_${ulid().toLowerCase()}`;
   const customerInsert = db.prepare(
-    `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
+    `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
      VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)
-     ON CONFLICT(account_id, email) DO NOTHING`,
-  ).bind(newCustomerId, accountId, email, snapshot.name, now);
+     ON CONFLICT(instance_id, email) DO NOTHING`,
+  ).bind(newCustomerId, instanceId, email, snapshot.name, now);
   const billingInsertOrUpdate = current
     ? db.prepare(
         `UPDATE billing_customers
-         SET customer_id = (SELECT id FROM customers WHERE account_id = ?1 AND email = ?2 LIMIT 1),
+         SET customer_id = (SELECT id FROM customers WHERE instance_id = ?1 AND email = ?2 LIMIT 1),
              provider_email = ?2, provider_name = ?3, provider_status = 'active',
              link_status = 'linked', last_sync_source = ?4, external_updated_at = ?5,
              last_external_event_id = ?6, updated_at = ?7
-         WHERE account_id = ?1 AND id = ?8 AND customer_id IS NULL`,
-      ).bind(accountId, email, snapshot.name, source, snapshot.externalUpdatedAt,
+         WHERE instance_id = ?1 AND id = ?8 AND customer_id IS NULL`,
+      ).bind(instanceId, email, snapshot.name, source, snapshot.externalUpdatedAt,
         snapshot.externalEventId, now, current.id)
     : db.prepare(
         `INSERT INTO billing_customers (
-           id, account_id, billing_provider_id, customer_id, external_customer_id,
+           id, instance_id, billing_provider_id, customer_id, external_customer_id,
            provider_email, provider_name, provider_status, link_status,
            last_sync_source, external_updated_at, last_external_event_id, created_at, updated_at
          ) SELECT ?1, ?2, ?3, customer.id, ?4, ?5, ?6, 'active', 'linked', ?7, ?8, ?9, ?10, ?10
            FROM customers AS customer
-          WHERE customer.account_id = ?2 AND customer.email = ?5
+          WHERE customer.instance_id = ?2 AND customer.email = ?5
           LIMIT 1`,
-      ).bind(billingCustomerId, accountId, billingProviderId, snapshot.externalCustomerId,
+      ).bind(billingCustomerId, instanceId, billingProviderId, snapshot.externalCustomerId,
         email, snapshot.name, source, snapshot.externalUpdatedAt, snapshot.externalEventId, now);
 
   try {
@@ -197,11 +197,11 @@ export async function syncTrustedBillingCustomer(input: {
   } catch (error) {
     // Another event may have linked the same external Customer concurrently.
     // Re-read by the unique provider identity; never scan or guess by payload.
-    const raced = await getBillingCustomerByExternalId(db, accountId, billingProviderId, snapshot.externalCustomerId);
+    const raced = await getBillingCustomerByExternalId(db, instanceId, billingProviderId, snapshot.externalCustomerId);
     if (raced) return { ...raced, ignoredAsStale: false };
     throw error;
   }
-  const linked = await getBillingCustomerByExternalId(db, accountId, billingProviderId, snapshot.externalCustomerId);
+  const linked = await getBillingCustomerByExternalId(db, instanceId, billingProviderId, snapshot.externalCustomerId);
   if (!linked) {
     throw new BillingProcessingError(
       "BILLING_CUSTOMER_LINK_FAILED",
@@ -216,7 +216,7 @@ export async function syncTrustedBillingCustomer(input: {
 export async function reconcileBillingCustomer(input: {
   db: D1Database;
   env: { STORAGE_ENCRYPTION_KEY?: string; STORAGE_ENCRYPTION_KEY_ID?: string };
-  accountId: string;
+  instanceId: string;
   billingCustomerId: string;
   fetchImpl?: typeof fetch;
   now?: Date;
@@ -224,9 +224,9 @@ export async function reconcileBillingCustomer(input: {
   const current = await input.db.prepare(
     `SELECT id, billing_provider_id, external_customer_id
      FROM billing_customers
-     WHERE account_id = ?1 AND id = ?2
+     WHERE instance_id = ?1 AND id = ?2
      LIMIT 1`,
-  ).bind(input.accountId, input.billingCustomerId).first<{
+  ).bind(input.instanceId, input.billingCustomerId).first<{
     id: string; billing_provider_id: string; external_customer_id: string;
   }>();
   if (!current) {
@@ -234,7 +234,7 @@ export async function reconcileBillingCustomer(input: {
       billingCustomerId: input.billingCustomerId,
     });
   }
-  const provider = await getBillingProvider(input.db, input.accountId, current.billing_provider_id);
+  const provider = await getBillingProvider(input.db, input.instanceId, current.billing_provider_id);
   if (!provider) {
     throw new BillingProcessingError("BILLING_PROVIDER_NOT_FOUND", "Billing Provider was not found.", "failed", {
       billingProviderId: current.billing_provider_id,
@@ -261,7 +261,7 @@ export async function reconcileBillingCustomer(input: {
     if (error instanceof PaddleHttpError && error.code === "BILLING_PROVIDER_API_AUTH_INVALID") {
       await recordProviderSystemIssue({
         db: input.db,
-        accountId: input.accountId,
+        instanceId: input.instanceId,
         billingProviderId: provider.id,
         capability: "customer_read",
         issueCode: error.code,
@@ -273,7 +273,7 @@ export async function reconcileBillingCustomer(input: {
   }
   const synced = await syncTrustedBillingCustomer({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     billingProviderId: provider.id,
     source: "reconciliation",
     now,

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { Hono } from "hono";
-import type { AppContext, UserRole } from "../src/types";
+import type { AppContext, InstanceRole } from "../src/types";
 import { errorHandler } from "../src/middleware/error";
 import {
   inspectAdminRoutePermissions,
@@ -10,6 +10,7 @@ import {
 import { app as serverApp } from "../src/index";
 import { adminAuditRouter } from "../src/routes/admin/audit.routes";
 import { adminProductsRouter } from "../src/routes/admin/products.routes";
+import { adminStatsRouter } from "../src/routes/admin/stats.routes";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const now = "2026-09-19T12:00:00.000Z";
@@ -38,24 +39,28 @@ const ALL_ROLE_ROUTE_KEYS = [
   "GET /api/v1/admin/email-deliveries/:deliveryId",
   "GET /api/v1/admin/email-template-contracts",
   "GET /api/v1/admin/email-template-contracts/:notificationType/versions/:contractVersion/examples/:provider",
+  "GET /api/v1/admin/instance",
+  "GET /api/v1/admin/invitations",
   "GET /api/v1/admin/license-plans",
   "GET /api/v1/admin/license-plans/:planId",
   "GET /api/v1/admin/licenses",
   "GET /api/v1/admin/licenses/:licenseId",
   "GET /api/v1/admin/licenses/:licenseId/activations",
+  "GET /api/v1/admin/members",
+  "GET /api/v1/admin/profile",
   "GET /api/v1/admin/products",
   "GET /api/v1/admin/products/:productId",
   "GET /api/v1/admin/stats",
   "GET /api/v1/admin/system/issues",
+  "PATCH /api/v1/admin/profile",
+  "POST /api/v1/admin/profile/password",
 ] as const;
 
 const OWNER_ONLY_ROUTE_KEYS = [
-  "GET /api/v1/admin/account",
-  "GET /api/v1/admin/users",
-  "PATCH /api/v1/admin/account",
-  "PATCH /api/v1/admin/users/:userId",
-  "POST /api/v1/admin/users",
-  "POST /api/v1/admin/users/:userId/sessions/revoke",
+  "PATCH /api/v1/admin/members/:userId",
+  "POST /api/v1/admin/invitations",
+  "POST /api/v1/admin/invitations/:invitationId/resend",
+  "POST /api/v1/admin/invitations/:invitationId/revoke",
 ] as const;
 
 const OWNER_ADMIN_MEMBER_ROUTE_KEYS = [
@@ -114,27 +119,27 @@ const OWNER_ADMIN_ROUTE_KEYS = [
   "PUT /api/v1/admin/email-integrations/:integrationId/template-bindings/:notificationType",
 ] as const;
 
-const EXPECTED_ROUTE_ROLES: ReadonlyMap<string, readonly UserRole[]> = new Map([
+const EXPECTED_ROUTE_ROLES: ReadonlyMap<string, readonly InstanceRole[]> = new Map([
   ...ALL_ROLE_ROUTE_KEYS.map((key) => [key, ALL_ROLES] as const),
   ...OWNER_ONLY_ROUTE_KEYS.map((key) => [key, OWNER_ONLY] as const),
   ...OWNER_ADMIN_MEMBER_ROUTE_KEYS.map((key) => [key, OWNER_ADMIN_MEMBER] as const),
   ...OWNER_ADMIN_ROUTE_KEYS.map((key) => [key, OWNER_ADMIN] as const),
 ]);
 
-function expectedRolesForAdminRoute(method: string, path: string): readonly UserRole[] {
+function expectedRolesForAdminRoute(method: string, path: string): readonly InstanceRole[] {
   const key = `${method} ${path}`;
   const roles = EXPECTED_ROUTE_ROLES.get(key);
   if (!roles) throw new Error(`Mounted Admin route is missing from the expected RBAC table: ${key}`);
   return roles;
 }
 
-function auditApp(role?: UserRole, userId = "usr_member") {
+function auditApp(role?: InstanceRole, userId = "usr_member") {
   const app = new Hono<AppContext>();
   app.onError(errorHandler);
   app.use("*", async (c, next) => {
     c.set("requestId", "req_authz_test");
-    c.set("accountId", "acc_authz");
-    if (role) c.set("userRole", role);
+    c.set("instanceId", "ins_authz");
+    if (role) c.set("instanceRole", role);
     c.set("userId", userId);
     c.set("userEmail", `${userId}@example.test`);
     await next();
@@ -143,13 +148,40 @@ function auditApp(role?: UserRole, userId = "usr_member") {
   return app;
 }
 
-function productsApp(role: UserRole) {
+function statsApp(role: InstanceRole = "viewer") {
+  const app = new Hono<AppContext>();
+  app.onError(errorHandler);
+  app.use("*", async (c, next) => {
+    c.set("requestId", "req_stats_test");
+    c.set("instanceId", "ins_authz");
+    c.set("instanceRole", role);
+    c.set("userId", "usr_other");
+    c.set("userEmail", "usr_other@example.test");
+    await next();
+  });
+  app.route("/", adminStatsRouter);
+  return app;
+}
+
+function expectNoCamelCaseKeys(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach(expectNoCamelCaseKeys);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value)) {
+    expect(key).not.toMatch(/[a-z][A-Z]/);
+    expectNoCamelCaseKeys(item);
+  }
+}
+
+function productsApp(role: InstanceRole) {
   const app = new Hono<AppContext>();
   app.onError(errorHandler);
   app.use("*", async (c, next) => {
     c.set("requestId", "req_product_authz_test");
-    c.set("accountId", "acc_authz");
-    c.set("userRole", role);
+    c.set("instanceId", "ins_authz");
+    c.set("instanceRole", role);
     c.set("userId", "usr_other");
     c.set("userEmail", "usr_other@example.test");
     await next();
@@ -164,8 +196,8 @@ function permissionDeclarationApp(declared: boolean) {
   app.onError(errorHandler);
   app.use("*", async (c, next) => {
     c.set("requestId", "req_permission_declaration_test");
-    c.set("accountId", "acc_authz");
-    c.set("userRole", "owner");
+    c.set("instanceId", "ins_authz");
+    c.set("instanceRole", "owner");
     c.set("userId", "usr_other");
     c.set("userEmail", "usr_other@example.test");
     await next();
@@ -186,49 +218,49 @@ describe("V1 admin authorization and audit visibility", () => {
     testEnv = createTestEnv();
     const db = testEnv.sqliteDb;
     db.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES ('acc_authz', 'Authorization', 'authorization', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES ('ins_authz', 'Authorization', 'authorization', 'https://authorization.example.test', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (
-         id, account_id, slug, name, billing_environment, trial_enabled,
+         id, instance_id, slug, name, billing_environment, trial_enabled,
          trial_features_json, status, created_at, updated_at
-       ) VALUES ('prod_authz', 'acc_authz', 'authz-product', 'Authorization Product',
+       ) VALUES ('prod_authz', 'ins_authz', 'authz-product', 'Authorization Product',
                  NULL, 0, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES ('acc_foreign', 'Foreign Account', 'foreign-account', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES ('ins_foreign', 'Foreign Instance', 'foreign-instance', 'https://foreign.example.test', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (
-         id, account_id, slug, name, billing_environment, trial_enabled,
+         id, instance_id, slug, name, billing_environment, trial_enabled,
          trial_features_json, status, created_at, updated_at
-       ) VALUES ('prod_foreign', 'acc_foreign', 'foreign-product', 'Foreign Product',
+       ) VALUES ('prod_foreign', 'ins_foreign', 'foreign-product', 'Foreign Product',
                  NULL, 0, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO product_releases (
-         id, account_id, product_id, version, platform, artifact_sha256,
+         id, instance_id, product_id, version, platform, artifact_sha256,
          released_at, created_at, updated_at
-       ) VALUES ('rel_authz', 'acc_authz', 'prod_authz', '1.0.0', 'macos-universal',
+       ) VALUES ('rel_authz', 'ins_authz', 'prod_authz', '1.0.0', 'macos-universal',
                  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
                  ?, ?, ?)`,
     ).run(now, now, now);
-    for (const [id, role] of [["usr_member", "member"], ["usr_other", "admin"]]) {
+    for (const id of ["usr_member", "usr_other"]) {
       db.prepare(
-        `INSERT INTO users (id, account_id, email, password_hash, name, role, status, created_at, updated_at)
-         VALUES (?, 'acc_authz', ?, 'hash', ?, ?, 'active', ?, ?)`,
-      ).run(id, `${id}@example.test`, id, role, now, now);
+        `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
+         VALUES (?, ?, 'hash', ?, ?, ?)`,
+      ).run(id, `${id}@example.test`, id, now, now);
     }
     db.prepare(
       `INSERT INTO audit_logs (
-         id, account_id, actor_type, actor_user_id, action, resource_type,
+         id, scope_type, instance_id, actor_type, actor_user_id, action, resource_type,
          resource_id, request_id, details_redacted_json, ip, user_agent, created_at
        ) VALUES
-         ('aud_self', 'acc_authz', 'user', 'usr_member', 'license.read', 'license',
-          'lic_self', 'req_self', '{"result":"allowed"}', '203.0.113.1', 'member-agent', ?),
-         ('aud_other', 'acc_authz', 'user', 'usr_other', 'billing.provider.update', 'billing_provider',
+         ('aud_self', 'instance', 'ins_authz', 'user', 'usr_member', 'license.read', 'license',
+          'lic_self', 'req_self', '{"result":"allowed","resourceName":"License"}', '203.0.113.1', 'member-agent', ?),
+         ('aud_other', 'instance', 'ins_authz', 'user', 'usr_other', 'billing.provider.update', 'billing_provider',
           'bpr_other', 'req_other', '{"result":"changed"}', '203.0.113.2', 'admin-agent', ?)`,
     ).run(now, now);
   });
@@ -274,7 +306,10 @@ describe("V1 admin authorization and audit visibility", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as any;
     expect(body.data.items.map((item: any) => item.id)).toEqual(["aud_self"]);
-    expect(body.data.items[0].details).toEqual({ result: "allowed" });
+    expect(body.data.items[0].instance_id).toBe("ins_authz");
+    expect(body.data.items[0]).not.toHaveProperty("instanceId");
+    expect(body.data.items[0].details).toEqual({ result: "allowed", resource_name: "License" });
+    expectNoCamelCaseKeys(body);
   });
 
   it("returns viewers only a redacted summary", async () => {
@@ -285,19 +320,42 @@ describe("V1 admin authorization and audit visibility", () => {
     for (const item of body.data.items) {
       expect(item).not.toHaveProperty("details");
       expect(item).not.toHaveProperty("ip");
-      expect(item).not.toHaveProperty("userAgent");
-      expect(item).not.toHaveProperty("requestId");
+      expect(item).not.toHaveProperty("user_agent");
+      expect(item).not.toHaveProperty("request_id");
       expect(item.actor).toEqual({ type: "user" });
     }
+    expectNoCamelCaseKeys(body);
   });
 
-  it.each(["owner", "admin"] as const)("allows %s to read the full account audit", async (role) => {
+  it.each(["owner", "admin"] as const)("allows %s to read the full instance audit", async (role) => {
     const response = await auditApp(role, "usr_other").request("http://test/", {}, testEnv.env);
     expect(response.status).toBe(200);
     const body = await response.json() as any;
     expect(body.data.items).toHaveLength(2);
     expect(body.data.items[0]).toHaveProperty("details");
-    expect(body.data.items[0]).toHaveProperty("requestId");
+    expect(body.data.items[0]).toHaveProperty("request_id");
+    expectNoCamelCaseKeys(body);
+  });
+
+  it("rejects legacy camelCase audit query parameters", async () => {
+    const response = await auditApp("owner", "usr_other")
+      .request("http://test/?resourceType=license", {}, testEnv.env);
+    expect(response.status).toBe(400);
+  });
+
+  it("returns Stats using only snake_case keys", async () => {
+    const response = await statsApp().request("http://test/", {}, testEnv.env);
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(body.data).toMatchObject({
+      total_products: 1,
+      total_licenses: 0,
+      active_activations: 0,
+      expiring_soon: 0,
+      pending_inbound_events: 0,
+      pending_deliveries: 0,
+    });
+    expectNoCamelCaseKeys(body);
   });
 
   it.each([
@@ -313,12 +371,30 @@ describe("V1 admin authorization and audit visibility", () => {
     expect(detail.status).toBe(expectedStatus);
   });
 
-  it("returns not found when an Admin session probes another Account's resource", async () => {
+  it("returns not found when an Admin session probes another Instance's resource", async () => {
     const app = productsApp("owner");
     const own = await app.request("http://test/prod_authz", {}, testEnv.env);
     const foreign = await app.request("http://test/prod_foreign", {}, testEnv.env);
     expect(own.status).toBe(200);
+    const ownBody = await own.json() as any;
+    expect(ownBody.data.instance_id).toBe("ins_authz");
+    expect(ownBody.data).not.toHaveProperty("instanceId");
+    expectNoCamelCaseKeys(ownBody);
     expect(foreign.status).toBe(404);
     expect((await foreign.json() as any).error.code).toBe("NOT_FOUND");
+  });
+
+  it("rejects legacy camelCase Product input fields", async () => {
+    const response = await productsApp("owner").request("http://test/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        slug: "legacy-product-input",
+        name: "Legacy Product Input",
+        paymentGraceSeconds: 0,
+      }),
+    }, testEnv.env);
+    expect(response.status).toBe(400);
+    expect((await response.json() as any).error.code).toBe("VALIDATION_ERROR");
   });
 });

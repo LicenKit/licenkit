@@ -33,7 +33,7 @@ interface CustomerRow {
 export async function issueManualLicense(input: {
   db: D1Database;
   env: { STORAGE_ENCRYPTION_KEY?: string; SENSITIVE_DELIVERY_PAYLOAD_TTL_SECONDS?: string | number };
-  accountId: string;
+  instanceId: string;
   licensePlanId: string;
   customerEmail: string;
   expiresAt?: string | null;
@@ -55,15 +55,15 @@ export async function issueManualLicense(input: {
        lp.status AS plan_status, p.status AS product_status,
        EXISTS (
          SELECT 1 FROM signing_keys sk
-         WHERE sk.account_id = lp.account_id
+         WHERE sk.instance_id = lp.instance_id
            AND sk.product_id = lp.product_id
            AND sk.status = 'active'
        ) AS has_active_signing_key
      FROM license_plans lp
-     JOIN products p ON p.account_id = lp.account_id AND p.id = lp.product_id
-     WHERE lp.account_id = ?1 AND lp.id = ?2
+     JOIN products p ON p.instance_id = lp.instance_id AND p.id = lp.product_id
+     WHERE lp.instance_id = ?1 AND lp.id = ?2
      LIMIT 1`
-  ).bind(input.accountId, input.licensePlanId));
+  ).bind(input.instanceId, input.licensePlanId));
   if (!plan) throw new NotFoundError("License Plan not found");
   if (plan.plan_status !== "active") {
     throw new AppError("LICENSE_PLAN_ARCHIVED", "An archived License Plan cannot issue new Licenses.", 409);
@@ -94,8 +94,8 @@ export async function issueManualLicense(input: {
   }, now, input.expiresAt);
 
   let customer = await firstD1<CustomerRow>(input.db.prepare(
-    `SELECT id, status FROM customers WHERE account_id = ?1 AND email = ?2 COLLATE NOCASE LIMIT 1`
-  ).bind(input.accountId, email));
+    `SELECT id, status FROM customers WHERE instance_id = ?1 AND email = ?2 COLLATE NOCASE LIMIT 1`
+  ).bind(input.instanceId, email));
   if (customer?.status === "disabled") {
     throw new AppError("CUSTOMER_DISABLED", "A License cannot be issued to a disabled Customer.", 409);
   }
@@ -107,7 +107,7 @@ export async function issueManualLicense(input: {
   const delivery = await prepareEmailNotificationDelivery({
     db: input.db,
     env: input.env,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     customerId,
     notificationType: "customer.license_issued",
     contractVersion: 1,
@@ -127,13 +127,13 @@ export async function issueManualLicense(input: {
   const statements: D1PreparedStatement[] = [];
   if (!customer) {
     statements.push(input.db.prepare(
-      `INSERT INTO customers (id, account_id, email, name, status, created_at, updated_at)
+      `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
        VALUES (?1, ?2, ?3, NULL, 'active', ?4, ?4)`
-    ).bind(customerId, input.accountId, email, nowIso));
+    ).bind(customerId, input.instanceId, email, nowIso));
   }
   statements.push(input.db.prepare(
     `INSERT INTO licenses (
-       id, account_id, customer_id, product_id, plan_id, plan_revision,
+       id, instance_id, customer_id, product_id, plan_id, plan_revision,
        license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
        payment_grace_seconds, max_activations, features_json, key_hash,
        key_version, key_rotated_at, source, source_billing_provider_id,
@@ -147,7 +147,7 @@ export async function issueManualLicense(input: {
      )`
   ).bind(
     licenseId,
-    input.accountId,
+    input.instanceId,
     customerId,
     plan.product_id,
     terms.planId,
@@ -167,7 +167,7 @@ export async function issueManualLicense(input: {
   statements.push(...delivery.statements);
   statements.push(prepareLicenseAudit({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     actor: input.actor,
     action: "license.issue_manual",
     resourceType: "license",

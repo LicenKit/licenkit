@@ -1,87 +1,9 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5dc5e8da-937c-4697-8906-d0d79796132e",
+  "id": "55a2d4ca-2842-46ab-86dc-6d498b8e293e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
-    "accounts": {
-      "name": "accounts",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "slug": {
-          "name": "slug",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "default_subscription_payment_grace_seconds": {
-          "name": "default_subscription_payment_grace_seconds",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 432000
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "uq_accounts_slug": {
-          "name": "uq_accounts_slug",
-          "columns": [
-            "slug"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "ck_accounts_default_subscription_payment_grace_seconds": {
-          "name": "ck_accounts_default_subscription_payment_grace_seconds",
-          "value": "\"accounts\".\"default_subscription_payment_grace_seconds\" >= 0"
-        },
-        "ck_accounts_status": {
-          "name": "ck_accounts_status",
-          "value": "\"accounts\".\"status\" in ('active', 'suspended', 'archived')"
-        }
-      }
-    },
     "activations": {
       "name": "activations",
       "columns": {
@@ -92,8 +14,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -196,7 +118,7 @@
         "idx_activations_license_status": {
           "name": "idx_activations_license_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "license_id",
             "status"
           ],
@@ -205,7 +127,7 @@
         "idx_activations_token_hash": {
           "name": "idx_activations_token_hash",
           "columns": [
-            "account_id",
+            "instance_id",
             "machine_token_hash"
           ],
           "isUnique": false
@@ -213,29 +135,29 @@
         "uq_activations_active_fingerprint": {
           "name": "uq_activations_active_fingerprint",
           "columns": [
-            "account_id",
+            "instance_id",
             "license_id",
             "fingerprint_hash"
           ],
           "isUnique": true,
           "where": "\"activations\".\"status\" = 'active'"
         },
-        "uq_activations_account_id": {
-          "name": "uq_activations_account_id",
+        "uq_activations_instance_id": {
+          "name": "uq_activations_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "activations_account_id_accounts_id_fk": {
-          "name": "activations_account_id_accounts_id_fk",
+        "activations_instance_id_instances_id_fk": {
+          "name": "activations_instance_id_instances_id_fk",
           "tableFrom": "activations",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -248,11 +170,11 @@
           "tableFrom": "activations",
           "tableTo": "licenses",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "license_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -275,13 +197,6 @@
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "account_id": {
-          "name": "account_id",
-          "type": "text",
-          "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
@@ -339,7 +254,6 @@
         "idx_admin_sessions_user_expiry": {
           "name": "idx_admin_sessions_user_expiry",
           "columns": [
-            "account_id",
             "user_id",
             "expires_at"
           ],
@@ -348,18 +262,9 @@
         "idx_admin_sessions_lookup": {
           "name": "idx_admin_sessions_lookup",
           "columns": [
-            "account_id",
             "session_token_hash"
           ],
           "isUnique": false
-        },
-        "uq_admin_sessions_account_id": {
-          "name": "uq_admin_sessions_account_id",
-          "columns": [
-            "account_id",
-            "id"
-          ],
-          "isUnique": true
         },
         "uq_admin_sessions_token_hash": {
           "name": "uq_admin_sessions_token_hash",
@@ -377,29 +282,14 @@
         }
       },
       "foreignKeys": {
-        "admin_sessions_account_id_accounts_id_fk": {
-          "name": "admin_sessions_account_id_accounts_id_fk",
-          "tableFrom": "admin_sessions",
-          "tableTo": "accounts",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_admin_sessions_user": {
-          "name": "fk_admin_sessions_user",
+        "admin_sessions_user_id_users_id_fk": {
+          "name": "admin_sessions_user_id_users_id_fk",
           "tableFrom": "admin_sessions",
           "tableTo": "users",
           "columnsFrom": [
-            "account_id",
             "user_id"
           ],
           "columnsTo": [
-            "account_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -420,11 +310,18 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "scope_type": {
+          "name": "scope_type",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "actor_type": {
@@ -507,10 +404,10 @@
         }
       },
       "indexes": {
-        "idx_audit_logs_account_created": {
-          "name": "idx_audit_logs_account_created",
+        "idx_audit_logs_instance_created": {
+          "name": "idx_audit_logs_instance_created",
           "columns": [
-            "account_id",
+            "instance_id",
             "\"created_at\" desc"
           ],
           "isUnique": false
@@ -518,7 +415,7 @@
         "idx_audit_logs_resource": {
           "name": "idx_audit_logs_resource",
           "columns": [
-            "account_id",
+            "instance_id",
             "resource_type",
             "resource_id",
             "\"created_at\" desc"
@@ -528,28 +425,29 @@
         "idx_audit_logs_action": {
           "name": "idx_audit_logs_action",
           "columns": [
-            "account_id",
+            "instance_id",
             "action",
             "\"created_at\" desc"
           ],
           "isUnique": false
         },
-        "uq_audit_logs_account_id": {
-          "name": "uq_audit_logs_account_id",
+        "idx_audit_logs_identity_created": {
+          "name": "idx_audit_logs_identity_created",
           "columns": [
-            "account_id",
-            "id"
+            "actor_user_id",
+            "\"created_at\" desc"
           ],
-          "isUnique": true
+          "isUnique": false,
+          "where": "\"audit_logs\".\"scope_type\" = 'identity'"
         }
       },
       "foreignKeys": {
-        "audit_logs_account_id_accounts_id_fk": {
-          "name": "audit_logs_account_id_accounts_id_fk",
+        "audit_logs_instance_id_instances_id_fk": {
+          "name": "audit_logs_instance_id_instances_id_fk",
           "tableFrom": "audit_logs",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -557,16 +455,14 @@
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "fk_audit_logs_user": {
-          "name": "fk_audit_logs_user",
+        "audit_logs_actor_user_id_users_id_fk": {
+          "name": "audit_logs_actor_user_id_users_id_fk",
           "tableFrom": "audit_logs",
           "tableTo": "users",
           "columnsFrom": [
-            "account_id",
             "actor_user_id"
           ],
           "columnsTo": [
-            "account_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -577,11 +473,11 @@
           "tableFrom": "audit_logs",
           "tableTo": "customers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "actor_customer_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -594,6 +490,14 @@
         "ck_audit_logs_actor_type": {
           "name": "ck_audit_logs_actor_type",
           "value": "\"audit_logs\".\"actor_type\" in ('user', 'customer', 'system')"
+        },
+        "ck_audit_logs_scope_type": {
+          "name": "ck_audit_logs_scope_type",
+          "value": "\"audit_logs\".\"scope_type\" in ('identity', 'instance')"
+        },
+        "ck_audit_logs_scope": {
+          "name": "ck_audit_logs_scope",
+          "value": "(\"audit_logs\".\"scope_type\" = 'identity'\n          and \"audit_logs\".\"instance_id\" is null\n          and \"audit_logs\".\"actor_type\" = 'user'\n          and \"audit_logs\".\"actor_user_id\" is not null)\n        or (\"audit_logs\".\"scope_type\" = 'instance' and \"audit_logs\".\"instance_id\" is not null)"
         },
         "ck_audit_logs_details_json": {
           "name": "ck_audit_logs_details_json",
@@ -615,8 +519,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -782,7 +686,7 @@
         "idx_billing_adjustments_review": {
           "name": "idx_billing_adjustments_review",
           "columns": [
-            "account_id",
+            "instance_id",
             "review_status",
             "\"updated_at\" desc"
           ],
@@ -791,17 +695,17 @@
         "idx_billing_adjustments_transaction": {
           "name": "idx_billing_adjustments_transaction",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_transaction_id",
             "\"updated_at\" desc"
           ],
           "isUnique": false
         },
-        "uq_billing_adjustments_account_id": {
-          "name": "uq_billing_adjustments_account_id",
+        "uq_billing_adjustments_instance_id": {
+          "name": "uq_billing_adjustments_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -809,6 +713,7 @@
         "uq_billing_adjustments_external": {
           "name": "uq_billing_adjustments_external",
           "columns": [
+            "instance_id",
             "billing_provider_id",
             "external_adjustment_id"
           ],
@@ -816,12 +721,25 @@
         }
       },
       "foreignKeys": {
-        "billing_adjustments_account_id_accounts_id_fk": {
-          "name": "billing_adjustments_account_id_accounts_id_fk",
+        "billing_adjustments_instance_id_instances_id_fk": {
+          "name": "billing_adjustments_instance_id_instances_id_fk",
           "tableFrom": "billing_adjustments",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "billing_adjustments_resolved_by_user_id_users_id_fk": {
+          "name": "billing_adjustments_resolved_by_user_id_users_id_fk",
+          "tableFrom": "billing_adjustments",
+          "tableTo": "users",
+          "columnsFrom": [
+            "resolved_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -834,11 +752,11 @@
           "tableFrom": "billing_adjustments",
           "tableTo": "billing_providers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "billing_provider_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -849,26 +767,11 @@
           "tableFrom": "billing_adjustments",
           "tableTo": "licenses",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "license_id"
           ],
           "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_billing_adjustments_resolved_by": {
-          "name": "fk_billing_adjustments_resolved_by",
-          "tableFrom": "billing_adjustments",
-          "tableTo": "users",
-          "columnsFrom": [
-            "account_id",
-            "resolved_by_user_id"
-          ],
-          "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -926,8 +829,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1030,7 +933,7 @@
         "uq_billing_checkout_verifications_transaction": {
           "name": "uq_billing_checkout_verifications_transaction",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_offer_id",
             "external_transaction_id"
           ],
@@ -1040,7 +943,7 @@
         "idx_billing_checkout_verifications_status_expiry": {
           "name": "idx_billing_checkout_verifications_status_expiry",
           "columns": [
-            "account_id",
+            "instance_id",
             "status",
             "expires_at"
           ],
@@ -1049,16 +952,16 @@
         "idx_billing_checkout_verifications_offer": {
           "name": "idx_billing_checkout_verifications_offer",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_offer_id",
             "\"completed_at\" desc"
           ],
           "isUnique": false
         },
-        "uq_billing_checkout_verifications_account_id": {
-          "name": "uq_billing_checkout_verifications_account_id",
+        "uq_billing_checkout_verifications_instance_id": {
+          "name": "uq_billing_checkout_verifications_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -1072,12 +975,25 @@
         }
       },
       "foreignKeys": {
-        "billing_checkout_verifications_account_id_accounts_id_fk": {
-          "name": "billing_checkout_verifications_account_id_accounts_id_fk",
+        "billing_checkout_verifications_instance_id_instances_id_fk": {
+          "name": "billing_checkout_verifications_instance_id_instances_id_fk",
           "tableFrom": "billing_checkout_verifications",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "billing_checkout_verifications_requested_by_user_id_users_id_fk": {
+          "name": "billing_checkout_verifications_requested_by_user_id_users_id_fk",
+          "tableFrom": "billing_checkout_verifications",
+          "tableTo": "users",
+          "columnsFrom": [
+            "requested_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -1090,26 +1006,11 @@
           "tableFrom": "billing_checkout_verifications",
           "tableTo": "billing_offers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "billing_offer_id"
           ],
           "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_billing_checkout_verifications_user": {
-          "name": "fk_billing_checkout_verifications_user",
-          "tableFrom": "billing_checkout_verifications",
-          "tableTo": "users",
-          "columnsFrom": [
-            "account_id",
-            "requested_by_user_id"
-          ],
-          "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1120,11 +1021,11 @@
           "tableFrom": "billing_checkout_verifications",
           "tableTo": "licenses",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "license_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1133,15 +1034,13 @@
         "fk_billing_checkout_verifications_delivery": {
           "name": "fk_billing_checkout_verifications_delivery",
           "tableFrom": "billing_checkout_verifications",
-          "tableTo": "outbound_deliveries",
+          "tableTo": "email_deliveries",
           "columnsFrom": [
-            "account_id",
-            "license_id",
+            "instance_id",
             "delivery_id"
           ],
           "columnsTo": [
-            "account_id",
-            "license_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1153,7 +1052,7 @@
       "checkConstraints": {
         "ck_billing_checkout_verifications_status": {
           "name": "ck_billing_checkout_verifications_status",
-          "value": "\"billing_checkout_verifications\".\"status\" in ('pending', 'delivery_pending', 'completed', 'needs_attention', 'expired')"
+          "value": "\"billing_checkout_verifications\".\"status\" in ('pending', 'delivery_pending', 'completed', 'needs_attention', 'expired', 'cancelled')"
         },
         "ck_billing_checkout_verifications_expiry": {
           "name": "ck_billing_checkout_verifications_expiry",
@@ -1166,10 +1065,6 @@
         "ck_billing_checkout_verifications_completed": {
           "name": "ck_billing_checkout_verifications_completed",
           "value": "(\"billing_checkout_verifications\".\"status\" = 'completed' and \"billing_checkout_verifications\".\"completed_at\" is not null)\n        or (\"billing_checkout_verifications\".\"status\" <> 'completed' and \"billing_checkout_verifications\".\"completed_at\" is null)"
-        },
-        "ck_billing_checkout_verifications_expired": {
-          "name": "ck_billing_checkout_verifications_expired",
-          "value": "\"billing_checkout_verifications\".\"status\" <> 'expired'\n        or (\"billing_checkout_verifications\".\"external_transaction_id\" is null\n          and \"billing_checkout_verifications\".\"license_id\" is null\n          and \"billing_checkout_verifications\".\"delivery_id\" is null)"
         }
       }
     },
@@ -1183,8 +1078,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1279,7 +1174,7 @@
         "idx_billing_customers_customer": {
           "name": "idx_billing_customers_customer",
           "columns": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "\"updated_at\" desc"
           ],
@@ -1288,33 +1183,25 @@
         "idx_billing_customers_link_status": {
           "name": "idx_billing_customers_link_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "link_status",
             "updated_at"
           ],
           "isUnique": false
         },
-        "uq_billing_customers_account_id": {
-          "name": "uq_billing_customers_account_id",
+        "uq_billing_customers_instance_id": {
+          "name": "uq_billing_customers_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
         },
-        "uq_billing_customers_provider_customer": {
-          "name": "uq_billing_customers_provider_customer",
+        "uq_billing_customers_instance_provider_customer": {
+          "name": "uq_billing_customers_instance_provider_customer",
           "columns": [
-            "billing_provider_id",
-            "external_customer_id"
-          ],
-          "isUnique": true
-        },
-        "uq_billing_customers_account_provider_customer": {
-          "name": "uq_billing_customers_account_provider_customer",
-          "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_customer_id"
           ],
@@ -1322,12 +1209,12 @@
         }
       },
       "foreignKeys": {
-        "billing_customers_account_id_accounts_id_fk": {
-          "name": "billing_customers_account_id_accounts_id_fk",
+        "billing_customers_instance_id_instances_id_fk": {
+          "name": "billing_customers_instance_id_instances_id_fk",
           "tableFrom": "billing_customers",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -1340,11 +1227,11 @@
           "tableFrom": "billing_customers",
           "tableTo": "billing_providers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "billing_provider_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1355,11 +1242,11 @@
           "tableFrom": "billing_customers",
           "tableTo": "customers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "customer_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1397,8 +1284,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1466,16 +1353,16 @@
         "idx_billing_offers_plan_status": {
           "name": "idx_billing_offers_plan_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "license_plan_id",
             "status"
           ],
           "isUnique": false
         },
-        "uq_billing_offers_account_id": {
-          "name": "uq_billing_offers_account_id",
+        "uq_billing_offers_instance_id": {
+          "name": "uq_billing_offers_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -1483,6 +1370,7 @@
         "uq_billing_offers_price": {
           "name": "uq_billing_offers_price",
           "columns": [
+            "instance_id",
             "billing_provider_id",
             "external_price_id"
           ],
@@ -1490,12 +1378,12 @@
         }
       },
       "foreignKeys": {
-        "billing_offers_account_id_accounts_id_fk": {
-          "name": "billing_offers_account_id_accounts_id_fk",
+        "billing_offers_instance_id_instances_id_fk": {
+          "name": "billing_offers_instance_id_instances_id_fk",
           "tableFrom": "billing_offers",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -1508,11 +1396,11 @@
           "tableFrom": "billing_offers",
           "tableTo": "billing_providers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "billing_provider_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1523,11 +1411,11 @@
           "tableFrom": "billing_offers",
           "tableTo": "products",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1538,12 +1426,12 @@
           "tableFrom": "billing_offers",
           "tableTo": "license_plans",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id",
             "license_plan_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "product_id",
             "id"
           ],
@@ -1574,8 +1462,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1640,18 +1528,18 @@
         }
       },
       "indexes": {
-        "idx_billing_providers_account_status": {
-          "name": "idx_billing_providers_account_status",
+        "idx_billing_providers_instance_status": {
+          "name": "idx_billing_providers_instance_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "status"
           ],
           "isUnique": false
         },
-        "uq_billing_providers_account_id": {
-          "name": "uq_billing_providers_account_id",
+        "uq_billing_providers_instance_id": {
+          "name": "uq_billing_providers_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -1659,7 +1547,7 @@
         "uq_billing_providers_identity": {
           "name": "uq_billing_providers_identity",
           "columns": [
-            "account_id",
+            "instance_id",
             "provider",
             "environment"
           ],
@@ -1667,12 +1555,12 @@
         }
       },
       "foreignKeys": {
-        "billing_providers_account_id_accounts_id_fk": {
-          "name": "billing_providers_account_id_accounts_id_fk",
+        "billing_providers_instance_id_instances_id_fk": {
+          "name": "billing_providers_instance_id_instances_id_fk",
           "tableFrom": "billing_providers",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -1708,8 +1596,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1840,16 +1728,16 @@
         "idx_billing_subscriptions_status_period": {
           "name": "idx_billing_subscriptions_status_period",
           "columns": [
-            "account_id",
+            "instance_id",
             "status",
             "current_period_end"
           ],
           "isUnique": false
         },
-        "uq_billing_subscriptions_account_id": {
-          "name": "uq_billing_subscriptions_account_id",
+        "uq_billing_subscriptions_instance_id": {
+          "name": "uq_billing_subscriptions_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -1857,6 +1745,7 @@
         "uq_billing_subscriptions_external": {
           "name": "uq_billing_subscriptions_external",
           "columns": [
+            "instance_id",
             "billing_provider_id",
             "external_subscription_id"
           ],
@@ -1865,18 +1754,19 @@
         "uq_billing_subscriptions_license": {
           "name": "uq_billing_subscriptions_license",
           "columns": [
+            "instance_id",
             "license_id"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "billing_subscriptions_account_id_accounts_id_fk": {
-          "name": "billing_subscriptions_account_id_accounts_id_fk",
+        "billing_subscriptions_instance_id_instances_id_fk": {
+          "name": "billing_subscriptions_instance_id_instances_id_fk",
           "tableFrom": "billing_subscriptions",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -1889,11 +1779,11 @@
           "tableFrom": "billing_subscriptions",
           "tableTo": "billing_providers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "billing_provider_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1904,12 +1794,12 @@
           "tableFrom": "billing_subscriptions",
           "tableTo": "billing_customers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_customer_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_customer_id"
           ],
@@ -1921,11 +1811,11 @@
           "tableFrom": "billing_subscriptions",
           "tableTo": "licenses",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "license_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -1967,8 +1857,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -2035,7 +1925,7 @@
         "idx_customer_login_challenges_customer": {
           "name": "idx_customer_login_challenges_customer",
           "columns": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "\"created_at\" desc"
           ],
@@ -2044,7 +1934,7 @@
         "idx_customer_login_challenges_lookup": {
           "name": "idx_customer_login_challenges_lookup",
           "columns": [
-            "account_id",
+            "instance_id",
             "token_hash"
           ],
           "isUnique": false
@@ -2052,17 +1942,17 @@
         "idx_customer_login_challenges_expiry": {
           "name": "idx_customer_login_challenges_expiry",
           "columns": [
-            "account_id",
+            "instance_id",
             "expires_at",
             "consumed_at",
             "revoked_at"
           ],
           "isUnique": false
         },
-        "uq_customer_login_challenges_account_id": {
-          "name": "uq_customer_login_challenges_account_id",
+        "uq_customer_login_challenges_instance_id": {
+          "name": "uq_customer_login_challenges_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -2070,7 +1960,7 @@
         "uq_customer_login_challenges_customer_id": {
           "name": "uq_customer_login_challenges_customer_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "id"
           ],
@@ -2085,12 +1975,12 @@
         }
       },
       "foreignKeys": {
-        "customer_login_challenges_account_id_accounts_id_fk": {
-          "name": "customer_login_challenges_account_id_accounts_id_fk",
+        "customer_login_challenges_instance_id_instances_id_fk": {
+          "name": "customer_login_challenges_instance_id_instances_id_fk",
           "tableFrom": "customer_login_challenges",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -2103,11 +1993,11 @@
           "tableFrom": "customer_login_challenges",
           "tableTo": "customers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "customer_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -2116,14 +2006,14 @@
         "fk_customer_login_challenges_delivery": {
           "name": "fk_customer_login_challenges_delivery",
           "tableFrom": "customer_login_challenges",
-          "tableTo": "outbound_deliveries",
+          "tableTo": "email_deliveries",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "delivery_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "id"
           ],
@@ -2145,8 +2035,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -2213,7 +2103,7 @@
         "idx_customer_sessions_customer_expiry": {
           "name": "idx_customer_sessions_customer_expiry",
           "columns": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "expires_at"
           ],
@@ -2222,15 +2112,15 @@
         "idx_customer_sessions_lookup": {
           "name": "idx_customer_sessions_lookup",
           "columns": [
-            "account_id",
+            "instance_id",
             "session_token_hash"
           ],
           "isUnique": false
         },
-        "uq_customer_sessions_account_id": {
-          "name": "uq_customer_sessions_account_id",
+        "uq_customer_sessions_instance_id": {
+          "name": "uq_customer_sessions_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -2238,6 +2128,7 @@
         "uq_customer_sessions_challenge": {
           "name": "uq_customer_sessions_challenge",
           "columns": [
+            "instance_id",
             "login_challenge_id"
           ],
           "isUnique": true
@@ -2258,12 +2149,12 @@
         }
       },
       "foreignKeys": {
-        "customer_sessions_account_id_accounts_id_fk": {
-          "name": "customer_sessions_account_id_accounts_id_fk",
+        "customer_sessions_instance_id_instances_id_fk": {
+          "name": "customer_sessions_instance_id_instances_id_fk",
           "tableFrom": "customer_sessions",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -2276,11 +2167,11 @@
           "tableFrom": "customer_sessions",
           "tableTo": "customers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "customer_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -2291,12 +2182,12 @@
           "tableFrom": "customer_sessions",
           "tableTo": "customer_login_challenges",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "login_challenge_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "id"
           ],
@@ -2318,8 +2209,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -2363,39 +2254,39 @@
         }
       },
       "indexes": {
-        "idx_customers_account_status": {
-          "name": "idx_customers_account_status",
+        "idx_customers_instance_status": {
+          "name": "idx_customers_instance_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "status",
             "\"created_at\" desc"
           ],
           "isUnique": false
         },
-        "uq_customers_account_id": {
-          "name": "uq_customers_account_id",
+        "uq_customers_instance_id": {
+          "name": "uq_customers_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
         },
-        "uq_customers_account_email": {
-          "name": "uq_customers_account_email",
+        "uq_customers_instance_email": {
+          "name": "uq_customers_instance_email",
           "columns": [
-            "account_id",
+            "instance_id",
             "email"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "customers_account_id_accounts_id_fk": {
-          "name": "customers_account_id_accounts_id_fk",
+        "customers_instance_id_instances_id_fk": {
+          "name": "customers_instance_id_instances_id_fk",
           "tableFrom": "customers",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -2413,6 +2304,602 @@
         }
       }
     },
+    "deployment_bootstrap": {
+      "name": "deployment_bootstrap",
+      "columns": {
+        "singleton_key": {
+          "name": "singleton_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_deployment_bootstrap_singleton": {
+          "name": "ck_deployment_bootstrap_singleton",
+          "value": "\"deployment_bootstrap\".\"singleton_key\" = 'deployment'"
+        }
+      }
+    },
+    "email_deliveries": {
+      "name": "email_deliveries",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recipient_type": {
+          "name": "recipient_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "notification_type": {
+          "name": "notification_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contract_version": {
+          "name": "contract_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recipient_email": {
+          "name": "recipient_email",
+          "type": "text COLLATE NOCASE",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "variables_ciphertext": {
+          "name": "variables_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "send_expires_at": {
+          "name": "send_expires_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "variables_expires_at": {
+          "name": "variables_expires_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_message_id": {
+          "name": "provider_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_error_json": {
+          "name": "last_error_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "locked_by": {
+          "name": "locked_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_email_deliveries_status_schedule": {
+          "name": "idx_email_deliveries_status_schedule",
+          "columns": [
+            "instance_id",
+            "status",
+            "next_attempt_at",
+            "locked_until",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "idx_email_deliveries_customer": {
+          "name": "idx_email_deliveries_customer",
+          "columns": [
+            "instance_id",
+            "customer_id",
+            "\"created_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "idx_email_deliveries_payload_retention": {
+          "name": "idx_email_deliveries_payload_retention",
+          "columns": [
+            "variables_expires_at",
+            "id"
+          ],
+          "isUnique": false,
+          "where": "\"email_deliveries\".\"status\" = 'accepted' and \"email_deliveries\".\"variables_ciphertext\" is not null"
+        },
+        "uq_email_deliveries_instance_id": {
+          "name": "uq_email_deliveries_instance_id",
+          "columns": [
+            "instance_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "uq_email_deliveries_customer_id": {
+          "name": "uq_email_deliveries_customer_id",
+          "columns": [
+            "instance_id",
+            "customer_id",
+            "id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "email_deliveries_instance_id_instances_id_fk": {
+          "name": "email_deliveries_instance_id_instances_id_fk",
+          "tableFrom": "email_deliveries",
+          "tableTo": "instances",
+          "columnsFrom": [
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_email_deliveries_customer": {
+          "name": "fk_email_deliveries_customer",
+          "tableFrom": "email_deliveries",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "instance_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "instance_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_email_deliveries_contract_version": {
+          "name": "ck_email_deliveries_contract_version",
+          "value": "\"email_deliveries\".\"contract_version\" >= 1"
+        },
+        "ck_email_deliveries_recipient": {
+          "name": "ck_email_deliveries_recipient",
+          "value": "(\"email_deliveries\".\"recipient_type\" = 'customer' and \"email_deliveries\".\"customer_id\" is not null)\n        or (\"email_deliveries\".\"recipient_type\" = 'instance_invitation' and \"email_deliveries\".\"customer_id\" is null)"
+        },
+        "ck_email_deliveries_status": {
+          "name": "ck_email_deliveries_status",
+          "value": "\"email_deliveries\".\"status\" in (\n        'pending', 'processing', 'waiting_configuration', 'retry_scheduled',\n        'accepted', 'failed', 'expired', 'cancelled'\n      )"
+        },
+        "ck_email_deliveries_attempt_count": {
+          "name": "ck_email_deliveries_attempt_count",
+          "value": "\"email_deliveries\".\"attempt_count\" >= 0"
+        },
+        "ck_email_deliveries_last_error_json": {
+          "name": "ck_email_deliveries_last_error_json",
+          "value": "\"email_deliveries\".\"last_error_json\" is null\n        or (json_valid(\"email_deliveries\".\"last_error_json\") and json_type(\"email_deliveries\".\"last_error_json\") = 'object')"
+        },
+        "ck_email_deliveries_lock": {
+          "name": "ck_email_deliveries_lock",
+          "value": "(\"email_deliveries\".\"status\" = 'processing'\n          and \"email_deliveries\".\"locked_by\" is not null\n          and \"email_deliveries\".\"locked_until\" is not null)\n        or (\"email_deliveries\".\"status\" <> 'processing'\n          and \"email_deliveries\".\"locked_by\" is null\n          and \"email_deliveries\".\"locked_until\" is null)"
+        },
+        "ck_email_deliveries_acceptance": {
+          "name": "ck_email_deliveries_acceptance",
+          "value": "(\"email_deliveries\".\"status\" = 'accepted'\n          and \"email_deliveries\".\"provider_message_id\" is not null\n          and \"email_deliveries\".\"accepted_at\" is not null\n          and \"email_deliveries\".\"last_error_json\" is null)\n        or (\"email_deliveries\".\"status\" <> 'accepted'\n          and \"email_deliveries\".\"provider_message_id\" is null\n          and \"email_deliveries\".\"accepted_at\" is null)"
+        },
+        "ck_email_deliveries_variables": {
+          "name": "ck_email_deliveries_variables",
+          "value": "(\"email_deliveries\".\"status\" in ('expired', 'cancelled') and \"email_deliveries\".\"variables_ciphertext\" is null)\n        or (\"email_deliveries\".\"status\" in (\n          'pending', 'processing', 'waiting_configuration', 'retry_scheduled', 'failed'\n        ) and \"email_deliveries\".\"variables_ciphertext\" is not null)\n        or (\"email_deliveries\".\"status\" = 'accepted')"
+        },
+        "ck_email_deliveries_retention": {
+          "name": "ck_email_deliveries_retention",
+          "value": "(\"email_deliveries\".\"status\" = 'accepted' and \"email_deliveries\".\"variables_expires_at\" is not null)\n        or (\"email_deliveries\".\"status\" <> 'accepted' and \"email_deliveries\".\"variables_expires_at\" is null)"
+        }
+      }
+    },
+    "email_integrations": {
+      "name": "email_integrations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "credential_ciphertext": {
+          "name": "credential_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "default_from_email": {
+          "name": "default_from_email",
+          "type": "text COLLATE NOCASE",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "default_from_name": {
+          "name": "default_from_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reply_to_email": {
+          "name": "reply_to_email",
+          "type": "text COLLATE NOCASE",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "max_automatic_attempts": {
+          "name": "max_automatic_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 4
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "uq_email_integrations_active_instance": {
+          "name": "uq_email_integrations_active_instance",
+          "columns": [
+            "instance_id"
+          ],
+          "isUnique": true,
+          "where": "\"email_integrations\".\"status\" = 'active'"
+        },
+        "idx_email_integrations_instance_status": {
+          "name": "idx_email_integrations_instance_status",
+          "columns": [
+            "instance_id",
+            "status"
+          ],
+          "isUnique": false
+        },
+        "uq_email_integrations_instance_id": {
+          "name": "uq_email_integrations_instance_id",
+          "columns": [
+            "instance_id",
+            "id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "email_integrations_instance_id_instances_id_fk": {
+          "name": "email_integrations_instance_id_instances_id_fk",
+          "tableFrom": "email_integrations",
+          "tableTo": "instances",
+          "columnsFrom": [
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_email_integrations_provider": {
+          "name": "ck_email_integrations_provider",
+          "value": "\"email_integrations\".\"provider\" = 'resend'"
+        },
+        "ck_email_integrations_max_attempts": {
+          "name": "ck_email_integrations_max_attempts",
+          "value": "\"email_integrations\".\"max_automatic_attempts\" between 1 and 20"
+        },
+        "ck_email_integrations_status": {
+          "name": "ck_email_integrations_status",
+          "value": "\"email_integrations\".\"status\" in ('active', 'disabled')"
+        }
+      }
+    },
+    "email_template_bindings": {
+      "name": "email_template_bindings",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email_integration_id": {
+          "name": "email_integration_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "notification_type": {
+          "name": "notification_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contract_version": {
+          "name": "contract_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_template_ref": {
+          "name": "provider_template_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_email_template_bindings_lookup": {
+          "name": "idx_email_template_bindings_lookup",
+          "columns": [
+            "instance_id",
+            "email_integration_id",
+            "notification_type",
+            "contract_version",
+            "status"
+          ],
+          "isUnique": false
+        },
+        "uq_email_template_bindings_instance_id": {
+          "name": "uq_email_template_bindings_instance_id",
+          "columns": [
+            "instance_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "uq_email_template_bindings_integration_id": {
+          "name": "uq_email_template_bindings_integration_id",
+          "columns": [
+            "instance_id",
+            "email_integration_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "uq_email_template_bindings_contract": {
+          "name": "uq_email_template_bindings_contract",
+          "columns": [
+            "instance_id",
+            "email_integration_id",
+            "notification_type"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "email_template_bindings_instance_id_instances_id_fk": {
+          "name": "email_template_bindings_instance_id_instances_id_fk",
+          "tableFrom": "email_template_bindings",
+          "tableTo": "instances",
+          "columnsFrom": [
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_email_template_bindings_integration": {
+          "name": "fk_email_template_bindings_integration",
+          "tableFrom": "email_template_bindings",
+          "tableTo": "email_integrations",
+          "columnsFrom": [
+            "instance_id",
+            "email_integration_id"
+          ],
+          "columnsTo": [
+            "instance_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_email_template_bindings_contract_version": {
+          "name": "ck_email_template_bindings_contract_version",
+          "value": "\"email_template_bindings\".\"contract_version\" >= 1"
+        },
+        "ck_email_template_bindings_template_ref": {
+          "name": "ck_email_template_bindings_template_ref",
+          "value": "length(trim(\"email_template_bindings\".\"provider_template_ref\")) > 0"
+        },
+        "ck_email_template_bindings_status": {
+          "name": "ck_email_template_bindings_status",
+          "value": "\"email_template_bindings\".\"status\" in ('active', 'disabled')"
+        }
+      }
+    },
     "inbound_events": {
       "name": "inbound_events",
       "columns": {
@@ -2423,8 +2910,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -2579,13 +3066,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "blocking_system_issue_id": {
-          "name": "blocking_system_issue_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "received_at": {
           "name": "received_at",
           "type": "text",
@@ -2612,7 +3092,7 @@
         "idx_inbound_events_status_schedule": {
           "name": "idx_inbound_events_status_schedule",
           "columns": [
-            "account_id",
+            "instance_id",
             "status",
             "next_attempt_at",
             "locked_until",
@@ -2623,7 +3103,7 @@
         "idx_inbound_events_provider_type": {
           "name": "idx_inbound_events_provider_type",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_event_type",
             "\"received_at\" desc"
@@ -2633,7 +3113,7 @@
         "idx_inbound_events_customer": {
           "name": "idx_inbound_events_customer",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_customer_id",
             "\"received_at\" desc"
@@ -2644,7 +3124,7 @@
         "idx_inbound_events_transaction": {
           "name": "idx_inbound_events_transaction",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_transaction_id",
             "\"received_at\" desc"
@@ -2655,7 +3135,7 @@
         "idx_inbound_events_subscription": {
           "name": "idx_inbound_events_subscription",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_subscription_id",
             "\"received_at\" desc"
@@ -2666,24 +3146,13 @@
         "idx_inbound_events_adjustment": {
           "name": "idx_inbound_events_adjustment",
           "columns": [
-            "account_id",
+            "instance_id",
             "billing_provider_id",
             "external_adjustment_id",
             "\"received_at\" desc"
           ],
           "isUnique": false,
           "where": "\"inbound_events\".\"external_adjustment_id\" is not null"
-        },
-        "idx_inbound_events_blocking_issue": {
-          "name": "idx_inbound_events_blocking_issue",
-          "columns": [
-            "account_id",
-            "blocking_system_issue_id",
-            "status",
-            "received_at"
-          ],
-          "isUnique": false,
-          "where": "\"inbound_events\".\"blocking_system_issue_id\" is not null"
         },
         "idx_inbound_events_payload_retention": {
           "name": "idx_inbound_events_payload_retention",
@@ -2694,10 +3163,10 @@
           "isUnique": false,
           "where": "\"inbound_events\".\"payload_ciphertext\" is not null"
         },
-        "uq_inbound_events_account_id": {
-          "name": "uq_inbound_events_account_id",
+        "uq_inbound_events_instance_id": {
+          "name": "uq_inbound_events_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -2705,6 +3174,7 @@
         "uq_inbound_events_external": {
           "name": "uq_inbound_events_external",
           "columns": [
+            "instance_id",
             "billing_provider_id",
             "external_event_id"
           ],
@@ -2712,12 +3182,12 @@
         }
       },
       "foreignKeys": {
-        "inbound_events_account_id_accounts_id_fk": {
-          "name": "inbound_events_account_id_accounts_id_fk",
+        "inbound_events_instance_id_instances_id_fk": {
+          "name": "inbound_events_instance_id_instances_id_fk",
           "tableFrom": "inbound_events",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -2730,26 +3200,11 @@
           "tableFrom": "inbound_events",
           "tableTo": "billing_providers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "billing_provider_id"
           ],
           "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_inbound_events_blocking_issue": {
-          "name": "fk_inbound_events_blocking_issue",
-          "tableFrom": "inbound_events",
-          "tableTo": "system_issues",
-          "columnsFrom": [
-            "account_id",
-            "blocking_system_issue_id"
-          ],
-          "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -2769,6 +3224,468 @@
         }
       }
     },
+    "instance_invitations": {
+      "name": "instance_invitations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text COLLATE NOCASE",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "invited_by_user_id": {
+          "name": "invited_by_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "accepted_by_user_id": {
+          "name": "accepted_by_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "delivery_id": {
+          "name": "delivery_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "uq_instance_invitations_pending_email": {
+          "name": "uq_instance_invitations_pending_email",
+          "columns": [
+            "instance_id",
+            "email"
+          ],
+          "isUnique": true,
+          "where": "\"instance_invitations\".\"status\" = 'pending'"
+        },
+        "idx_instance_invitations_status_expiry": {
+          "name": "idx_instance_invitations_status_expiry",
+          "columns": [
+            "instance_id",
+            "status",
+            "expires_at"
+          ],
+          "isUnique": false
+        },
+        "idx_instance_invitations_invited_by": {
+          "name": "idx_instance_invitations_invited_by",
+          "columns": [
+            "instance_id",
+            "invited_by_user_id",
+            "\"created_at\" desc"
+          ],
+          "isUnique": false
+        },
+        "uq_instance_invitations_instance_id": {
+          "name": "uq_instance_invitations_instance_id",
+          "columns": [
+            "instance_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "uq_instance_invitations_token_hash": {
+          "name": "uq_instance_invitations_token_hash",
+          "columns": [
+            "token_hash"
+          ],
+          "isUnique": true
+        },
+        "uq_instance_invitations_delivery": {
+          "name": "uq_instance_invitations_delivery",
+          "columns": [
+            "instance_id",
+            "delivery_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "instance_invitations_instance_id_instances_id_fk": {
+          "name": "instance_invitations_instance_id_instances_id_fk",
+          "tableFrom": "instance_invitations",
+          "tableTo": "instances",
+          "columnsFrom": [
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "instance_invitations_invited_by_user_id_users_id_fk": {
+          "name": "instance_invitations_invited_by_user_id_users_id_fk",
+          "tableFrom": "instance_invitations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "invited_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "instance_invitations_accepted_by_user_id_users_id_fk": {
+          "name": "instance_invitations_accepted_by_user_id_users_id_fk",
+          "tableFrom": "instance_invitations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "accepted_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_instance_invitations_delivery": {
+          "name": "fk_instance_invitations_delivery",
+          "tableFrom": "instance_invitations",
+          "tableTo": "email_deliveries",
+          "columnsFrom": [
+            "instance_id",
+            "delivery_id"
+          ],
+          "columnsTo": [
+            "instance_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_instance_invitations_role": {
+          "name": "ck_instance_invitations_role",
+          "value": "\"instance_invitations\".\"role\" in ('owner', 'admin', 'member', 'viewer')"
+        },
+        "ck_instance_invitations_status": {
+          "name": "ck_instance_invitations_status",
+          "value": "\"instance_invitations\".\"status\" in ('pending', 'accepted', 'revoked', 'expired')"
+        },
+        "ck_instance_invitations_expiry": {
+          "name": "ck_instance_invitations_expiry",
+          "value": "\"instance_invitations\".\"expires_at\" > \"instance_invitations\".\"created_at\""
+        },
+        "ck_instance_invitations_terminal_state": {
+          "name": "ck_instance_invitations_terminal_state",
+          "value": "(\"instance_invitations\".\"status\" in ('pending', 'expired')\n          and \"instance_invitations\".\"accepted_by_user_id\" is null\n          and \"instance_invitations\".\"accepted_at\" is null\n          and \"instance_invitations\".\"revoked_at\" is null)\n        or (\"instance_invitations\".\"status\" = 'accepted'\n          and \"instance_invitations\".\"accepted_by_user_id\" is not null\n          and \"instance_invitations\".\"accepted_at\" is not null\n          and \"instance_invitations\".\"revoked_at\" is null)\n        or (\"instance_invitations\".\"status\" = 'revoked'\n          and \"instance_invitations\".\"accepted_by_user_id\" is null\n          and \"instance_invitations\".\"accepted_at\" is null\n          and \"instance_invitations\".\"revoked_at\" is not null)"
+        }
+      }
+    },
+    "instance_memberships": {
+      "name": "instance_memberships",
+      "columns": {
+        "instance_id": {
+          "name": "instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "joined_by_invitation_id": {
+          "name": "joined_by_invitation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_instance_memberships_user_status": {
+          "name": "idx_instance_memberships_user_status",
+          "columns": [
+            "user_id",
+            "status"
+          ],
+          "isUnique": false
+        },
+        "idx_instance_memberships_instance_status": {
+          "name": "idx_instance_memberships_instance_status",
+          "columns": [
+            "instance_id",
+            "status",
+            "role"
+          ],
+          "isUnique": false
+        },
+        "idx_instance_memberships_active_owner": {
+          "name": "idx_instance_memberships_active_owner",
+          "columns": [
+            "instance_id"
+          ],
+          "isUnique": false,
+          "where": "\"instance_memberships\".\"role\" = 'owner' and \"instance_memberships\".\"status\" = 'active'"
+        },
+        "uq_instance_memberships_invitation": {
+          "name": "uq_instance_memberships_invitation",
+          "columns": [
+            "instance_id",
+            "joined_by_invitation_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "instance_memberships_instance_id_instances_id_fk": {
+          "name": "instance_memberships_instance_id_instances_id_fk",
+          "tableFrom": "instance_memberships",
+          "tableTo": "instances",
+          "columnsFrom": [
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "instance_memberships_user_id_users_id_fk": {
+          "name": "instance_memberships_user_id_users_id_fk",
+          "tableFrom": "instance_memberships",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "fk_instance_memberships_invitation": {
+          "name": "fk_instance_memberships_invitation",
+          "tableFrom": "instance_memberships",
+          "tableTo": "instance_invitations",
+          "columnsFrom": [
+            "instance_id",
+            "joined_by_invitation_id"
+          ],
+          "columnsTo": [
+            "instance_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "pk_instance_memberships": {
+          "columns": [
+            "instance_id",
+            "user_id"
+          ],
+          "name": "pk_instance_memberships"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_instance_memberships_role": {
+          "name": "ck_instance_memberships_role",
+          "value": "\"instance_memberships\".\"role\" in ('owner', 'admin', 'member', 'viewer')"
+        },
+        "ck_instance_memberships_status": {
+          "name": "ck_instance_memberships_status",
+          "value": "\"instance_memberships\".\"status\" in ('active', 'disabled', 'removed')"
+        }
+      }
+    },
+    "instances": {
+      "name": "instances",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "site_url": {
+          "name": "site_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "uq_instances_slug": {
+          "name": "uq_instances_slug",
+          "columns": [
+            "slug"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "ck_instances_slug": {
+          "name": "ck_instances_slug",
+          "value": "length(\"instances\".\"slug\") > 0\n        and \"instances\".\"slug\" = lower(\"instances\".\"slug\")\n        and \"instances\".\"slug\" not glob '*[^a-z0-9-]*'\n        and \"instances\".\"slug\" not like '-%'\n        and \"instances\".\"slug\" not like '%-'"
+        },
+        "ck_instances_status": {
+          "name": "ck_instances_status",
+          "value": "\"instances\".\"status\" in ('active', 'suspended', 'archived')"
+        }
+      }
+    },
     "license_key_rotations": {
       "name": "license_key_rotations",
       "columns": {
@@ -2779,8 +3696,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -2855,28 +3772,41 @@
         "idx_license_key_rotations_license": {
           "name": "idx_license_key_rotations_license",
           "columns": [
-            "account_id",
+            "instance_id",
             "license_id",
             "\"created_at\" desc"
           ],
           "isUnique": false
         },
-        "uq_license_key_rotations_account_id": {
-          "name": "uq_license_key_rotations_account_id",
+        "uq_license_key_rotations_instance_id": {
+          "name": "uq_license_key_rotations_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "license_key_rotations_account_id_accounts_id_fk": {
-          "name": "license_key_rotations_account_id_accounts_id_fk",
+        "license_key_rotations_instance_id_instances_id_fk": {
+          "name": "license_key_rotations_instance_id_instances_id_fk",
           "tableFrom": "license_key_rotations",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "license_key_rotations_initiated_by_user_id_users_id_fk": {
+          "name": "license_key_rotations_initiated_by_user_id_users_id_fk",
+          "tableFrom": "license_key_rotations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "initiated_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -2889,26 +3819,11 @@
           "tableFrom": "license_key_rotations",
           "tableTo": "licenses",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "license_id"
           ],
           "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_license_key_rotations_user": {
-          "name": "fk_license_key_rotations_user",
-          "tableFrom": "license_key_rotations",
-          "tableTo": "users",
-          "columnsFrom": [
-            "account_id",
-            "initiated_by_user_id"
-          ],
-          "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -2919,11 +3834,11 @@
           "tableFrom": "license_key_rotations",
           "tableTo": "customers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "initiated_by_customer_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -2932,15 +3847,13 @@
         "fk_license_key_rotations_delivery": {
           "name": "fk_license_key_rotations_delivery",
           "tableFrom": "license_key_rotations",
-          "tableTo": "outbound_deliveries",
+          "tableTo": "email_deliveries",
           "columnsFrom": [
-            "account_id",
-            "license_id",
+            "instance_id",
             "delivery_id"
           ],
           "columnsTo": [
-            "account_id",
-            "license_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -2982,8 +3895,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -3097,16 +4010,16 @@
         "idx_license_plans_product_status": {
           "name": "idx_license_plans_product_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "status"
           ],
           "isUnique": false
         },
-        "uq_license_plans_account_id": {
-          "name": "uq_license_plans_account_id",
+        "uq_license_plans_instance_id": {
+          "name": "uq_license_plans_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -3114,7 +4027,7 @@
         "uq_license_plans_product_id": {
           "name": "uq_license_plans_product_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "id"
           ],
@@ -3122,12 +4035,12 @@
         }
       },
       "foreignKeys": {
-        "license_plans_account_id_accounts_id_fk": {
-          "name": "license_plans_account_id_accounts_id_fk",
+        "license_plans_instance_id_instances_id_fk": {
+          "name": "license_plans_instance_id_instances_id_fk",
           "tableFrom": "license_plans",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -3140,11 +4053,11 @@
           "tableFrom": "license_plans",
           "tableTo": "products",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -3222,8 +4135,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -3421,17 +4334,17 @@
         "uq_licenses_source_transaction": {
           "name": "uq_licenses_source_transaction",
           "columns": [
-            "account_id",
+            "instance_id",
             "source_billing_provider_id",
             "source_external_transaction_id"
           ],
           "isUnique": true,
           "where": "\"licenses\".\"source_billing_provider_id\" is not null and \"licenses\".\"source_external_transaction_id\" is not null"
         },
-        "idx_licenses_account_status": {
-          "name": "idx_licenses_account_status",
+        "idx_licenses_instance_status": {
+          "name": "idx_licenses_instance_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "status",
             "\"created_at\" desc"
           ],
@@ -3440,7 +4353,7 @@
         "idx_licenses_product_plan": {
           "name": "idx_licenses_product_plan",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "plan_id"
           ],
@@ -3449,36 +4362,36 @@
         "idx_licenses_customer": {
           "name": "idx_licenses_customer",
           "columns": [
-            "account_id",
+            "instance_id",
             "customer_id",
             "\"created_at\" desc"
           ],
           "isUnique": false
         },
-        "uq_licenses_account_id": {
-          "name": "uq_licenses_account_id",
+        "uq_licenses_instance_id": {
+          "name": "uq_licenses_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
         },
-        "uq_licenses_account_key_hash": {
-          "name": "uq_licenses_account_key_hash",
+        "uq_licenses_instance_key_hash": {
+          "name": "uq_licenses_instance_key_hash",
           "columns": [
-            "account_id",
+            "instance_id",
             "key_hash"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "licenses_account_id_accounts_id_fk": {
-          "name": "licenses_account_id_accounts_id_fk",
+        "licenses_instance_id_instances_id_fk": {
+          "name": "licenses_instance_id_instances_id_fk",
           "tableFrom": "licenses",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -3491,11 +4404,11 @@
           "tableFrom": "licenses",
           "tableTo": "customers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "customer_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -3506,11 +4419,11 @@
           "tableFrom": "licenses",
           "tableTo": "products",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -3521,12 +4434,12 @@
           "tableFrom": "licenses",
           "tableTo": "license_plans",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id",
             "plan_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "product_id",
             "id"
           ],
@@ -3538,11 +4451,11 @@
           "tableFrom": "licenses",
           "tableTo": "billing_providers",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "source_billing_provider_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -3638,679 +4551,6 @@
         }
       }
     },
-    "outbound_attempts": {
-      "name": "outbound_attempts",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "account_id": {
-          "name": "account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "delivery_id": {
-          "name": "delivery_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "attempt_number": {
-          "name": "attempt_number",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "attempt_source": {
-          "name": "attempt_source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "outcome": {
-          "name": "outcome",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "http_status": {
-          "name": "http_status",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "response_body_redacted": {
-          "name": "response_body_redacted",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "transport_error_code": {
-          "name": "transport_error_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "transport_error_detail": {
-          "name": "transport_error_detail",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "duration_ms": {
-          "name": "duration_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_outbound_attempts_delivery": {
-          "name": "idx_outbound_attempts_delivery",
-          "columns": [
-            "account_id",
-            "delivery_id",
-            "attempt_number"
-          ],
-          "isUnique": false
-        },
-        "uq_outbound_attempts_account_id": {
-          "name": "uq_outbound_attempts_account_id",
-          "columns": [
-            "account_id",
-            "id"
-          ],
-          "isUnique": true
-        },
-        "uq_outbound_attempts_delivery_number": {
-          "name": "uq_outbound_attempts_delivery_number",
-          "columns": [
-            "delivery_id",
-            "attempt_number"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "outbound_attempts_account_id_accounts_id_fk": {
-          "name": "outbound_attempts_account_id_accounts_id_fk",
-          "tableFrom": "outbound_attempts",
-          "tableTo": "accounts",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_outbound_attempts_delivery": {
-          "name": "fk_outbound_attempts_delivery",
-          "tableFrom": "outbound_attempts",
-          "tableTo": "outbound_deliveries",
-          "columnsFrom": [
-            "account_id",
-            "delivery_id"
-          ],
-          "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "ck_outbound_attempts_number": {
-          "name": "ck_outbound_attempts_number",
-          "value": "\"outbound_attempts\".\"attempt_number\" >= 1"
-        },
-        "ck_outbound_attempts_source": {
-          "name": "ck_outbound_attempts_source",
-          "value": "\"outbound_attempts\".\"attempt_source\" in ('initial', 'automatic_retry', 'manual_retry')"
-        },
-        "ck_outbound_attempts_outcome": {
-          "name": "ck_outbound_attempts_outcome",
-          "value": "\"outbound_attempts\".\"outcome\" in ('accepted', 'http_error', 'transport_error', 'timeout')"
-        },
-        "ck_outbound_attempts_duration": {
-          "name": "ck_outbound_attempts_duration",
-          "value": "\"outbound_attempts\".\"duration_ms\" >= 0"
-        },
-        "ck_outbound_attempts_sequence": {
-          "name": "ck_outbound_attempts_sequence",
-          "value": "(\"outbound_attempts\".\"attempt_number\" = 1 and \"outbound_attempts\".\"attempt_source\" = 'initial')\n        or (\"outbound_attempts\".\"attempt_number\" > 1\n          and \"outbound_attempts\".\"attempt_source\" in ('automatic_retry', 'manual_retry'))"
-        }
-      }
-    },
-    "outbound_deliveries": {
-      "name": "outbound_deliveries",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "account_id": {
-          "name": "account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "endpoint_id": {
-          "name": "endpoint_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "license_id": {
-          "name": "license_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "event_type": {
-          "name": "event_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "recipient_email": {
-          "name": "recipient_email",
-          "type": "text COLLATE NOCASE",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "idempotency_key": {
-          "name": "idempotency_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_url": {
-          "name": "target_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "signing_secret_ciphertext": {
-          "name": "signing_secret_ciphertext",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "payload_ciphertext": {
-          "name": "payload_ciphertext",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "payload_expires_at": {
-          "name": "payload_expires_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'pending'"
-        },
-        "attempt_count": {
-          "name": "attempt_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "automatic_attempt_count": {
-          "name": "automatic_attempt_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "max_automatic_attempts": {
-          "name": "max_automatic_attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "next_attempt_at": {
-          "name": "next_attempt_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "locked_by": {
-          "name": "locked_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "locked_until": {
-          "name": "locked_until",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "last_error_code": {
-          "name": "last_error_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "last_error_detail": {
-          "name": "last_error_detail",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "accepted_at": {
-          "name": "accepted_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "payload_cleared_at": {
-          "name": "payload_cleared_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_outbound_deliveries_status_schedule": {
-          "name": "idx_outbound_deliveries_status_schedule",
-          "columns": [
-            "account_id",
-            "status",
-            "next_attempt_at",
-            "locked_until",
-            "created_at"
-          ],
-          "isUnique": false
-        },
-        "idx_outbound_deliveries_license": {
-          "name": "idx_outbound_deliveries_license",
-          "columns": [
-            "account_id",
-            "license_id",
-            "\"created_at\" desc"
-          ],
-          "isUnique": false
-        },
-        "idx_outbound_deliveries_customer": {
-          "name": "idx_outbound_deliveries_customer",
-          "columns": [
-            "account_id",
-            "customer_id",
-            "\"created_at\" desc"
-          ],
-          "isUnique": false
-        },
-        "uq_outbound_deliveries_account_id": {
-          "name": "uq_outbound_deliveries_account_id",
-          "columns": [
-            "account_id",
-            "id"
-          ],
-          "isUnique": true
-        },
-        "uq_outbound_deliveries_customer_id": {
-          "name": "uq_outbound_deliveries_customer_id",
-          "columns": [
-            "account_id",
-            "customer_id",
-            "id"
-          ],
-          "isUnique": true
-        },
-        "uq_outbound_deliveries_license_id": {
-          "name": "uq_outbound_deliveries_license_id",
-          "columns": [
-            "account_id",
-            "license_id",
-            "id"
-          ],
-          "isUnique": true
-        },
-        "uq_outbound_deliveries_idempotency": {
-          "name": "uq_outbound_deliveries_idempotency",
-          "columns": [
-            "account_id",
-            "idempotency_key"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "outbound_deliveries_account_id_accounts_id_fk": {
-          "name": "outbound_deliveries_account_id_accounts_id_fk",
-          "tableFrom": "outbound_deliveries",
-          "tableTo": "accounts",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_outbound_deliveries_endpoint": {
-          "name": "fk_outbound_deliveries_endpoint",
-          "tableFrom": "outbound_deliveries",
-          "tableTo": "outbound_endpoints",
-          "columnsFrom": [
-            "account_id",
-            "endpoint_id"
-          ],
-          "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_outbound_deliveries_customer": {
-          "name": "fk_outbound_deliveries_customer",
-          "tableFrom": "outbound_deliveries",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "account_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_outbound_deliveries_license": {
-          "name": "fk_outbound_deliveries_license",
-          "tableFrom": "outbound_deliveries",
-          "tableTo": "licenses",
-          "columnsFrom": [
-            "account_id",
-            "license_id"
-          ],
-          "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "ck_outbound_deliveries_status": {
-          "name": "ck_outbound_deliveries_status",
-          "value": "\"outbound_deliveries\".\"status\" in (\n        'blocked_configuration', 'pending', 'processing', 'accepted',\n        'retry_scheduled', 'failed', 'payload_expired'\n      )"
-        },
-        "ck_outbound_deliveries_attempt_count": {
-          "name": "ck_outbound_deliveries_attempt_count",
-          "value": "\"outbound_deliveries\".\"attempt_count\" >= 0"
-        },
-        "ck_outbound_deliveries_automatic_attempt_count": {
-          "name": "ck_outbound_deliveries_automatic_attempt_count",
-          "value": "\"outbound_deliveries\".\"automatic_attempt_count\" >= 0"
-        },
-        "ck_outbound_deliveries_max_attempts": {
-          "name": "ck_outbound_deliveries_max_attempts",
-          "value": "\"outbound_deliveries\".\"max_automatic_attempts\" between 1 and 20"
-        },
-        "ck_outbound_deliveries_attempt_budget": {
-          "name": "ck_outbound_deliveries_attempt_budget",
-          "value": "\"outbound_deliveries\".\"automatic_attempt_count\" <= \"outbound_deliveries\".\"attempt_count\"\n        and \"outbound_deliveries\".\"automatic_attempt_count\" <= \"outbound_deliveries\".\"max_automatic_attempts\""
-        },
-        "ck_outbound_deliveries_target": {
-          "name": "ck_outbound_deliveries_target",
-          "value": "\"outbound_deliveries\".\"status\" in ('blocked_configuration', 'payload_expired')\n        or (\"outbound_deliveries\".\"endpoint_id\" is not null\n          and \"outbound_deliveries\".\"target_url\" is not null\n          and \"outbound_deliveries\".\"signing_secret_ciphertext\" is not null)"
-        }
-      }
-    },
-    "outbound_endpoints": {
-      "name": "outbound_endpoints",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "account_id": {
-          "name": "account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "endpoint_type": {
-          "name": "endpoint_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "url": {
-          "name": "url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "signing_secret_ciphertext": {
-          "name": "signing_secret_ciphertext",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "subscribed_events_json": {
-          "name": "subscribed_events_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'[]'"
-        },
-        "timeout_ms": {
-          "name": "timeout_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 10000
-        },
-        "max_automatic_attempts": {
-          "name": "max_automatic_attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 4
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_outbound_endpoints_account_type": {
-          "name": "idx_outbound_endpoints_account_type",
-          "columns": [
-            "account_id",
-            "endpoint_type",
-            "status"
-          ],
-          "isUnique": false
-        },
-        "uq_outbound_active_notification_gateway": {
-          "name": "uq_outbound_active_notification_gateway",
-          "columns": [
-            "account_id",
-            "endpoint_type"
-          ],
-          "isUnique": true,
-          "where": "\"outbound_endpoints\".\"endpoint_type\" = 'notification_gateway' and \"outbound_endpoints\".\"status\" = 'active'"
-        },
-        "uq_outbound_endpoints_account_id": {
-          "name": "uq_outbound_endpoints_account_id",
-          "columns": [
-            "account_id",
-            "id"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "outbound_endpoints_account_id_accounts_id_fk": {
-          "name": "outbound_endpoints_account_id_accounts_id_fk",
-          "tableFrom": "outbound_endpoints",
-          "tableTo": "accounts",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "ck_outbound_endpoints_type": {
-          "name": "ck_outbound_endpoints_type",
-          "value": "\"outbound_endpoints\".\"endpoint_type\" in ('notification_gateway', 'event_subscriber')"
-        },
-        "ck_outbound_endpoints_events_json": {
-          "name": "ck_outbound_endpoints_events_json",
-          "value": "json_valid(\"outbound_endpoints\".\"subscribed_events_json\") and json_type(\"outbound_endpoints\".\"subscribed_events_json\") = 'array'"
-        },
-        "ck_outbound_endpoints_timeout": {
-          "name": "ck_outbound_endpoints_timeout",
-          "value": "\"outbound_endpoints\".\"timeout_ms\" between 1000 and 30000"
-        },
-        "ck_outbound_endpoints_attempts": {
-          "name": "ck_outbound_endpoints_attempts",
-          "value": "\"outbound_endpoints\".\"max_automatic_attempts\" between 1 and 20"
-        },
-        "ck_outbound_endpoints_status": {
-          "name": "ck_outbound_endpoints_status",
-          "value": "\"outbound_endpoints\".\"status\" in ('active', 'disabled')"
-        }
-      }
-    },
     "product_releases": {
       "name": "product_releases",
       "columns": {
@@ -4321,8 +4561,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -4396,17 +4636,17 @@
         "idx_product_releases_lookup": {
           "name": "idx_product_releases_lookup",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "version",
             "platform"
           ],
           "isUnique": false
         },
-        "uq_product_releases_account_id": {
-          "name": "uq_product_releases_account_id",
+        "uq_product_releases_instance_id": {
+          "name": "uq_product_releases_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -4414,7 +4654,7 @@
         "uq_product_releases_identity": {
           "name": "uq_product_releases_identity",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "version",
             "platform"
@@ -4423,12 +4663,12 @@
         }
       },
       "foreignKeys": {
-        "product_releases_account_id_accounts_id_fk": {
-          "name": "product_releases_account_id_accounts_id_fk",
+        "product_releases_instance_id_instances_id_fk": {
+          "name": "product_releases_instance_id_instances_id_fk",
           "tableFrom": "product_releases",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -4441,11 +4681,11 @@
           "tableFrom": "product_releases",
           "tableTo": "products",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -4471,8 +4711,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -4505,6 +4745,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "payment_grace_seconds": {
+          "name": "payment_grace_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         },
         "trial_enabled": {
           "name": "trial_enabled",
@@ -4553,38 +4801,38 @@
         }
       },
       "indexes": {
-        "idx_products_account_status": {
-          "name": "idx_products_account_status",
+        "idx_products_instance_status": {
+          "name": "idx_products_instance_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "status"
           ],
           "isUnique": false
         },
-        "uq_products_account_id": {
-          "name": "uq_products_account_id",
+        "uq_products_instance_id": {
+          "name": "uq_products_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
         },
-        "uq_products_account_slug": {
-          "name": "uq_products_account_slug",
+        "uq_products_instance_slug": {
+          "name": "uq_products_instance_slug",
           "columns": [
-            "account_id",
+            "instance_id",
             "slug"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "products_account_id_accounts_id_fk": {
-          "name": "products_account_id_accounts_id_fk",
+        "products_instance_id_instances_id_fk": {
+          "name": "products_instance_id_instances_id_fk",
           "tableFrom": "products",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -4599,6 +4847,10 @@
         "ck_products_billing_environment": {
           "name": "ck_products_billing_environment",
           "value": "\"products\".\"billing_environment\" in ('sandbox', 'live')"
+        },
+        "ck_products_payment_grace": {
+          "name": "ck_products_payment_grace",
+          "value": "\"products\".\"payment_grace_seconds\" >= 0"
         },
         "ck_products_trial_enabled": {
           "name": "ck_products_trial_enabled",
@@ -4632,8 +4884,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -4709,7 +4961,7 @@
         "idx_signing_keys_product_status": {
           "name": "idx_signing_keys_product_status",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "status"
           ],
@@ -4718,28 +4970,28 @@
         "uq_signing_keys_product_active": {
           "name": "uq_signing_keys_product_active",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id"
           ],
           "isUnique": true,
           "where": "\"signing_keys\".\"status\" = 'active'"
         },
-        "uq_signing_keys_account_id": {
-          "name": "uq_signing_keys_account_id",
+        "uq_signing_keys_instance_id": {
+          "name": "uq_signing_keys_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "signing_keys_account_id_accounts_id_fk": {
-          "name": "signing_keys_account_id_accounts_id_fk",
+        "signing_keys_instance_id_instances_id_fk": {
+          "name": "signing_keys_instance_id_instances_id_fk",
           "tableFrom": "signing_keys",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -4752,11 +5004,11 @@
           "tableFrom": "signing_keys",
           "tableTo": "products",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -4780,138 +5032,6 @@
         }
       }
     },
-    "system_issue_inbound_events": {
-      "name": "system_issue_inbound_events",
-      "columns": {
-        "account_id": {
-          "name": "account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "system_issue_id": {
-          "name": "system_issue_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "inbound_event_id": {
-          "name": "inbound_event_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "occurrence_count": {
-          "name": "occurrence_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 1
-        },
-        "first_seen_at": {
-          "name": "first_seen_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "last_seen_at": {
-          "name": "last_seen_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_system_issue_inbound_events_issue": {
-          "name": "idx_system_issue_inbound_events_issue",
-          "columns": [
-            "account_id",
-            "system_issue_id",
-            "\"last_seen_at\" desc"
-          ],
-          "isUnique": false
-        },
-        "idx_system_issue_inbound_events_event": {
-          "name": "idx_system_issue_inbound_events_event",
-          "columns": [
-            "account_id",
-            "inbound_event_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "system_issue_inbound_events_account_id_accounts_id_fk": {
-          "name": "system_issue_inbound_events_account_id_accounts_id_fk",
-          "tableFrom": "system_issue_inbound_events",
-          "tableTo": "accounts",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_system_issue_inbound_events_issue": {
-          "name": "fk_system_issue_inbound_events_issue",
-          "tableFrom": "system_issue_inbound_events",
-          "tableTo": "system_issues",
-          "columnsFrom": [
-            "account_id",
-            "system_issue_id"
-          ],
-          "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_system_issue_inbound_events_event": {
-          "name": "fk_system_issue_inbound_events_event",
-          "tableFrom": "system_issue_inbound_events",
-          "tableTo": "inbound_events",
-          "columnsFrom": [
-            "account_id",
-            "inbound_event_id"
-          ],
-          "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "system_issue_inbound_events_system_issue_id_inbound_event_id_pk": {
-          "columns": [
-            "system_issue_id",
-            "inbound_event_id"
-          ],
-          "name": "system_issue_inbound_events_system_issue_id_inbound_event_id_pk"
-        }
-      },
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "ck_system_issue_inbound_events_occurrence_count": {
-          "name": "ck_system_issue_inbound_events_occurrence_count",
-          "value": "\"system_issue_inbound_events\".\"occurrence_count\" >= 1"
-        },
-        "ck_system_issue_inbound_events_seen_order": {
-          "name": "ck_system_issue_inbound_events_seen_order",
-          "value": "\"system_issue_inbound_events\".\"last_seen_at\" >= \"system_issue_inbound_events\".\"first_seen_at\""
-        }
-      }
-    },
     "system_issues": {
       "name": "system_issues",
       "columns": {
@@ -4922,41 +5042,54 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "billing_provider_id": {
-          "name": "billing_provider_id",
+        "category": {
+          "name": "category",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "capability": {
-          "name": "capability",
+        "source_type": {
+          "name": "source_type",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "issue_code": {
-          "name": "issue_code",
+        "source_id": {
+          "name": "source_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "severity": {
-          "name": "severity",
+        "operation": {
+          "name": "operation",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "'error'"
+          "autoincrement": false
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "error_detail_json": {
+          "name": "error_detail_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
         },
         "status": {
           "name": "status",
@@ -4964,7 +5097,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'open'"
+          "default": "'pending'"
         },
         "occurrence_count": {
           "name": "occurrence_count",
@@ -4988,75 +5121,45 @@
           "notNull": true,
           "autoincrement": false
         },
-        "last_error_detail_json": {
-          "name": "last_error_detail_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'{}'"
-        },
-        "resolved_at": {
-          "name": "resolved_at",
+        "processed_at": {
+          "name": "processed_at",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "resolved_by_user_id": {
-          "name": "resolved_by_user_id",
+        "processed_by_user_id": {
+          "name": "processed_by_user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
-        },
-        "resolution_note": {
-          "name": "resolution_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
           "autoincrement": false
         }
       },
       "indexes": {
-        "idx_system_issues_status": {
-          "name": "idx_system_issues_status",
+        "idx_system_issues_recent": {
+          "name": "idx_system_issues_recent",
           "columns": [
-            "account_id",
+            "instance_id",
             "status",
-            "severity",
-            "\"last_seen_at\" desc"
+            "last_seen_at"
           ],
           "isUnique": false
         },
-        "idx_system_issues_provider_capability": {
-          "name": "idx_system_issues_provider_capability",
+        "idx_system_issues_source": {
+          "name": "idx_system_issues_source",
           "columns": [
-            "account_id",
-            "billing_provider_id",
-            "capability",
-            "status"
+            "instance_id",
+            "category",
+            "source_type",
+            "source_id"
           ],
           "isUnique": false
         },
-        "uq_system_issues_account_id": {
-          "name": "uq_system_issues_account_id",
+        "uq_system_issues_instance_id": {
+          "name": "uq_system_issues_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -5064,21 +5167,23 @@
         "uq_system_issues_identity": {
           "name": "uq_system_issues_identity",
           "columns": [
-            "account_id",
-            "billing_provider_id",
-            "capability",
-            "issue_code"
+            "instance_id",
+            "category",
+            "source_type",
+            "source_id",
+            "operation",
+            "error_code"
           ],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "system_issues_account_id_accounts_id_fk": {
-          "name": "system_issues_account_id_accounts_id_fk",
+        "system_issues_instance_id_instances_id_fk": {
+          "name": "system_issues_instance_id_instances_id_fk",
           "tableFrom": "system_issues",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -5086,31 +5191,14 @@
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "fk_system_issues_provider": {
-          "name": "fk_system_issues_provider",
-          "tableFrom": "system_issues",
-          "tableTo": "billing_providers",
-          "columnsFrom": [
-            "account_id",
-            "billing_provider_id"
-          ],
-          "columnsTo": [
-            "account_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "fk_system_issues_resolved_by": {
-          "name": "fk_system_issues_resolved_by",
+        "system_issues_processed_by_user_id_users_id_fk": {
+          "name": "system_issues_processed_by_user_id_users_id_fk",
           "tableFrom": "system_issues",
           "tableTo": "users",
           "columnsFrom": [
-            "account_id",
-            "resolved_by_user_id"
+            "processed_by_user_id"
           ],
           "columnsTo": [
-            "account_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -5120,17 +5208,13 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
-        "ck_system_issues_capability": {
-          "name": "ck_system_issues_capability",
-          "value": "\"system_issues\".\"capability\" in ('customer_read', 'customer_portal_session')"
-        },
-        "ck_system_issues_severity": {
-          "name": "ck_system_issues_severity",
-          "value": "\"system_issues\".\"severity\" in ('warning', 'error', 'critical')"
+        "ck_system_issues_category": {
+          "name": "ck_system_issues_category",
+          "value": "\"system_issues\".\"category\" in ('billing', 'webhook', 'email')"
         },
         "ck_system_issues_status": {
           "name": "ck_system_issues_status",
-          "value": "\"system_issues\".\"status\" in ('open', 'resolved')"
+          "value": "\"system_issues\".\"status\" in ('pending', 'processed')"
         },
         "ck_system_issues_occurrence_count": {
           "name": "ck_system_issues_occurrence_count",
@@ -5142,97 +5226,11 @@
         },
         "ck_system_issues_error_detail_json": {
           "name": "ck_system_issues_error_detail_json",
-          "value": "json_valid(\"system_issues\".\"last_error_detail_json\") and json_type(\"system_issues\".\"last_error_detail_json\") = 'object'"
+          "value": "json_valid(\"system_issues\".\"error_detail_json\") and json_type(\"system_issues\".\"error_detail_json\") = 'object'"
         },
-        "ck_system_issues_resolution": {
-          "name": "ck_system_issues_resolution",
-          "value": "(\"system_issues\".\"status\" = 'open'\n          and \"system_issues\".\"resolved_at\" is null\n          and \"system_issues\".\"resolved_by_user_id\" is null\n          and \"system_issues\".\"resolution_note\" is null)\n        or (\"system_issues\".\"status\" = 'resolved'\n          and \"system_issues\".\"resolved_at\" is not null\n          and \"system_issues\".\"resolved_by_user_id\" is not null\n          and \"system_issues\".\"resolution_note\" is not null\n          and length(trim(\"system_issues\".\"resolution_note\")) > 0)"
-        }
-      }
-    },
-    "system_settings": {
-      "name": "system_settings",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "instance_name": {
-          "name": "instance_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "app_url": {
-          "name": "app_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "site_url": {
-          "name": "site_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "api_base_url": {
-          "name": "api_base_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "scheduler_last_success_at": {
-          "name": "scheduler_last_success_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "scheduler_last_duration_ms": {
-          "name": "scheduler_last_duration_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "initialized_at": {
-          "name": "initialized_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "ck_system_settings_singleton": {
-          "name": "ck_system_settings_singleton",
-          "value": "\"system_settings\".\"id\" = 'current'"
-        },
-        "ck_system_settings_scheduler_duration": {
-          "name": "ck_system_settings_scheduler_duration",
-          "value": "\"system_settings\".\"scheduler_last_duration_ms\" is null or \"system_settings\".\"scheduler_last_duration_ms\" >= 0"
-        },
-        "ck_system_settings_scheduler_health_pair": {
-          "name": "ck_system_settings_scheduler_health_pair",
-          "value": "(\"system_settings\".\"scheduler_last_success_at\" is null and \"system_settings\".\"scheduler_last_duration_ms\" is null)\n        or (\"system_settings\".\"scheduler_last_success_at\" is not null and \"system_settings\".\"scheduler_last_duration_ms\" is not null)"
+        "ck_system_issues_processing": {
+          "name": "ck_system_issues_processing",
+          "value": "(\"system_issues\".\"status\" = 'pending'\n          and \"system_issues\".\"processed_at\" is null\n          and \"system_issues\".\"processed_by_user_id\" is null)\n        or (\"system_issues\".\"status\" = 'processed'\n          and \"system_issues\".\"processed_at\" is not null\n          and \"system_issues\".\"processed_by_user_id\" is not null)"
         }
       }
     },
@@ -5246,8 +5244,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
+        "instance_id": {
+          "name": "instance_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -5329,7 +5327,7 @@
         "idx_trial_claims_lookup": {
           "name": "idx_trial_claims_lookup",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "id"
           ],
@@ -5338,17 +5336,17 @@
         "idx_trial_claims_expiry": {
           "name": "idx_trial_claims_expiry",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "expires_at",
             "revoked_at"
           ],
           "isUnique": false
         },
-        "uq_trial_claims_account_id": {
-          "name": "uq_trial_claims_account_id",
+        "uq_trial_claims_instance_id": {
+          "name": "uq_trial_claims_instance_id",
           "columns": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "isUnique": true
@@ -5356,7 +5354,7 @@
         "uq_trial_claims_token_hash": {
           "name": "uq_trial_claims_token_hash",
           "columns": [
-            "account_id",
+            "instance_id",
             "trial_token_hash"
           ],
           "isUnique": true
@@ -5364,7 +5362,7 @@
         "uq_trial_claims_device": {
           "name": "uq_trial_claims_device",
           "columns": [
-            "account_id",
+            "instance_id",
             "product_id",
             "fingerprint_hash"
           ],
@@ -5372,12 +5370,12 @@
         }
       },
       "foreignKeys": {
-        "trial_claims_account_id_accounts_id_fk": {
-          "name": "trial_claims_account_id_accounts_id_fk",
+        "trial_claims_instance_id_instances_id_fk": {
+          "name": "trial_claims_instance_id_instances_id_fk",
           "tableFrom": "trial_claims",
-          "tableTo": "accounts",
+          "tableTo": "instances",
           "columnsFrom": [
-            "account_id"
+            "instance_id"
           ],
           "columnsTo": [
             "id"
@@ -5390,11 +5388,11 @@
           "tableFrom": "trial_claims",
           "tableTo": "products",
           "columnsFrom": [
-            "account_id",
+            "instance_id",
             "product_id"
           ],
           "columnsTo": [
-            "account_id",
+            "instance_id",
             "id"
           ],
           "onDelete": "restrict",
@@ -5428,13 +5426,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "account_id": {
-          "name": "account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "email": {
           "name": "email",
           "type": "text COLLATE NOCASE",
@@ -5456,21 +5447,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "role": {
-          "name": "role",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'active'"
-        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -5487,58 +5463,18 @@
         }
       },
       "indexes": {
-        "idx_users_account_status": {
-          "name": "idx_users_account_status",
+        "uq_users_email": {
+          "name": "uq_users_email",
           "columns": [
-            "account_id",
-            "status"
-          ],
-          "isUnique": false
-        },
-        "uq_users_account_id": {
-          "name": "uq_users_account_id",
-          "columns": [
-            "account_id",
-            "id"
-          ],
-          "isUnique": true
-        },
-        "uq_users_account_email": {
-          "name": "uq_users_account_email",
-          "columns": [
-            "account_id",
             "email"
           ],
           "isUnique": true
         }
       },
-      "foreignKeys": {
-        "users_account_id_accounts_id_fk": {
-          "name": "users_account_id_accounts_id_fk",
-          "tableFrom": "users",
-          "tableTo": "accounts",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {
-        "ck_users_role": {
-          "name": "ck_users_role",
-          "value": "\"users\".\"role\" in ('owner', 'admin', 'member', 'viewer')"
-        },
-        "ck_users_status": {
-          "name": "ck_users_status",
-          "value": "\"users\".\"status\" in ('active', 'disabled')"
-        }
-      }
+      "checkConstraints": {}
     }
   },
   "views": {},
@@ -5550,7 +5486,7 @@
   },
   "internal": {
     "indexes": {
-      "idx_audit_logs_account_created": {
+      "idx_audit_logs_instance_created": {
         "columns": {
           "\"created_at\" desc": {
             "isExpression": true
@@ -5565,6 +5501,13 @@
         }
       },
       "idx_audit_logs_action": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_audit_logs_identity_created": {
         "columns": {
           "\"created_at\" desc": {
             "isExpression": true
@@ -5606,7 +5549,14 @@
           }
         }
       },
-      "idx_customers_account_status": {
+      "idx_customers_instance_status": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
+      "idx_email_deliveries_customer": {
         "columns": {
           "\"created_at\" desc": {
             "isExpression": true
@@ -5648,6 +5598,13 @@
           }
         }
       },
+      "idx_instance_invitations_invited_by": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          }
+        }
+      },
       "idx_license_key_rotations_license": {
         "columns": {
           "\"created_at\" desc": {
@@ -5655,7 +5612,7 @@
           }
         }
       },
-      "idx_licenses_account_status": {
+      "idx_licenses_instance_status": {
         "columns": {
           "\"created_at\" desc": {
             "isExpression": true
@@ -5665,34 +5622,6 @@
       "idx_licenses_customer": {
         "columns": {
           "\"created_at\" desc": {
-            "isExpression": true
-          }
-        }
-      },
-      "idx_outbound_deliveries_license": {
-        "columns": {
-          "\"created_at\" desc": {
-            "isExpression": true
-          }
-        }
-      },
-      "idx_outbound_deliveries_customer": {
-        "columns": {
-          "\"created_at\" desc": {
-            "isExpression": true
-          }
-        }
-      },
-      "idx_system_issue_inbound_events_issue": {
-        "columns": {
-          "\"last_seen_at\" desc": {
-            "isExpression": true
-          }
-        }
-      },
-      "idx_system_issues_status": {
-        "columns": {
-          "\"last_seen_at\" desc": {
             "isExpression": true
           }
         }

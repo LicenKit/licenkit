@@ -1,43 +1,72 @@
 import { Hono } from "hono";
 import type { AppContext } from "../types";
 import { AppError } from "../middleware/error";
-import { readSchedulerHealth } from "../services/runtime/scheduler-health";
+import {
+  readDeploymentSetupState,
+  type DeploymentSetupState,
+} from "../services/identity/deployment-provisioning";
 
 export const systemRouter = new Hono<AppContext>();
 
+function inconsistentSetupState(
+  state: DeploymentSetupState,
+  extraDetails: Record<string, unknown> = {},
+): AppError {
+  return new AppError(
+    "SETUP_STATE_INCONSISTENT",
+    "Database initialization state is inconsistent",
+    500,
+    { ...state, ...extraDetails },
+  );
+}
+
 systemRouter.get("/status", async (c) => {
+  const setupState = await readDeploymentSetupState(c.env.DB);
+  if (setupState.status === "inconsistent") throw inconsistentSetupState(setupState);
+  if (setupState.status === "empty") {
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      success: true,
+      data: { initialized: false, version: c.env.APP_VERSION || "1.0.0" },
+    });
+  }
+
   const result = await c.env.DB
     .prepare(
-      `SELECT instance_name, app_url, site_url, api_base_url, initialized_at
-       FROM system_settings WHERE id = 'current' LIMIT 1`,
+      `SELECT instance.name AS instance_name, instance.site_url,
+              bootstrap.completed_at AS initialized_at
+       FROM deployment_bootstrap AS bootstrap
+       JOIN instances AS instance ON instance.status = 'active'
+       WHERE bootstrap.singleton_key = 'deployment'
+       ORDER BY instance.id
+       LIMIT 1`,
     )
     .all<{
       instance_name: string;
-      app_url: string;
       site_url: string;
-      api_base_url: string | null;
       initialized_at: string;
     }>();
   const settings = result.results[0];
+  if (!settings) {
+    throw inconsistentSetupState(setupState, { status_row_present: false });
+  }
+  const appUrl = new URL(c.req.url).origin;
   c.header("Cache-Control", "no-store");
   return c.json({
     success: true,
-    data: settings
-      ? {
-          initialized: true,
-          instanceName: settings.instance_name,
-          appUrl: settings.app_url,
-          siteUrl: settings.site_url,
-          apiBaseUrl: settings.api_base_url ?? settings.app_url,
-          initializedAt: settings.initialized_at,
-          version: c.env.APP_VERSION || "1.0.0",
-        }
-      : { initialized: false, version: c.env.APP_VERSION || "1.0.0" },
+    data: {
+      initialized: true,
+      instance_name: settings.instance_name,
+      app_url: appUrl,
+      site_url: settings.site_url,
+      api_base_url: `${appUrl}/api/v1`,
+      initialized_at: settings.initialized_at,
+      version: c.env.APP_VERSION || "1.0.0",
+    },
   });
 });
 
 interface ReadinessRow {
-  initialized: number;
   pending_events: number;
   needs_attention_events: number;
   pending_deliveries: number;
@@ -50,11 +79,12 @@ interface ReadinessRow {
 systemRouter.get("/readiness", async (c) => {
   const now = new Date().toISOString();
   let row: ReadinessRow | undefined;
+  let setupState: DeploymentSetupState | undefined;
   try {
+    setupState = await readDeploymentSetupState(c.env.DB);
     const result = await c.env.DB
       .prepare(
         `SELECT
-           (SELECT COUNT(*) FROM system_settings WHERE id = 'current') AS initialized,
            (SELECT COUNT(*) FROM inbound_events WHERE status IN ('pending', 'processing')) AS pending_events,
            (SELECT COUNT(*) FROM inbound_events WHERE status = 'needs_attention') AS needs_attention_events,
            (SELECT COUNT(*) FROM email_deliveries WHERE status IN ('pending', 'processing', 'retry_scheduled')) AS pending_deliveries,
@@ -64,7 +94,7 @@ systemRouter.get("/readiness", async (c) => {
            (SELECT COUNT(*)
             FROM email_template_bindings AS binding
             JOIN email_integrations AS integration
-              ON integration.account_id = binding.account_id
+              ON integration.instance_id = binding.instance_id
              AND integration.id = binding.email_integration_id
 	            WHERE integration.status = 'active' AND binding.status = 'active') AS active_email_template_bindings`,
       )
@@ -80,18 +110,10 @@ systemRouter.get("/readiness", async (c) => {
     );
   }
 
-  let schedulerHealth;
-  try {
-    schedulerHealth = await readSchedulerHealth(c.env.DB, new Date(now));
-  } catch (error) {
-    throw new AppError(
-      "READINESS_SCHEDULER_STATE_UNAVAILABLE",
-      "Scheduled Worker health state could not be read.",
-      503,
-      { checked_at: now },
-      { cause: error instanceof Error ? error.message : String(error) },
-    );
+  if (setupState?.status === "inconsistent") {
+    throw inconsistentSetupState(setupState);
   }
+
   const storageKeyReady = Boolean(c.env.STORAGE_ENCRYPTION_KEY?.trim());
   const turnstileSiteKey = c.env.TURNSTILE_SITE_KEY?.trim() ?? "";
   const turnstileSecretKey = c.env.TURNSTILE_SECRET_KEY?.trim() ?? "";
@@ -101,33 +123,31 @@ systemRouter.get("/readiness", async (c) => {
     && !turnstileSiteKey.startsWith("replace-with-")
     && !turnstileSecretKey.startsWith("replace-with-"),
   );
-  const initialized = Number(row?.initialized || 0) === 1;
-  const ready = initialized && storageKeyReady && turnstileReady && schedulerHealth.ready;
+  const initialized = setupState?.status === "completed";
+  const ready = initialized && storageKeyReady && turnstileReady;
   c.header("Cache-Control", "no-store");
   return c.json(
     {
       success: true,
       data: {
         ready,
-        checkedAt: now,
+        checked_at: now,
         checks: {
           database: "ready",
           initialized: initialized ? "ready" : "not_ready",
-          storageEncryptionKey: storageKeyReady ? "ready" : "not_ready",
-          turnstileConfiguration: turnstileReady ? "ready" : "not_ready",
-          schedulerLastSuccess: schedulerHealth.ready ? "ready" : "not_ready",
+          storage_encryption_key: storageKeyReady ? "ready" : "not_ready",
+          turnstile_configuration: turnstileReady ? "ready" : "not_ready",
         },
-        scheduler: schedulerHealth.record,
         backlog: {
-          pendingInboundEvents: Number(row?.pending_events || 0),
-          needsAttentionInboundEvents: Number(row?.needs_attention_events || 0),
-          pendingDeliveries: Number(row?.pending_deliveries || 0),
-          blockedDeliveries: Number(row?.blocked_deliveries || 0),
+          pending_inbound_events: Number(row?.pending_events || 0),
+          needs_attention_inbound_events: Number(row?.needs_attention_events || 0),
+          pending_deliveries: Number(row?.pending_deliveries || 0),
+          blocked_deliveries: Number(row?.blocked_deliveries || 0),
         },
         capabilities: {
-          activeBillingProviders: Number(row?.active_providers || 0),
-          activeEmailIntegrations: Number(row?.active_email_integrations || 0),
-          activeEmailTemplateBindings: Number(row?.active_email_template_bindings || 0),
+          active_billing_providers: Number(row?.active_providers || 0),
+          active_email_integrations: Number(row?.active_email_integrations || 0),
+          active_email_template_bindings: Number(row?.active_email_template_bindings || 0),
         },
       },
     },

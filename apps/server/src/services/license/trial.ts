@@ -31,7 +31,7 @@ interface TrialClaimRow {
 
 export async function claimTrial(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   productId: string;
   fingerprint: string;
   releaseVersion: string;
@@ -41,8 +41,8 @@ export async function claimTrial(input: {
   const now = input.now ?? new Date();
   const product = await firstD1<TrialProductRow>(input.db.prepare(
     `SELECT status, trial_enabled, trial_duration_seconds, trial_features_json
-     FROM products WHERE account_id = ?1 AND id = ?2 LIMIT 1`
-  ).bind(input.accountId, input.productId));
+     FROM products WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+  ).bind(input.instanceId, input.productId));
   if (!product) throw new NotFoundError("Product not found");
   if (product.status !== "active") throw new AppError("PRODUCT_UNAVAILABLE", "The Product is archived.", 409);
   if (!product.trial_enabled) throw new AppError("TRIAL_NOT_ENABLED", "This Product does not offer a device trial.", 404);
@@ -51,7 +51,7 @@ export async function claimTrial(input: {
   }
   await requireProductRelease({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     productId: input.productId,
     version: input.releaseVersion,
     platform: input.releasePlatform,
@@ -60,8 +60,8 @@ export async function claimTrial(input: {
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
   const existing = await firstD1<{ id: string }>(input.db.prepare(
     `SELECT id FROM trial_claims
-     WHERE account_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
-  ).bind(input.accountId, input.productId, fingerprintHash));
+     WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
+  ).bind(input.instanceId, input.productId, fingerprintHash));
   if (existing) {
     throw new AppError("TRIAL_ALREADY_CLAIMED", "This device has already claimed the Product trial.", 409, {
       trial_id: existing.id,
@@ -75,13 +75,13 @@ export async function claimTrial(input: {
   try {
     await input.db.prepare(
       `INSERT INTO trial_claims (
-         id, account_id, product_id, fingerprint_hash, trial_token_hash,
+         id, instance_id, product_id, fingerprint_hash, trial_token_hash,
          features_json, claimed_at, expires_at, last_validated_at,
          revoked_at, revoke_reason, updated_at
        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, NULL, ?7)`
     ).bind(
       trialId,
-      input.accountId,
+      input.instanceId,
       input.productId,
       fingerprintHash,
       tokenHash,
@@ -91,11 +91,11 @@ export async function claimTrial(input: {
     ).run();
   } catch (error) {
     const raw = String(error);
-    if (raw.includes("trial_claims.account_id, trial_claims.product_id, trial_claims.fingerprint_hash")) {
+    if (raw.includes("trial_claims.instance_id, trial_claims.product_id, trial_claims.fingerprint_hash")) {
       const concurrent = await firstD1<{ id: string }>(input.db.prepare(
         `SELECT id FROM trial_claims
-         WHERE account_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
-      ).bind(input.accountId, input.productId, fingerprintHash));
+         WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
+      ).bind(input.instanceId, input.productId, fingerprintHash));
       throw new AppError("TRIAL_ALREADY_CLAIMED", "This device has already claimed the Product trial.", 409, {
         trial_id: concurrent?.id,
         database_error: raw,
@@ -114,7 +114,7 @@ export async function claimTrial(input: {
 
 export async function validateTrial(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   productId: string;
   trialId: string;
   trialToken: string;
@@ -128,8 +128,8 @@ export async function validateTrial(input: {
     `SELECT id, fingerprint_hash, trial_token_hash, features_json, claimed_at,
             expires_at, last_validated_at, revoked_at, revoke_reason
      FROM trial_claims
-     WHERE account_id = ?1 AND product_id = ?2 AND id = ?3 LIMIT 1`
-  ).bind(input.accountId, input.productId, input.trialId));
+     WHERE instance_id = ?1 AND product_id = ?2 AND id = ?3 LIMIT 1`
+  ).bind(input.instanceId, input.productId, input.trialId));
   if (!claim) throw new NotFoundError("Trial Claim not found");
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
   const tokenHash = await sha256Hex(input.trialToken);
@@ -152,16 +152,16 @@ export async function validateTrial(input: {
   }
   await requireProductRelease({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     productId: input.productId,
     version: input.releaseVersion,
     platform: input.releasePlatform,
   });
   await input.db.prepare(
     `UPDATE trial_claims SET last_validated_at = ?1, updated_at = ?1
-     WHERE account_id = ?2 AND product_id = ?3 AND id = ?4
+     WHERE instance_id = ?2 AND product_id = ?3 AND id = ?4
        AND revoked_at IS NULL AND expires_at > ?1`
-  ).bind(now.toISOString(), input.accountId, input.productId, input.trialId).run();
+  ).bind(now.toISOString(), input.instanceId, input.productId, input.trialId).run();
   return {
     trial_id: claim.id,
     status: "active" as const,

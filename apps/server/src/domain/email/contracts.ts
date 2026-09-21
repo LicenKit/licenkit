@@ -31,27 +31,28 @@ export interface EmailNotificationContract {
 
 export interface EmailVariableValidationContext {
   /**
-   * The persisted system_settings.site_url value. It is required when a
+   * The current instances.site_url value. It is required when a
    * contract contains access_url so arbitrary caller-provided URLs cannot be
    * accepted merely because they are valid HTTPS URLs.
    */
   readonly trustedSiteUrl?: string;
-  /** The current Account slug expected in a customer portal access URL. */
-  readonly expectedAccountSlug?: string;
+  /** The current Instance slug expected in a customer portal access URL. */
+  readonly expectedInstanceSlug?: string;
 }
 
 export interface CustomerPortalAccessUrlInput {
   readonly trustedSiteUrl: string;
-  readonly accountSlug: string;
+  readonly instanceSlug: string;
   readonly oneTimeToken: string;
 }
 
 const EMAIL_SCHEMA = z.string().email().max(320);
-const ACCOUNT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const INSTANCE_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const LICENKIT_PRODUCT_ID_PATTERN = /^prd_[0-9a-hjkmnp-tv-z]{26}$/;
 const LICENKIT_LICENSE_ID_PATTERN = /^lic_[0-9a-hjkmnp-tv-z]{26}$/;
 const LICENSE_KEY_PATTERN = /^LK-[0-9A-HJKMNP-TV-Z]{6}(?:-[0-9A-HJKMNP-TV-Z]{6}){3}-[0-9A-HJKMNP-TV-Z]{2}$/;
 const CUSTOMER_PORTAL_TOKEN_PATTERN = /^mlk_[0-9a-f]{64}$/;
+const INSTANCE_INVITATION_TOKEN_PATTERN = /^ivk_[0-9a-f]{64}$/;
 
 function variable(
   descriptor: EmailVariableDescriptor,
@@ -66,13 +67,13 @@ function variable(
 
 export const COMMON_EMAIL_VARIABLES = Object.freeze([
   variable({
-    name: "account_name",
+    name: "instance_name",
     type: "string",
     required: true,
     sensitive: false,
     minLength: 1,
     maxLength: 120,
-    description: "当前 Account 显示名称",
+    description: "当前 Instance 显示名称",
     example: "Example Team",
   }),
 ] satisfies readonly EmailVariableDescriptor[]);
@@ -197,6 +198,32 @@ const PORTAL_ACCESS_VARIABLES = Object.freeze([
   }),
 ] satisfies readonly EmailVariableDescriptor[]);
 
+const INSTANCE_INVITATION_VARIABLES = Object.freeze([
+  variable({
+    name: "invitation_url",
+    type: "string",
+    required: true,
+    sensitive: true,
+    format: "uri",
+    minLength: 1,
+    maxLength: 2048,
+    description: "由当前 Instance 的可信 Site URL Origin 生成的一次性管理员邀请地址",
+    example:
+      "https://license.example.com/admin/invitations/accept#token=ivk_0000000000000000000000000000000000000000000000000000000000000000",
+  }),
+  variable({
+    name: "expires_at",
+    type: "string",
+    required: true,
+    sensitive: false,
+    format: "date-time",
+    minLength: 20,
+    maxLength: 64,
+    description: "Instance 邀请到期时间，使用 ISO 8601 UTC date-time",
+    example: "2026-10-19T10:15:00.000Z",
+  }),
+] satisfies readonly EmailVariableDescriptor[]);
+
 function contract(
   value: EmailNotificationContract,
 ): EmailNotificationContract {
@@ -248,6 +275,13 @@ export const EMAIL_NOTIFICATION_CONTRACTS = Object.freeze([
     name: "客户门户访问",
     description: "客户请求访问 Customer Portal 时发送一次性 Magic Link。",
     variables: [...COMMON_EMAIL_VARIABLES, ...PORTAL_ACCESS_VARIABLES],
+  }),
+  contract({
+    notificationType: "instance.member_invited",
+    version: 1,
+    name: "实例成员邀请",
+    description: "Instance Owner 邀请成员时发送一次性管理员邀请链接。",
+    variables: [...COMMON_EMAIL_VARIABLES, ...INSTANCE_INVITATION_VARIABLES],
   }),
 ] satisfies readonly EmailNotificationContract[]);
 
@@ -330,13 +364,13 @@ export function buildCustomerPortalAccessUrl(
 ): string {
   const siteUrl = parseTrustedSiteUrl(input.trustedSiteUrl);
   if (
-    !ACCOUNT_SLUG_PATTERN.test(input.accountSlug) ||
-    input.accountSlug.length > 63
+    !INSTANCE_SLUG_PATTERN.test(input.instanceSlug) ||
+    input.instanceSlug.length > 63
   ) {
     throw contractError(
-      "EMAIL_PORTAL_ACCOUNT_SLUG_INVALID",
-      "The Account slug for the customer portal access URL is invalid.",
-      { field: "accountSlug" },
+      "EMAIL_PORTAL_INSTANCE_SLUG_INVALID",
+      "The Instance slug for the customer portal access URL is invalid.",
+      { field: "instanceSlug" },
     );
   }
   if (!CUSTOMER_PORTAL_TOKEN_PATTERN.test(input.oneTimeToken)) {
@@ -349,7 +383,7 @@ export function buildCustomerPortalAccessUrl(
 
   const pathPrefix = siteUrl.pathname === "/" ? "" : siteUrl.pathname;
   const accessUrl = new URL(siteUrl.origin);
-  accessUrl.pathname = `${pathPrefix}/customer/${encodeURIComponent(input.accountSlug)}/auth`;
+  accessUrl.pathname = `${pathPrefix}/customer/${encodeURIComponent(input.instanceSlug)}/auth`;
   accessUrl.hash = `token=${encodeURIComponent(input.oneTimeToken)}`;
   return accessUrl.toString();
 }
@@ -391,20 +425,20 @@ function assertTrustedPortalAccessUrl(
       { variable: "access_url" },
     );
   }
-  if (!context.expectedAccountSlug) {
+  if (!context.expectedInstanceSlug) {
     throw contractError(
-      "EMAIL_EXPECTED_ACCOUNT_SLUG_REQUIRED",
-      "The expected Account slug is required to validate access_url.",
+      "EMAIL_EXPECTED_INSTANCE_SLUG_REQUIRED",
+      "The expected Instance slug is required to validate access_url.",
       { variable: "access_url" },
     );
   }
   if (
-    !ACCOUNT_SLUG_PATTERN.test(context.expectedAccountSlug) ||
-    context.expectedAccountSlug.length > 63
+    !INSTANCE_SLUG_PATTERN.test(context.expectedInstanceSlug) ||
+    context.expectedInstanceSlug.length > 63
   ) {
     throw contractError(
-      "EMAIL_EXPECTED_ACCOUNT_SLUG_INVALID",
-      "The expected Account slug used to validate access_url is invalid.",
+      "EMAIL_EXPECTED_INSTANCE_SLUG_INVALID",
+      "The expected Instance slug used to validate access_url is invalid.",
       { variable: "access_url" },
     );
   }
@@ -427,7 +461,7 @@ function assertTrustedPortalAccessUrl(
   const token = accessUrl.hash.startsWith("#token=")
     ? accessUrl.hash.slice("#token=".length)
     : "";
-  const expectedPath = `/customer/${context.expectedAccountSlug}/auth`;
+  const expectedPath = `/customer/${context.expectedInstanceSlug}/auth`;
   if (
     accessUrl.protocol !== "https:" ||
     accessUrl.origin !== siteUrl.origin ||
@@ -441,6 +475,48 @@ function assertTrustedPortalAccessUrl(
       "EMAIL_ACCESS_URL_UNTRUSTED",
       "Email variable access_url was not generated from the trusted Site URL boundary.",
       { variable: "access_url" },
+    );
+  }
+}
+
+function assertTrustedInstanceInvitationUrl(
+  value: string,
+  context: EmailVariableValidationContext,
+): void {
+  if (!context.trustedSiteUrl) {
+    throw contractError(
+      "EMAIL_TRUSTED_SITE_URL_REQUIRED",
+      "The trusted Site URL is required to validate invitation_url.",
+      { variable: "invitation_url" },
+    );
+  }
+  const siteUrl = parseTrustedSiteUrl(context.trustedSiteUrl);
+  let invitationUrl: URL;
+  try {
+    invitationUrl = new URL(value);
+  } catch {
+    throw contractError(
+      "EMAIL_CONTRACT_VARIABLE_FORMAT_INVALID",
+      "Email variable invitation_url must be a valid URI.",
+      { variable: "invitation_url", format: "uri" },
+    );
+  }
+  const token = invitationUrl.hash.startsWith("#token=")
+    ? invitationUrl.hash.slice("#token=".length)
+    : "";
+  if (
+    invitationUrl.protocol !== "https:" ||
+    invitationUrl.origin !== siteUrl.origin ||
+    invitationUrl.username ||
+    invitationUrl.password ||
+    invitationUrl.search ||
+    invitationUrl.pathname !== "/admin/invitations/accept" ||
+    !INSTANCE_INVITATION_TOKEN_PATTERN.test(token)
+  ) {
+    throw contractError(
+      "EMAIL_INVITATION_URL_UNTRUSTED",
+      "Email variable invitation_url was not generated from the trusted Instance invitation boundary.",
+      { variable: "invitation_url" },
     );
   }
 }
@@ -494,6 +570,9 @@ function assertStringVariable(
   }
   if (descriptor.name === "access_url") {
     assertTrustedPortalAccessUrl(value, context);
+  }
+  if (descriptor.name === "invitation_url") {
+    assertTrustedInstanceInvitationUrl(value, context);
   }
 }
 

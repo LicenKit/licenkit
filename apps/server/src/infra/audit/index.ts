@@ -62,7 +62,7 @@ export interface RecordAuditLogParams {
   details?: Record<string, any>;
   userId?: string;
   userEmail?: string;
-  accountId?: string;
+  instanceId?: string;
 }
 
 /**
@@ -72,12 +72,12 @@ export interface RecordAuditLogParams {
 export async function recordAuditLog(params: RecordAuditLogParams): Promise<string> {
   const { c, action, resourceType, resourceId, details } = params;
 
-  const accountId = params.accountId || c.get("accountId");
+  const instanceId = params.instanceId || c.get("instanceId");
   const userId = params.userId || c.get("userId");
   const userEmail = params.userEmail || c.get("userEmail");
 
-  if (!accountId) {
-    throw new AppError("AUDIT_MISSING_ACCOUNT", "Cannot record audit log without valid accountId", 500);
+  if (!instanceId) {
+    throw new AppError("AUDIT_MISSING_INSTANCE", "Cannot record audit log without valid instanceId", 500);
   }
   if (!userId || !userEmail) {
     throw new AppError("AUDIT_MISSING_OPERATOR", "Cannot record audit log without valid operator identity", 500);
@@ -100,7 +100,8 @@ export async function recordAuditLog(params: RecordAuditLogParams): Promise<stri
   const db = getTenantDB(c);
   await db.insert(auditLogs).values({
     id,
-    accountId,
+    scopeType: "instance",
+    instanceId,
     actorType: "user",
     actorUserId: userId,
     actorCustomerId: null,

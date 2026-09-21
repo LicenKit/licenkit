@@ -4,7 +4,6 @@ import { api, type AdminSession } from "../lib/api-client";
 import { Button, ErrorPanel, Field, Input } from "../components/ui";
 
 export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (session: AdminSession) => void }) {
-  const [accountSlug, setAccountSlug] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,7 +14,7 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (session: AdminS
     setLoading(true);
     setError(null);
     try {
-      const session = await api.admin.auth.login({ accountSlug: accountSlug.trim(), email: email.trim(), password });
+      const session = await api.admin.auth.login({ email: email.trim(), password });
       onLoginSuccess(session);
     } catch (caught) {
       setError(caught);
@@ -41,13 +40,10 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (session: AdminS
         <form className="auth-card" onSubmit={submit}>
           <div>
             <p className="eyebrow">管理控制台</p>
-            <h2>登录账户</h2>
-            <p>使用账户 slug、管理员邮箱和密码登录。</p>
+            <h2>登录管理端</h2>
+            <p>使用管理员邮箱和密码登录。当前自部署会自动进入唯一的 Instance。</p>
           </div>
           <ErrorPanel error={error} />
-          <Field label="账户 slug">
-            <Input value={accountSlug} onChange={(event) => setAccountSlug(event.target.value)} autoComplete="organization" placeholder="example-studio" required />
-          </Field>
           <Field label="管理员邮箱">
             <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" placeholder="owner@example.com" required />
           </Field>

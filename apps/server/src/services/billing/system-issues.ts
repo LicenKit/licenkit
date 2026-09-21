@@ -18,7 +18,7 @@ function providerDiagnostic(details: ProviderHttpErrorDetails): Record<string, u
 
 export async function recordProviderSystemIssue(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   billingProviderId: string;
   capability: BillingSystemIssueOperation;
   issueCode: string;
@@ -28,7 +28,7 @@ export async function recordProviderSystemIssue(input: {
   const nowIso = (input.now ?? new Date()).toISOString();
   await prepareSystemIssueUpsert({
     db: input.db,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     category: "billing",
     sourceType: "billing_provider",
     sourceId: input.billingProviderId,
@@ -39,12 +39,12 @@ export async function recordProviderSystemIssue(input: {
   }).run();
   const issue = await input.db.prepare(
     `SELECT id FROM system_issues
-     WHERE account_id = ?1 AND category = 'billing'
+     WHERE instance_id = ?1 AND category = 'billing'
        AND source_type = 'billing_provider' AND source_id = ?2
        AND operation = ?3 AND error_code = ?4
      LIMIT 1`,
   ).bind(
-    input.accountId,
+    input.instanceId,
     input.billingProviderId,
     input.capability,
     input.issueCode,
@@ -59,7 +59,7 @@ export async function recordProviderSystemIssue(input: {
  */
 export async function recordInboundEventProviderAuthIssue(input: {
   db: D1Database;
-  accountId: string;
+  instanceId: string;
   billingProviderId: string;
   inboundEventId: string;
   workerId: string;
@@ -72,7 +72,7 @@ export async function recordInboundEventProviderAuthIssue(input: {
   await input.db.batch([
     prepareSystemIssueUpsert({
       db: input.db,
-      accountId: input.accountId,
+      instanceId: input.instanceId,
       category: "webhook",
       sourceType: "billing_provider",
       sourceId: input.billingProviderId,
@@ -87,13 +87,13 @@ export async function recordInboundEventProviderAuthIssue(input: {
            locked_by = NULL, locked_until = NULL,
            last_error_code = ?1, last_error_detail = ?2,
            processed_at = ?3, updated_at = ?3
-       WHERE account_id = ?4 AND id = ?5
+       WHERE instance_id = ?4 AND id = ?5
          AND status = 'processing' AND locked_by = ?6`,
     ).bind(
       input.issueCode,
       detailJson,
       nowIso,
-      input.accountId,
+      input.instanceId,
       input.inboundEventId,
       input.workerId,
     ),

@@ -15,7 +15,7 @@ export async function infoCommand(): Promise<void> {
   }
   console.log(pc.bold(pc.cyan("Local activation")));
   console.log(`  ${pc.gray("Activation ID:")} ${stored.activationId}`);
-  console.log(`  ${pc.gray("Account / Product:")} ${stored.accountId} / ${stored.productId}`);
+  console.log(`  ${pc.gray("Instance / Product:")} ${stored.instanceId} / ${stored.productId}`);
   console.log(`  ${pc.gray("Credential mode:")} ${stored.credentialMode}`);
   console.log(`  ${pc.gray("Release:")} ${stored.releaseVersion} (${stored.releasePlatform})`);
   console.log(`  ${pc.gray("Features:")} ${stored.terms.features.join(", ") || "(none)"}`);

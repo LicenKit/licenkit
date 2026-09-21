@@ -5,8 +5,10 @@ import { Button, ErrorPanel } from "./components/ui";
 import { SetupPage } from "./pages/SetupPage";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { InvitationAcceptPage } from "./pages/InvitationAcceptPage";
 
 export function App() {
+  const invitationPath = window.location.pathname === "/admin/invitations/accept";
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState<boolean | null>(null);
   const [session, setSession] = useState<AdminSession | null>(null);
@@ -36,7 +38,9 @@ export function App() {
     }
   }
 
-  useEffect(() => { void bootstrap() }, []);
+  useEffect(() => { if (!invitationPath) void bootstrap() }, [invitationPath]);
+
+  if (invitationPath) return <InvitationAcceptPage onAccepted={(accepted) => { setSession(accepted); setInitialized(true); setLoading(false) }} />;
 
   if (loading) {
     return <main className="centered-page"><div className="loading-brand"><span className="brand-mark"><Loader2 className="size-6 animate-spin" /></span><strong>正在连接 LicenKit</strong><span>读取一次性 Setup 闩锁与管理员 Session</span></div></main>;
@@ -49,7 +53,7 @@ export function App() {
   if (!initialized) return <SetupPage onSetupSuccess={(result) => { setSession(result); setInitialized(true) }} />;
   if (!session) return <LoginPage onLoginSuccess={setSession} />;
 
-  return <DashboardPage user={session.user} account={session.account} onLogout={() => {
+  return <DashboardPage session={session} onSessionChange={setSession} onLogout={() => {
     void api.admin.auth.logout().then(() => setSession(null)).catch(setBootstrapError);
   }} />;
 }

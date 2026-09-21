@@ -17,43 +17,64 @@ import { adminCsrf, requireExactOrigin, requireRole } from "../../middleware/aut
 import { AppError, ConflictError, NotFoundError } from "../../middleware/error";
 import { prepareAuditInsert } from "../../services/identity/audit";
 import { requestIp } from "../../services/identity/session";
+import { toSnakeCaseJson } from "./snake-case-json";
 
 const READ_ROLES = ["owner", "admin", "member", "viewer"] as const;
 
 const EmailIntegrationCreateSchema = z.object({
   provider: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(120),
-  apiKey: z.string().min(1).max(2048),
-  defaultFromEmail: z.string().trim().email().max(320),
-  defaultFromName: z.string().trim().min(1).max(120).optional(),
-  replyToEmail: z.string().trim().email().max(320).optional(),
-  maxAutomaticAttempts: z.number().int().min(1).max(20).default(4),
-}).strict();
+  api_key: z.string().min(1).max(2048),
+  default_from_email: z.string().trim().email().max(320),
+  default_from_name: z.string().trim().min(1).max(120).optional(),
+  reply_to_email: z.string().trim().email().max(320).optional(),
+  max_automatic_attempts: z.number().int().min(1).max(20).default(4),
+}).strict().transform((input) => ({
+  provider: input.provider,
+  name: input.name,
+  apiKey: input.api_key,
+  defaultFromEmail: input.default_from_email,
+  defaultFromName: input.default_from_name,
+  replyToEmail: input.reply_to_email,
+  maxAutomaticAttempts: input.max_automatic_attempts,
+}));
 
 const EmailIntegrationUpdateSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
-  defaultFromEmail: z.string().trim().email().max(320).optional(),
-  defaultFromName: z.string().trim().min(1).max(120).nullable().optional(),
-  replyToEmail: z.string().trim().email().max(320).nullable().optional(),
-  maxAutomaticAttempts: z.number().int().min(1).max(20).optional(),
-}).strict().refine((value) => Object.keys(value).length > 0, "At least one field is required");
+  default_from_email: z.string().trim().email().max(320).optional(),
+  default_from_name: z.string().trim().min(1).max(120).nullable().optional(),
+  reply_to_email: z.string().trim().email().max(320).nullable().optional(),
+  max_automatic_attempts: z.number().int().min(1).max(20).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, "At least one field is required")
+  .transform((input) => ({
+    name: input.name,
+    defaultFromEmail: input.default_from_email,
+    defaultFromName: input.default_from_name,
+    replyToEmail: input.reply_to_email,
+    maxAutomaticAttempts: input.max_automatic_attempts,
+  }));
 
 const RotateCredentialSchema = z.object({
-  apiKey: z.string().min(1).max(2048),
-}).strict();
+  api_key: z.string().min(1).max(2048),
+}).strict().transform((input) => ({ apiKey: input.api_key }));
 
 const TemplateBindingSchema = z.object({
-  contractVersion: z.number().int().min(1),
-  providerTemplateRef: z.string().trim().min(1).max(512),
-}).strict();
+  contract_version: z.number().int().min(1),
+  provider_template_ref: z.string().trim().min(1).max(512),
+}).strict().transform((input) => ({
+  contractVersion: input.contract_version,
+  providerTemplateRef: input.provider_template_ref,
+}));
 
 export const EmailConfigurationTestSchema = z.object({
-  recipientEmail: z.string().trim().email().max(320),
-}).strict();
+  recipient_email: z.string().trim().email().max(320),
+}).strict().transform((input) => ({ recipientEmail: input.recipient_email }));
 
 const ManualRetrySchema = z.object({
-  confirmPossibleDuplicate: z.boolean().optional(),
-}).strict();
+  confirm_possible_duplicate: z.boolean().optional(),
+}).strict().transform((input) => ({
+  confirmPossibleDuplicate: input.confirm_possible_duplicate,
+}));
 
 interface EmailIntegrationRow {
   id: string;
@@ -82,7 +103,8 @@ interface EmailTemplateBindingRow {
 
 interface EmailDeliveryRow {
   id: string;
-  customer_id: string;
+  recipient_type: "customer" | "instance_invitation";
+  customer_id: string | null;
   notification_type: string;
   contract_version: number;
   recipient_email: string;
@@ -131,27 +153,27 @@ function serializeIntegration(row: EmailIntegrationRow) {
     id: row.id,
     provider: row.provider,
     name: row.name,
-    defaultFromEmail: row.default_from_email,
-    defaultFromName: row.default_from_name,
-    replyToEmail: row.reply_to_email,
-    maxAutomaticAttempts: row.max_automatic_attempts,
+    default_from_email: row.default_from_email,
+    default_from_name: row.default_from_name,
+    reply_to_email: row.reply_to_email,
+    max_automatic_attempts: row.max_automatic_attempts,
     status: row.status,
-    credentialConfigured: row.credential_configured === 1,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    credential_configured: row.credential_configured === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
 function serializeBinding(row: EmailTemplateBindingRow) {
   return {
     id: row.id,
-    emailIntegrationId: row.email_integration_id,
-    notificationType: row.notification_type,
-    contractVersion: row.contract_version,
-    providerTemplateRef: row.provider_template_ref,
+    email_integration_id: row.email_integration_id,
+    notification_type: row.notification_type,
+    contract_version: row.contract_version,
+    provider_template_ref: row.provider_template_ref,
     status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
@@ -170,20 +192,21 @@ function parseLastError(value: string | null): Record<string, unknown> | null {
 function serializeDelivery(row: EmailDeliveryRow) {
   return {
     id: row.id,
-    customerId: row.customer_id,
-    notificationType: row.notification_type,
-    contractVersion: row.contract_version,
-    recipientEmail: row.recipient_email,
-    sendExpiresAt: row.send_expires_at,
-    variablesExpiresAt: row.variables_expires_at,
+    recipient_type: row.recipient_type,
+    customer_id: row.customer_id,
+    notification_type: row.notification_type,
+    contract_version: row.contract_version,
+    recipient_email: row.recipient_email,
+    send_expires_at: row.send_expires_at,
+    variables_expires_at: row.variables_expires_at,
     status: row.status,
-    attemptCount: row.attempt_count,
-    nextAttemptAt: row.next_attempt_at,
-    providerMessageId: row.provider_message_id,
-    lastError: parseLastError(row.last_error_json),
-    acceptedAt: row.accepted_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    attempt_count: row.attempt_count,
+    next_attempt_at: row.next_attempt_at,
+    provider_message_id: row.provider_message_id,
+    last_error: toSnakeCaseJson(parseLastError(row.last_error_json)),
+    accepted_at: row.accepted_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
@@ -198,10 +221,10 @@ async function requireIntegration(
                 default_from_email, default_from_name, reply_to_email,
                 max_automatic_attempts, status, created_at, updated_at
          FROM email_integrations
-         WHERE account_id = ?1 AND id = ?2
+         WHERE instance_id = ?1 AND id = ?2
          LIMIT 1`,
       )
-      .bind(c.get("accountId")!, integrationId),
+      .bind(c.get("instanceId")!, integrationId),
   );
   if (!row) throw new NotFoundError("Email Integration not found");
   return row;
@@ -218,12 +241,12 @@ async function requireBinding(
         `SELECT id, email_integration_id, notification_type, contract_version,
                 provider_template_ref, status, created_at, updated_at
          FROM email_template_bindings
-         WHERE account_id = ?1 AND email_integration_id = ?2
+         WHERE instance_id = ?1 AND email_integration_id = ?2
            AND notification_type = ?3
          ORDER BY contract_version DESC
          LIMIT 1`,
       )
-      .bind(c.get("accountId")!, integrationId, notificationType),
+      .bind(c.get("instanceId")!, integrationId, notificationType),
   );
   if (!row) throw new NotFoundError("Email Template Binding not found");
   return row;
@@ -238,7 +261,7 @@ function audit(c: Context<AppContext>, input: {
 }) {
   return prepareAuditInsert({
     db: c.env.DB,
-    accountId: c.get("accountId")!,
+    instanceId: c.get("instanceId")!,
     actor: { type: "user", id: c.get("userId")! },
     action: input.action,
     resourceType: input.resourceType,
@@ -254,7 +277,7 @@ function audit(c: Context<AppContext>, input: {
 export const adminEmailTemplateContractsRouter = new Hono<AppContext>();
 
 adminEmailTemplateContractsRouter.get("/", requireRole([...READ_ROLES]), (c) =>
-  c.json({ success: true, data: { items: listEmailNotificationContracts() } }));
+  c.json({ success: true, data: { items: toSnakeCaseJson(listEmailNotificationContracts()) } }));
 
 adminEmailTemplateContractsRouter.get(
   "/:notificationType/versions/:contractVersion/examples/:provider",
@@ -263,11 +286,11 @@ adminEmailTemplateContractsRouter.get(
     const version = z.coerce.number().int().min(1).parse(c.req.param("contractVersion"));
     return c.json({
       success: true,
-      data: getEmailProviderTemplateExample(
+      data: toSnakeCaseJson(getEmailProviderTemplateExample(
         c.req.param("provider"),
         c.req.param("notificationType"),
         version,
-      ),
+      )),
     });
   },
 );
@@ -281,10 +304,10 @@ adminEmailIntegrationsRouter.get("/", requireRole([...READ_ROLES]), async (c) =>
               default_from_email, default_from_name, reply_to_email,
               max_automatic_attempts, status, created_at, updated_at
        FROM email_integrations
-       WHERE account_id = ?1
+       WHERE instance_id = ?1
        ORDER BY created_at DESC`,
     )
-    .bind(c.get("accountId")!)
+    .bind(c.get("instanceId")!)
     .all<EmailIntegrationRow>();
   c.header("Cache-Control", "no-store");
   return c.json({ success: true, data: { items: result.results.map(serializeIntegration) } });
@@ -295,23 +318,23 @@ adminEmailIntegrationsRouter.post("/", ...mutationGuards(), async (c) => {
   const adapter = getEmailProviderAdapter(input.provider);
   const credential = adapter.validateCredentialEnvelope({ version: 1, apiKey: input.apiKey });
   validateIntegrationSendingConfiguration(input);
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const active = await one<{ id: string }>(
     c.env.DB.prepare(
       `SELECT id FROM email_integrations
-       WHERE account_id = ?1 AND status = 'active' LIMIT 1`,
-    ).bind(accountId),
+       WHERE instance_id = ?1 AND status = 'active' LIMIT 1`,
+    ).bind(instanceId),
   );
   if (active) {
     throw new ConflictError(
       "EMAIL_INTEGRATION_ACTIVE_EXISTS",
-      "This Account already has an active Email Integration.",
+      "This Instance already has an active Email Integration.",
     );
   }
   const integrationId = `emi_${ulid().toLowerCase()}`;
   const now = new Date().toISOString();
   const credentialCiphertext = await encryptEnvelopeV1(JSON.stringify(credential), c.env, {
-    accountId,
+    instanceId,
     table: "email_integrations",
     rowId: integrationId,
     field: "credential_ciphertext",
@@ -319,13 +342,13 @@ adminEmailIntegrationsRouter.post("/", ...mutationGuards(), async (c) => {
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO email_integrations (
-         id, account_id, provider, name, credential_ciphertext,
+         id, instance_id, provider, name, credential_ciphertext,
          default_from_email, default_from_name, reply_to_email,
          max_automatic_attempts, status, created_at, updated_at
        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'active', ?10, ?10)`,
     ).bind(
       integrationId,
-      accountId,
+      instanceId,
       input.provider,
       input.name,
       credentialCiphertext,
@@ -370,7 +393,7 @@ adminEmailIntegrationsRouter.post("/", ...mutationGuards(), async (c) => {
 
 adminEmailIntegrationsRouter.patch("/:integrationId", ...mutationGuards(), async (c) => {
   const input = EmailIntegrationUpdateSchema.parse(await c.req.json());
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const integrationId = c.req.param("integrationId");
   const existing = await requireIntegration(c, integrationId);
   const next = {
@@ -389,7 +412,7 @@ adminEmailIntegrationsRouter.patch("/:integrationId", ...mutationGuards(), async
       `UPDATE email_integrations
        SET name = ?1, default_from_email = ?2, default_from_name = ?3,
            reply_to_email = ?4, max_automatic_attempts = ?5, updated_at = ?6
-       WHERE account_id = ?7 AND id = ?8`,
+       WHERE instance_id = ?7 AND id = ?8`,
     ).bind(
       next.name,
       next.defaultFromEmail,
@@ -397,14 +420,18 @@ adminEmailIntegrationsRouter.patch("/:integrationId", ...mutationGuards(), async
       next.replyToEmail,
       next.maxAutomaticAttempts,
       now,
-      accountId,
+      instanceId,
       integrationId,
     ),
     audit(c, {
       action: "admin.email_integration.updated",
       resourceType: "email_integration",
       resourceId: integrationId,
-      details: { changedFields: Object.keys(input) },
+      details: {
+        changedFields: Object.entries(input)
+          .filter(([, value]) => value !== undefined)
+          .map(([field]) => field),
+      },
       now,
     }),
   ]);
@@ -427,13 +454,13 @@ adminEmailIntegrationsRouter.post(
   ...mutationGuards(),
   async (c) => {
     const input = RotateCredentialSchema.parse(await c.req.json());
-    const accountId = c.get("accountId")!;
+    const instanceId = c.get("instanceId")!;
     const integrationId = c.req.param("integrationId");
     const existing = await requireIntegration(c, integrationId);
     const credential = getEmailProviderAdapter(existing.provider)
       .validateCredentialEnvelope({ version: 1, apiKey: input.apiKey });
     const encrypted = await encryptEnvelopeV1(JSON.stringify(credential), c.env, {
-      accountId,
+      instanceId,
       table: "email_integrations",
       rowId: integrationId,
       field: "credential_ciphertext",
@@ -443,8 +470,8 @@ adminEmailIntegrationsRouter.post(
       c.env.DB.prepare(
         `UPDATE email_integrations
          SET credential_ciphertext = ?1, updated_at = ?2
-         WHERE account_id = ?3 AND id = ?4`,
-      ).bind(encrypted, now, accountId, integrationId),
+         WHERE instance_id = ?3 AND id = ?4`,
+      ).bind(encrypted, now, instanceId, integrationId),
       audit(c, {
         action: "admin.email_integration.credential_rotated",
         resourceType: "email_integration",
@@ -454,7 +481,7 @@ adminEmailIntegrationsRouter.post(
     ]);
     return c.json({
       success: true,
-      data: { id: integrationId, credentialConfigured: true },
+      data: { id: integrationId, credential_configured: true },
     });
   },
 );
@@ -469,8 +496,8 @@ adminEmailIntegrationsRouter.post("/:integrationId/disable", ...mutationGuards()
   await c.env.DB.batch([
     c.env.DB.prepare(
       `UPDATE email_integrations SET status = 'disabled', updated_at = ?1
-       WHERE account_id = ?2 AND id = ?3`,
-    ).bind(now, c.get("accountId")!, integrationId),
+       WHERE instance_id = ?2 AND id = ?3`,
+    ).bind(now, c.get("instanceId")!, integrationId),
     audit(c, {
       action: "admin.email_integration.disabled",
       resourceType: "email_integration",
@@ -482,7 +509,7 @@ adminEmailIntegrationsRouter.post("/:integrationId/disable", ...mutationGuards()
 });
 
 adminEmailIntegrationsRouter.post("/:integrationId/enable", ...mutationGuards(), async (c) => {
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const integrationId = c.req.param("integrationId");
   const existing = await requireIntegration(c, integrationId);
   if (existing.status === "active") {
@@ -491,21 +518,21 @@ adminEmailIntegrationsRouter.post("/:integrationId/enable", ...mutationGuards(),
   const conflicting = await one<{ id: string }>(
     c.env.DB.prepare(
       `SELECT id FROM email_integrations
-       WHERE account_id = ?1 AND status = 'active' AND id <> ?2 LIMIT 1`,
-    ).bind(accountId, integrationId),
+       WHERE instance_id = ?1 AND status = 'active' AND id <> ?2 LIMIT 1`,
+    ).bind(instanceId, integrationId),
   );
   if (conflicting) {
     throw new ConflictError(
       "EMAIL_INTEGRATION_ACTIVE_EXISTS",
-      "This Account already has an active Email Integration.",
+      "This Instance already has an active Email Integration.",
     );
   }
   const now = new Date().toISOString();
   await c.env.DB.batch([
     c.env.DB.prepare(
       `UPDATE email_integrations SET status = 'active', updated_at = ?1
-       WHERE account_id = ?2 AND id = ?3`,
-    ).bind(now, accountId, integrationId),
+       WHERE instance_id = ?2 AND id = ?3`,
+    ).bind(now, instanceId, integrationId),
     audit(c, {
       action: "admin.email_integration.enabled",
       resourceType: "email_integration",
@@ -520,16 +547,16 @@ adminEmailIntegrationsRouter.get(
   "/:integrationId/template-bindings",
   requireRole([...READ_ROLES]),
   async (c) => {
-    const accountId = c.get("accountId")!;
+    const instanceId = c.get("instanceId")!;
     const integrationId = c.req.param("integrationId");
     await requireIntegration(c, integrationId);
     const result = await c.env.DB.prepare(
       `SELECT id, email_integration_id, notification_type, contract_version,
               provider_template_ref, status, created_at, updated_at
        FROM email_template_bindings
-       WHERE account_id = ?1 AND email_integration_id = ?2
+       WHERE instance_id = ?1 AND email_integration_id = ?2
        ORDER BY notification_type, contract_version`,
-    ).bind(accountId, integrationId).all<EmailTemplateBindingRow>();
+    ).bind(instanceId, integrationId).all<EmailTemplateBindingRow>();
     return c.json({
       success: true,
       data: { items: result.results.map(serializeBinding) },
@@ -542,7 +569,7 @@ adminEmailIntegrationsRouter.put(
   ...mutationGuards(),
   async (c) => {
     const input = TemplateBindingSchema.parse(await c.req.json());
-    const accountId = c.get("accountId")!;
+    const instanceId = c.get("instanceId")!;
     const integrationId = c.req.param("integrationId");
     const notificationType = c.req.param("notificationType");
     const integration = await requireIntegration(c, integrationId);
@@ -568,12 +595,12 @@ adminEmailIntegrationsRouter.put(
       await c.env.DB.batch([
         c.env.DB.prepare(
           `INSERT INTO email_template_bindings (
-             id, account_id, email_integration_id, notification_type,
+             id, instance_id, email_integration_id, notification_type,
              contract_version, provider_template_ref, status, created_at, updated_at
            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?7)`,
         ).bind(
           bindingId,
-          accountId,
+          instanceId,
           integrationId,
           notificationType,
           input.contractVersion,
@@ -611,12 +638,12 @@ adminEmailIntegrationsRouter.put(
       c.env.DB.prepare(
         `UPDATE email_template_bindings
          SET contract_version = ?1, provider_template_ref = ?2, updated_at = ?3
-         WHERE account_id = ?4 AND email_integration_id = ?5 AND id = ?6`,
+         WHERE instance_id = ?4 AND email_integration_id = ?5 AND id = ?6`,
       ).bind(
         input.contractVersion,
         input.providerTemplateRef,
         now,
-        accountId,
+        instanceId,
         integrationId,
         existing.id,
       ),
@@ -662,8 +689,8 @@ for (const action of ["disable", "enable"] as const) {
       await c.env.DB.batch([
         c.env.DB.prepare(
           `UPDATE email_template_bindings SET status = ?1, updated_at = ?2
-           WHERE account_id = ?3 AND email_integration_id = ?4 AND id = ?5`,
-        ).bind(status, now, c.get("accountId")!, integrationId, existing.id),
+           WHERE instance_id = ?3 AND email_integration_id = ?4 AND id = ?5`,
+        ).bind(status, now, c.get("instanceId")!, integrationId, existing.id),
         audit(c, {
           action: `admin.email_template_binding.${action}d`,
           resourceType: "email_template_binding",
@@ -689,14 +716,14 @@ adminEmailIntegrationsRouter.post(
     const result = await testEmailConfiguration({
       db: c.env.DB,
       env: c.env,
-      accountId: c.get("accountId")!,
+      instanceId: c.get("instanceId")!,
       emailIntegrationId: integrationId,
       notificationType,
       contractVersion: binding.contract_version,
       recipientEmail: input.recipientEmail,
     });
     c.header("Cache-Control", "no-store");
-    return c.json({ success: true, data: result });
+    return c.json({ success: true, data: toSnakeCaseJson(result) });
   },
 );
 
@@ -719,19 +746,19 @@ adminEmailIntegrationsRouter.post(
       `UPDATE email_deliveries
        SET status = 'pending', next_attempt_at = ?1, last_error_json = NULL,
            updated_at = ?1
-       WHERE account_id = ?2
+       WHERE instance_id = ?2
          AND notification_type = ?3
          AND status = 'waiting_configuration'
          AND variables_ciphertext IS NOT NULL
          AND (send_expires_at IS NULL OR send_expires_at > ?1)`,
     ).bind(
       now,
-      c.get("accountId")!,
+      c.get("instanceId")!,
       notificationType,
     ).run();
     return c.json({
       success: true,
-      data: { queuedCount: Number(result.meta?.changes ?? 0) },
+      data: { queued_count: Number(result.meta?.changes ?? 0) },
     });
   },
 );
@@ -742,23 +769,23 @@ adminEmailDeliveriesRouter.get("/", requireRole([...READ_ROLES]), async (c) => {
   const status = c.req.query("status");
   const result = status
     ? await c.env.DB.prepare(
-      `SELECT id, customer_id, notification_type, contract_version,
+      `SELECT id, recipient_type, customer_id, notification_type, contract_version,
               recipient_email, send_expires_at, variables_expires_at, status, attempt_count,
               next_attempt_at, provider_message_id, last_error_json,
               accepted_at, created_at, updated_at
        FROM email_deliveries
-       WHERE account_id = ?1 AND status = ?2
+       WHERE instance_id = ?1 AND status = ?2
        ORDER BY created_at DESC, id DESC LIMIT 100`,
-    ).bind(c.get("accountId")!, status).all<EmailDeliveryRow>()
+    ).bind(c.get("instanceId")!, status).all<EmailDeliveryRow>()
     : await c.env.DB.prepare(
-      `SELECT id, customer_id, notification_type, contract_version,
+      `SELECT id, recipient_type, customer_id, notification_type, contract_version,
               recipient_email, send_expires_at, variables_expires_at, status, attempt_count,
               next_attempt_at, provider_message_id, last_error_json,
               accepted_at, created_at, updated_at
        FROM email_deliveries
-       WHERE account_id = ?1
+       WHERE instance_id = ?1
        ORDER BY created_at DESC, id DESC LIMIT 100`,
-    ).bind(c.get("accountId")!).all<EmailDeliveryRow>();
+    ).bind(c.get("instanceId")!).all<EmailDeliveryRow>();
   c.header("Cache-Control", "no-store");
   return c.json({ success: true, data: { items: result.results.map(serializeDelivery) } });
 });
@@ -768,13 +795,13 @@ adminEmailDeliveriesRouter.get(
   requireRole([...READ_ROLES]),
   async (c) => {
     const row = await one<EmailDeliveryRow>(c.env.DB.prepare(
-      `SELECT id, customer_id, notification_type, contract_version,
+      `SELECT id, recipient_type, customer_id, notification_type, contract_version,
               recipient_email, send_expires_at, variables_expires_at, status, attempt_count,
               next_attempt_at, provider_message_id, last_error_json,
               accepted_at, created_at, updated_at
        FROM email_deliveries
-       WHERE account_id = ?1 AND id = ?2 LIMIT 1`,
-    ).bind(c.get("accountId")!, c.req.param("deliveryId")));
+       WHERE instance_id = ?1 AND id = ?2 LIMIT 1`,
+    ).bind(c.get("instanceId")!, c.req.param("deliveryId")));
     if (!row) throw new NotFoundError("Email Delivery not found");
     c.header("Cache-Control", "no-store");
     return c.json({ success: true, data: serializeDelivery(row) });
@@ -786,16 +813,16 @@ adminEmailDeliveriesRouter.post(
   ...mutationGuards(),
   async (c) => {
     const input = ManualRetrySchema.parse(await c.req.json());
-    const accountId = c.get("accountId")!;
+    const instanceId = c.get("instanceId")!;
     const deliveryId = c.req.param("deliveryId");
     const row = await one<EmailDeliveryRow>(c.env.DB.prepare(
-      `SELECT id, customer_id, notification_type, contract_version,
+      `SELECT id, recipient_type, customer_id, notification_type, contract_version,
               recipient_email, send_expires_at, variables_expires_at, status, attempt_count,
               next_attempt_at, provider_message_id, last_error_json,
               accepted_at, created_at, updated_at
        FROM email_deliveries
-       WHERE account_id = ?1 AND id = ?2 LIMIT 1`,
-    ).bind(accountId, deliveryId));
+       WHERE instance_id = ?1 AND id = ?2 LIMIT 1`,
+    ).bind(instanceId, deliveryId));
     if (!row) throw new NotFoundError("Email Delivery not found");
     if (row.status === "accepted" || row.status === "expired" || row.status === "cancelled") {
       throw new ConflictError(
@@ -821,7 +848,7 @@ adminEmailDeliveriesRouter.post(
     const dispatch = await dispatchDelivery({
       db: c.env.DB,
       env: c.env,
-      accountId,
+      instanceId,
       deliveryId,
       manual: true,
     });
@@ -832,13 +859,13 @@ adminEmailDeliveriesRouter.post(
       );
     }
     const updated = await one<EmailDeliveryRow>(c.env.DB.prepare(
-      `SELECT id, customer_id, notification_type, contract_version,
+      `SELECT id, recipient_type, customer_id, notification_type, contract_version,
               recipient_email, send_expires_at, variables_expires_at, status, attempt_count,
               next_attempt_at, provider_message_id, last_error_json,
               accepted_at, created_at, updated_at
        FROM email_deliveries
-       WHERE account_id = ?1 AND id = ?2 LIMIT 1`,
-    ).bind(accountId, deliveryId));
+       WHERE instance_id = ?1 AND id = ?2 LIMIT 1`,
+    ).bind(instanceId, deliveryId));
     return c.json({ success: true, data: serializeDelivery(updated!) });
   },
 );
@@ -847,7 +874,7 @@ adminEmailDeliveriesRouter.post(
   "/:deliveryId/cancel",
   ...mutationGuards(),
   async (c) => {
-    const accountId = c.get("accountId")!;
+    const instanceId = c.get("instanceId")!;
     const deliveryId = c.req.param("deliveryId");
     const now = new Date().toISOString();
     const diagnostic = JSON.stringify({
@@ -863,23 +890,23 @@ adminEmailDeliveriesRouter.post(
              variables_expires_at = NULL, next_attempt_at = NULL,
              locked_by = NULL, locked_until = NULL,
              last_error_json = ?1, updated_at = ?2
-         WHERE account_id = ?3 AND id = ?4
+         WHERE instance_id = ?3 AND id = ?4
            AND status IN ('pending', 'retry_scheduled', 'waiting_configuration', 'failed')`,
-      ).bind(diagnostic, now, accountId, deliveryId),
+      ).bind(diagnostic, now, instanceId, deliveryId),
       c.env.DB.prepare(
         `UPDATE billing_checkout_verifications
          SET status = 'cancelled', completed_at = NULL,
              last_error_code = 'EMAIL_DELIVERY_CANCELLED',
              last_error_detail = 'The related email was cancelled by an administrator.',
              updated_at = ?1
-         WHERE account_id = ?2 AND delivery_id = ?3
+         WHERE instance_id = ?2 AND delivery_id = ?3
            AND status = 'delivery_pending'
            AND EXISTS (
              SELECT 1 FROM email_deliveries AS delivery
-             WHERE delivery.account_id = ?2 AND delivery.id = ?3
+             WHERE delivery.instance_id = ?2 AND delivery.id = ?3
                AND delivery.status = 'cancelled' AND delivery.updated_at = ?1
            )`,
-      ).bind(now, accountId, deliveryId),
+      ).bind(now, instanceId, deliveryId),
     ]);
     if (Number(cancelledResults[0]?.meta?.changes ?? 0) !== 1) {
       throw new ConflictError(
@@ -896,13 +923,13 @@ adminEmailDeliveriesRouter.post(
       }),
     ]);
     const updated = await one<EmailDeliveryRow>(c.env.DB.prepare(
-      `SELECT id, customer_id, notification_type, contract_version,
+      `SELECT id, recipient_type, customer_id, notification_type, contract_version,
               recipient_email, send_expires_at, variables_expires_at,
               status, attempt_count, next_attempt_at, provider_message_id,
               last_error_json, accepted_at, created_at, updated_at
        FROM email_deliveries
-       WHERE account_id = ?1 AND id = ?2 LIMIT 1`,
-    ).bind(accountId, deliveryId));
+       WHERE instance_id = ?1 AND id = ?2 LIMIT 1`,
+    ).bind(instanceId, deliveryId));
     return c.json({ success: true, data: serializeDelivery(updated!) });
   },
 );

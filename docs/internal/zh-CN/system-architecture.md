@@ -2,412 +2,301 @@
 
 ## 1. 架构结论
 
-V1 使用 Cloudflare Workers、D1、Scheduled Triggers、Turnstile、Hono、Drizzle、React 和 Swift。自部署版本不使用 Cloudflare KV、Durable Objects 或 Queues，也不实现 LicenKit Cloud 控制面；需要重构的是领域边界、数据模型和可靠投递流程，不是更换主要技术栈。
-
-系统按职责分为九个后端/授权模块，并把产品购买页视为独立静态前端。模块之间通过明确接口和持久化事实协作，支付、授权、客户访问和通知不共享隐式状态。
-
-```mermaid
-flowchart LR
-    Admin[管理控制台] --> Identity[身份与账户]
-    Admin --> Catalog[产品与授权方案]
-    Admin --> LicenseCore[License 核心]
-    Customer[Customer Portal] --> CustomerAccess[客户身份与访问]
-    CustomerAccess --> LicenseCore
-    CustomerAccess --> Activation[激活与验证]
-    Payment[支付平台] --> Billing[支付入站与履约]
-    CustomerAccess --> Billing
-    ProductPage[静态产品页] --> Payment
-    Billing --> LicenseCore
-    SDK[Swift SDK] --> Activation
-    Billing --> EmailDelivery[邮件投递]
-    LicenseCore --> EmailDelivery
-    CustomerAccess --> EmailDelivery
-    EmailDelivery --> Email[邮件 Provider API]
-```
-
-## 2. 模块职责
-
-### M01 身份与账户
-
-负责首次安装、管理员登录、角色、账户边界和审计上下文。
-
-不负责 Customer 身份或 Customer Session。管理员 User 与购买者 Customer 是不同概念，不共享会话和权限模型。
-
-管理员登录使用账户标识、邮箱和密码建立服务端可吊销 Session：浏览器 Cookie 保存账户选择器和高熵随机 Token，D1 只保存 Token 哈希。账户选择器仅用于构造 `account_id + token_hash` 查询，必须与 Session 数据库记录共同匹配，不能单独作为身份。每次请求都重新校验 Session、Account 状态、User 状态和当前角色，因此禁用用户或修改角色立即生效，不能把长期有效的角色声明只信任在客户端 Cookie 中。
-
-独立部署在数据库完全未初始化时开放一次性 Setup 页面。Setup 至少收集实例/初始 Account 名称、管理员姓名、邮箱和密码，并要求输入部署时配置的 `INITIAL_SETUP_TOKEN`。服务端在一个 D1 原子批次中创建 `system_settings`、首个 Account、首位 owner User 和管理员 Session；任一步失败全部回滚。成功后以 `system_settings(id='current')` 为数据库闩锁永久关闭 Setup，后续请求返回 `SETUP_ALREADY_COMPLETED`。
-
-Setup 是否可用必须同时满足 `system_settings`、Account 和 User 均为空，不能只依赖前端隐藏页面。`INITIAL_SETUP_TOKEN` 只用于首次初始化，按 Secret 管理、常量时间比较、不得进入 URL 或日志，完成后可从部署环境移除。
-
-身份模块保留内部 `AccountProvisioningService.createAccountWithOwner(...)` 领域接口，负责同账户创建和默认拒绝角色约束；Setup Service 在同一原子批次中组合该接口与实例初始化。V1 只有 Setup Adapter 可以调用，不暴露 Cloud API、公开 Account 注册或 Cloud Adapter。未来 Cloud 如进入范围，只增加调用该领域接口的受信 Adapter，不复制账户创建逻辑或绕过多账户约束。
-
-### M02 产品与授权方案
-
-负责 Product、Product Release、签名密钥和 License Plan。
-
-授权方案只用于以后签发，不参与存量 License 的实时判定。它保存可选的相对更新窗口，签发时解析为 License 的绝对 `updates_until`。Product Release 是版本发布时间的服务端事实来源；客户端只提交版本和平台。签名密钥属于 Product；`opaque` 凭证模式不要求签名密钥，`signed` 凭证模式必须有可用密钥。
-
-### M03 License 核心
-
-负责：
-
-- 注册码生成、规范化和哈希；
-- License Terms 快照；
-- 永久、固定期限、手动续期订阅与支付续期订阅的生命周期；
-- 状态、到期、暂停和吊销；
-- 永久 License 的版本更新权益；
-- 手动订阅的显式续期；
-- 普通找回与安全重置；
-- 显式权益迁移。
-
-License 核心不直接调用邮件 Provider，只在事务中创建 Email Delivery。
-
-### M04 激活、试用与验证
-
-负责 Activation、机器令牌、最大激活数、Product Release 版本资格、在线验证、解绑、Signed License Token 签发，以及独立的 Trial Claim 领取与在线校验。
-
-所有席位判断使用 License Terms，不读取当前 License Plan。
-
-Trial Claim 不复用 License 或 Activation 状态机。它只表示无需支付方式的 Product/设备级试用，保存设备领取事实、Trial Token 哈希、功能快照和绝对到期时间；V1 不为这类试用签发离线凭证。要求支付方式的 Paddle 免费订阅试用属于 M05，使用正常 License 与 Billing Subscription。
-
-### M05 支付入站与履约
-
-负责：
-
-- 支付平台配置和签名验证；
-- Billing Customer 镜像、外部 Customer ID 到 LicenKit Customer 的稳定映射；
-- Customer Webhook 同步，以及配置 API Key 后可选的 Paddle API 读穿与定期对账；
-- 外部价格到授权方案的映射；
-- Offer 激活前的收款就绪判断；
-- Product 收款环境隔离、管理员一次性 Checkout Verification；
-- Inbound Event 幂等持久化；
-- 买断、固定期限和订阅状态转换；
-- Adjustment 状态映射、自动暂停和管理员处置；
-- Paddle 要求支付方式的免费订阅试用，以及 `trialing` 到 `active`/`past_due` 的转换；
-- 为已授权 Customer 创建支付平台托管的客户门户会话；
-- 把支付、回调和邮件错误去重为可人工标记待处理/已处理的 System Issue 提示；
-- 失败重放和乱序事件保护。
-
-每个支付平台使用 Adapter 将原始事件转换为内部语义。Adapter 不直接写 License，统一 Fulfillment Service 执行领域动作。
-
-Customer Webhook 和 Paddle Get Customer API 必须进入同一个 `BillingCustomerSyncService.upsertAndLink(...)` 领域入口。该服务只接受已验签事件数据或服务器端认证 API 响应，拒绝 `custom_data.email` 等客户端自定义字段。首次链接时可以按规范化邮箱查找或创建 Customer；一旦外部 Customer ID 已链接，后续同步只能更新 provider 镜像和一致性状态，不能静默改绑内部 Customer。
-
-`BillingCustomerSyncService` 是跨 Adapter 的领域服务，不是 Paddle 专用表访问层。Adapter 必须传入当前 Account、已解析的 Billing Provider 连接、外部 Customer ID 和受信 Customer 快照；服务只用 `account_id + billing_provider_id + external_customer_id` 查询映射。Provider ID 同时隔离平台、环境和账户，因此 Paddle、未来 Stripe 及 sandbox/live 的外部 ID 不会互相碰撞。领域服务不得从所有 Billing Customer 载入内存后按 ID 或邮箱扫描。
-
-Provider API 的 `401/403` 同时产生事件级错误和一条被动 System Issue 提示。事件保存本次 HTTP 状态、Provider 原始错误码、request ID 与 message，并进入 `needs_attention`；Scheduler 只按 Event 状态决定是否领取。管理员可以把提示标为已处理；同一错误再次发生会重新变为待处理。修复 Provider 配置后仍从原 Event 执行 Replay，重新进入完整状态机，Issue 状态不控制 Event。
-
-Paddle Provider 必须保存与环境匹配的 Client-side Token 和加密 Webhook Secret。Client-side Token 是 Paddle.js 的公开受限凭证，静态产品页可以直接配置同一个值；Webhook Secret 只能在服务端验签。Paddle API Key 是可选的服务端凭证，加密保存在 `billing_providers.api_secret_ciphertext`：启用 Get Customer/对账需要 `customer.read`，启用托管客户门户需要 `customer_portal_session.write`。它不能发送到浏览器或通知接收方。未配置 API Key 时，购买事件等待 Customer Webhook 后重试；配置后的 API 读穿发生在 Webhook 已持久化并返回 2xx 之后，超时或限流只让 Inbound Event 保持 `pending`。
-
-Billing 模块对每个普通购买事件使用已验签 Transaction 行项目执行授权检查：只接受一个 active Offer Price、数量为 1，且 Offer Provider 环境等于 Product 的 `billing_environment`。静态页面参数从来不是安全边界。唯一例外是命中未过期、未消费且绑定当前 draft Sandbox Offer 的 Checkout Verification；该例外仍复用统一 Fulfillment，但强制生成不可激活的验证 License。退款和拒付同样由 Adapter 规范化为 Billing Adjustment；自动动作只包括对已批准全额退款与 `action=chargeback` 暂停 License，其他情况进入人工处理。
-
-Billing 模块只能推进 `renewal_mode=billing` 的 License，并要求存在同账户 Billing Subscription；它不得修改 `renewal_mode=manual` 的到期时间。反过来，License 核心的手动续期操作也不得修改 Billing Subscription 或支付续期 License。
-
-V1 只要求 Paddle Adapter 完成真实 Sandbox 闭环。Adapter 注册表对未实现的 provider 默认拒绝；后续支付平台只能增加 Adapter，不能增加第二套履约状态机。
-
-### M06 邮件投递
-
-负责邮件 Provider 投递：
-
-- Email Integration、加密 Provider 凭证、发件身份与重试预算；
-- 四个稳定邮件合同及其 Provider Template Binding；
-- Email Delivery、租约、总尝试次数、自动重试和 Scheduled Worker；
-- 最近一次邮件 Provider 原始响应、request ID、错误码、Retry-After 与字段级脱敏详情；
-- 向统一 System Issue 收件箱写入被动邮件错误提示；
-- 事件变量加密和到期清理。
-
-V1 只注册 `resend` Adapter，由 Worker 直接调用 Resend Email API。邮件主题、HTML、文本和正式版本由 Provider 中的外部模板拥有；LicenKit 保存当前 Template ID/Alias 映射、代码合同版本，以及 Delivery 创建时的加密事件变量。未注册 Provider 必须 fail-fast。
-
-Adapter Registry、邮件合同和 Dispatcher 为第二个 Provider 保留核心演进边界，但 V1 的数据库 Provider 约束、`apiKey` 凭证 DTO 和管理页面仍是 Resend 专用。增加第二个 Provider 需要受控扩展 Schema、API、UI 与测试策略，不是只注册一个 Adapter。
-
-邮件合同 V1 为 `customer.license_issued@1`、`customer.license_recovered@1`、`customer.license_security_reset@1` 和 `customer.portal_access_requested@1`。`account_name` 由服务端统一注入；收件地址只使用 Delivery 的 `recipient_email`，不再复制成模板变量。配置测试直接发送测试数据并即时返回结果，不保存测试证据，也不参与业务发送门禁。
-
-缺少 Integration/Binding 或真实请求缺少合同变量时，业务事务仍保留 `waiting_configuration` Email Delivery。修复后由管理员显式重排；发送时总是读取最新 Integration/Binding。Provider 明确给出可重试结果才进入自动重试；超时或传输中断等结果未知时停止自动重发，管理员确认可能重复后才能人工重发。
-
-### M07 客户身份与访问
-
-负责 Customer、Magic Link、Customer Session 和 Customer Portal API：
-
-- 支付履约或人工签发时创建或匹配 Customer；
-- 在 Magic Link 请求查询 Customer 前完成 Turnstile 服务端验证；
-- 使用现有 Login Challenge 的创建时间在 D1 中执行重复请求冷却；
-- 创建一次性登录 Challenge 和 Email Delivery；
-- 原子消费 Magic Link 并创建可吊销会话；
-- 按当前 Customer 限定 License、Subscription 和 Activation 查询；
-- 执行客户设备释放、注册码找回、安全重置和支付平台门户跳转。
-
-该模块不提供自主注册、密码登录或管理员能力。它调用 License、Activation 和 Billing 模块完成领域动作，不直接跨表拼装新的状态机。
-
-Customer Portal 属于使用方 Site。LicenKit 不提供 Portal、Magic Link 或产品官网的前端实现，也不把这些页面加入生产构建或 Worker 静态资产；管理控制台位于 `apps/admin`，并由 LicenKit Worker 的 `/admin` 路径发布。Setup 显式保存 `siteUrl`，用于生成邮件中的 Magic Link；当前 `siteUrl` 与 `appUrl` 必须同源。使用方页面通过同源 `/api/v1` 使用 Customer Session 和 API，不增加第二套服务端状态机。
-
-### M08 管理控制台
-
-负责配置、检索、诊断和显式业务操作。控制台不得自行推导领域状态，应展示服务端返回的状态、错误和可执行动作。
-
-### M09 客户端 SDK
-
-负责设备指纹、Machine Token 和 Signed License Token 的本地保存与验证。SDK 不能把网络异常伪装成服务端确认有效，也不能把未签名缓存称为签名授权凭证。
-
-### 静态产品页与 Admin Checkout
-
-参考产品页和用户自定义产品页静态维护产品、方案、展示价格、Paddle Client-side Token 和 Price ID，直接调用 Paddle.js。页面不调用 LicenKit Checkout API，也不创建 Customer、License 或 Delivery；`checkout.completed`、重定向和成功页都不是支付事实。
-
-管理控制台另有一个内部 Sandbox 验证函数。它只接受 `POST verification-config` 返回的一次性验证配置，把令牌附加到固定的 Paddle custom data 字段并打开一个 Price、数量 1。该函数不是公开 SDK，静态产品页不能取得或构造验证令牌。
-
-## 3. 写入边界与事务
-
-### 3.1 支付事件接收
-
-接收请求时只执行：
-
-1. 读取对应 Billing Provider 配置；
-2. 验证原始请求签名；
-3. 提取外部事件 ID、类型和发生时间；
-4. 提取事件中存在的外部 Customer、Transaction、Subscription 与 Adjustment ID，以唯一约束写入 Inbound Event；
-5. 注册一次请求后的即时处理任务；
-6. 返回接收结果。
-
-验签失败、配置缺失或无法提取稳定事件 ID 时直接失败，不写入待履约事件。
-
-即时处理只用于降低正常路径延迟，不承担可靠性。事件一旦写入 D1，即使即时处理没有运行、被中断或失败，Scheduled Worker 仍会根据持久状态继续处理。
-
-### 3.2 履约事务
-
-一次履约事务至少同时提交：
-
-- License 或 Billing Subscription 的变更；
-- Inbound Event 的最终处理状态；
-- 需要发送的 Email Delivery；
-- 必要的审计记录。
-
-禁止先创建 License，再在事务外创建发码任务。否则进程中断会产生无法补发的注册码。
-
-永久 License 签发时，`update_window_seconds` 必须在事务内解析为 `updates_until`。支付事件重放不得使用新的处理时间重新计算该值。
-
-手动签发必须在同一原子批次中固定 `renewal_mode`：永久和固定期限为 `none`，手动订阅为 `manual`。手动订阅的未来 `expires_at`、零支付宽限期、License 和 Delivery 必须共同提交；显式续期只允许把同一个手动订阅 License 延长到更晚的绝对时间，并同时写审计。相同绝对时间的请求重放返回当前结果，不能再次累加期限。
-
-Paddle 免费订阅试用进入同一支付履约事务：根据已验签的试用周期创建 `subscription + billing` License 与 `trialing` Billing Subscription，并保存试用开始、结束和下一扣款时间。后续成功扣款只更新同一对象，不能把试用转正实现为再次签发。
-
-Paddle 的订阅创建相关事件可能乱序到达。Fulfillment 使用 Inbound Event 中可索引的外部 Transaction/Subscription ID 关联 `subscription.created` 与 `transaction.completed`；事实不足时保留 `pending`、写入 `BILLING_DEPENDENCY_PENDING` 并退避重试，关联事件到达后再提交完整履约。不能创建缺少周期的半成品 Billing Subscription，也不能把暂缺关联事件标成不可恢复的成功。
-
-购买履约还必须先把事件中的外部 Customer ID 解析为 `billing_customers.customer_id`。本地没有映射时保持 `BILLING_CUSTOMER_PENDING` 并等待 Customer Webhook；Provider 配置了对应 API Key 时可以调用 Paddle Get Customer 并走统一同步服务以加速恢复。API 失败与 Customer Webhook 尚未到达都属于可重试依赖。`email_mismatch`、明确无效或等待超过显式上限时进入 `needs_attention`。这个依赖只限制新 License 签发；已有 Subscription 的续费直接命中原 License，不重新按邮箱解析 Customer。
-
-普通支付 License 的创建事务必须读取 Product、Offer 与 Billing Provider，确认 Product 已选择收款环境、Offer active 且 Provider 环境一致。Checkout Verification 则必须通过令牌哈希等值查询和条件更新原子消费一个仍有效的 attempt，并在同一事务中把 License 固化为 `is_checkout_verification=1`、`suspended + checkout_verification`。验证 Delivery 被接收后再把 attempt 标记为 completed；令牌不能再次使用。
-
-激活与在线校验在读取 License 后首先拒绝 `is_checkout_verification=1`，返回独立的 `LICENSE_CHECKOUT_VERIFICATION_ONLY`。这一检查不能被管理员恢复 License、方案迁移或普通状态编辑绕过。
-
-### 3.3 注册码找回事务
-
-普通找回必须同时提交：
-
-- 新 `key_hash` 和 `key_version`；
-- key rotation 审计；
-- 包含新注册码密文的 Delivery。
-
-安全重置还要在同一事务中吊销全部 active Activation。
-
-### 3.4 Magic Link 与 Customer Session
-
-请求 Magic Link 时先验证 Turnstile Token、固定 action 和 `site_url` hostname。验证失败时在 Customer 查询之前拒绝；验证成功后，只有在 active Customer 存在且最近一条 Challenge 已超过默认 60 秒冷却期时，才在一个 D1 原子批次中创建：
-
-- 只保存 Token 哈希的 Login Challenge；
-- 包含一次性访问 URL 密文的 Email Delivery；
-- 必要的审计事实。
-
-公开接口无论 Customer 是否存在都返回相同的接受语义。不存在的邮箱不能隐式注册 Customer。
-
-冷却判断不能采用批次外先查再写。批次先通过 `INSERT ... SELECT ... WHERE NOT EXISTS` 对最近 Challenge 作条件写入；只有新 Challenge 与 Delivery 确实创建，后续语句才吊销同一 Customer 仍未消费的旧 Challenge，并停止旧 Delivery 重试。冷却命中时不创建记录，也不破坏旧链接。消费 Magic Link 时使用条件写入保证 Challenge 未过期、未消费、未吊销且 Customer 仍为 active；Customer Session 通过唯一 `login_challenge_id` 与 Challenge 绑定，并与 `consumed_at` 在同一个原子批次中提交，因此并发消费只能有一个请求成功。每次使用 Customer Session 仍要验证 Session 未过期、未吊销且 Customer 为 active，不能只在登录时检查一次。
-
-客户释放 Activation、找回注册码、安全重置和创建支付门户 Session 都必须在持久层查询中带上当前 `account_id + customer_id`，验证最近认证窗口，并记录 `actor_type=customer` 的审计。不能只依赖前端隐藏按钮或应用层事后比对归属。
-
-### 3.5 D1 原子写入规则
-
-D1 不提供让应用任意停留在事务中间的交互式事务。所有需要共同成功或共同失败的多语句写入必须预先生成 ID 和随机凭证，再通过一次 `D1Database.batch()` 提交；`batch()` 中任一语句失败，整个批次回滚。禁止在批次外先 `SELECT`，再根据旧结果执行多个独立写入。
-
-需要条件成立才能写入的流程还要有数据库断言：
-
-- Magic Link 使用条件 `INSERT ... SELECT`、Challenge 唯一 Session 约束和同批条件更新；
-- 支付履约同时依赖事件唯一键与外部交易业务唯一键；
-- 激活数上限由数据库 Trigger 在插入或重新激活前检查，不能仅依赖应用层计数；
-- 后台任务通过带状态和租约条件的单条 `UPDATE` 领取，并检查实际受影响行数。
-
-## 4. D1 持久任务与 Scheduled Worker
-
-D1 中的 `inbound_events` 和 `email_deliveries` 是后台任务的事实来源。V1 不使用 Cloudflare Queues，也不依赖进程内任务列表。
+LicenKit 当前是一套运行在 Cloudflare Workers + D1 上的自部署授权服务。核心模型按多租户设计，但当前产品入口只开放一个 Instance。
 
 ```text
-请求持久化 pending 记录
-        │
-        ├── 请求后立即尝试处理 -> 降低正常延迟
-        │
-        └── Scheduled Worker 每分钟扫描到期任务
-                  │
-                  ├── 原子领取租约
-                  ├── 执行履约或 HTTP 投递
-                  └── 成功 / 安排重试 / 等待人工处理
+Deployment（运行环境）
+└── Instance（租户/授权业务空间）
+    ├── Membership ── User（全局管理员身份）
+    ├── Product / Plan / License / Activation
+    ├── Customer / Customer Session
+    ├── Billing / Webhook
+    └── Email / System Issue / Instance Audit
 ```
 
-### 4.1 即时处理
+关键边界：
 
-HTTP Handler 可以通过 Worker 请求上下文启动一次即时处理，但必须先提交 D1 记录。即时处理失败只更新同一条事件或 Delivery 的状态和下次执行时间，不能创建一条无关联的新任务。
+- User 负责邮箱密码身份；
+- Instance 负责业务隔离；
+- Membership 负责 User 在 Instance 中的角色与状态；
+- Invitation 负责加入 Instance，不由 Owner 创建他人密码；
+- Customer 与 User 是独立身份；
+- Deployment 级运行异常不进入 Instance 业务表。
 
-即时处理不能成为唯一执行路径，因为请求后的后台工作可能超时或中断。其作用只是让正常支付履约和发码通常在秒级完成。
+当前主线从空数据库建立新合同，不提供旧表、旧字段、旧 URL、旧环境变量、旧 CLI 选项或旧 Token Claim 的兼容层。
 
-### 4.2 定时恢复
+## 2. 运行拓扑
 
-Scheduled Worker 默认每分钟执行。它先分页读取 active Account ID，再对每个 Account 使用带 `account_id` 的有界索引查询：
-
-- 到达 `next_attempt_at` 的待履约 Inbound Event；
-- 到达 `next_attempt_at` 的待发送 Email Delivery；
-- `locked_until` 已过期但仍处于 processing 的任务。
-
-查询必须使用状态、调度时间和租约索引下推到 D1，不允许加载全表后在内存筛选。
-
-### 4.3 租约与重复执行
-
-处理器使用条件更新原子领取任务，写入 `locked_by` 和 `locked_until`。只有成功取得租约的实例可以执行；实例崩溃后，其他实例在租约过期时重新领取。
-
-租约不能提供 exactly-once。外部接收方可能已经成功接受请求，而 LicenKit 在写回 `accepted` 前中断，因此：
-
-- 履约动作必须受事件唯一约束和领域幂等键保护；
-- 邮件请求使用 Delivery ID 与当前请求内容派生 Provider 幂等键；
-- 每次调用 Provider 前增加同一 Delivery 的 `attempt_count`，只保存最近一次完整诊断，不创建 Attempt 子记录；
-- 重发复用同一个 Delivery ID 和加密事件变量，但读取最新 Integration/Binding；
-- Provider 明确返回可重试结果时，默认自动调用总数最多为 4 次，达到上限后进入 `failed`；Magic Link 到期可以提前结束；
-- 超时或连接中断等结果未知时不自动重发，管理员确认可能重复后才允许人工重发；
-- Provider Send API 成功且返回有效 Provider Message ID 后，邮件 Delivery 才进入 `accepted`，并从该时间开始计算敏感变量清理期限；普通未成功邮件保留密文供管理员重发或取消，Magic Link 仍受 Challenge 业务期限约束。
-- 到期扫描不能抢占仍持有有效处理锁的发送任务；管理员取消尚未发送的 Delivery 时进入 `cancelled` 并立即清除密文。
-- 当前一期把 Provider `accepted` 定义为“已发送”，不追踪 bounce、complaint、suppression、进入收件箱或已读。
-
-## 5. 事件顺序与并发
-
-支付 Webhook 可能重复、延迟或乱序。Billing Subscription 保存 `last_external_occurred_at` 和最后事件 ID。
-
-处理订阅事件时：
-
-- 较旧事件不得覆盖较新的订阅周期或状态；
-- 被忽略的旧事件仍标记为 processed，并记录 `ignored_as_stale` 结果；
-- 同一外部订阅的更新在数据库事务中串行检查；
-- 续费事件不得依赖“读取后在内存中加一个周期”的结果。
-
-设备激活同样使用数据库约束和事务判断 active 数量，不能只做先查数量再插入的无保护流程。
-
-## 6. 错误模型
-
-错误必须保留以下层次：
-
-```json
-{
-  "code": "BILLING_OFFER_MAPPING_MISSING",
-  "message": "No active offer mapping matches the external price.",
-  "details": {
-    "provider": "paddle",
-    "external_event_id": "evt_...",
-    "external_price_id": "pri_...",
-    "provider_event_type": "transaction.completed"
-  }
-}
+```text
+Admin SPA ───────────────┐
+Customer Site（使用方） ─┼─ HTTPS ─> Cloudflare Worker / Hono
+CLI / Swift SDK ─────────┤                    │
+Payment Provider ────────┘                    ├─ D1
+                                              ├─ Static Assets
+Cloudflare Cron ─> scheduled() ───────────────┤
+                                              ├─ Payment Provider API
+                                              └─ Email Provider API
 ```
 
-规则：
+Admin 与 API 同源部署。Customer Site 可以由使用方独立实现和托管，只通过公开 API 交互，不能直接读取 D1 或持有服务端 Secret。
 
-- 对外响应可以脱敏，但内部事件保留可回溯的原始错误；
-- 支付平台错误、HTTP 状态、数据库错误和业务拒绝不能被统一压缩成一个错误码；
-- 敏感字段按字段过滤，不隐藏整个原始包体；
-- Inbound Event 与 Email Delivery 保存可处理对象自己的状态和错误；System Issue 只是管理员错误收件箱，不能互相覆盖；
-- 同一 System Issue 按账户、类别、来源、操作和错误代码去重，request ID 与 message 只作为最近诊断，不参与去重；
-- 重试只能从原 Event 或 Delivery 发起；System Issue 只提供待处理/已处理提示，不提供恢复或重试动作；
-- 所有异步失败都必须能从控制台查询，并只对仍满足前置条件的原始工作单元执行受控重试。
+## 3. 模块职责
 
-## 7. 配置模型
+### M01 Deployment Setup
 
-### 7.1 环境 Secrets
+- 校验 `INITIAL_SETUP_TOKEN`；
+- 提供三步 Setup 状态；
+- 原子创建首位 User、Instance、Owner Membership、Admin Session、审计和 Bootstrap 完成记录；
+- 通过 `deployment_bootstrap` 固定单例行关闭 Setup。
 
-- `STORAGE_ENCRYPTION_KEY`：保护支付 Secret、邮件 Provider 凭证、签名私钥和敏感 Delivery 变量；
-- `INITIAL_SETUP_TOKEN`：独立部署首次初始化的高熵一次性 Secret；完成 Setup 后不再读取；
-- `TURNSTILE_SITE_KEY`：Customer Portal Magic Link 请求页使用的公开 Widget Sitekey；
-- `TURNSTILE_SECRET_KEY`：Worker 调用 Siteverify 的服务端 Secret，不进入浏览器、日志或数据库；
-- Cloudflare 资源绑定：自部署 V1 只要求 D1，不要求 KV、Durable Object 或 Queue；
-- Scheduled Trigger：负责入站事件履约、出站投递重试和过期租约恢复；全部作业成功后把最近成功时间与耗时写入 D1 `system_settings`，Readiness 不读取 KV 或进程内心跳。
+Setup Token 只存在请求和页面内存，不持久化 Hash，也不写日志。
 
-### 7.2 数据库配置
+### M02 User、Session 与 Membership
 
-- Billing Provider：支付平台类型、环境、公开 Client-side Token、加密 Webhook Secret、可选服务端 API 凭证和启用状态；
-- Paddle API Key 仅用于显式启用的 Customer 读穿、定期对账和托管 Customer Portal 会话；它不是 Webhook Secret，也不能暴露给前端；
-- Offer Mapping：外部价格与授权方案映射；默认 `draft`，通过收款就绪检查后才能显式激活；
-- Email Integration：Provider、加密 API 凭证、From/Reply-To、自动重试预算和启用状态；
-- Email Template Binding：邮件类型/合同版本到 Provider Template ID/Alias 的当前映射；
-- Account Settings：包括默认 5 天的订阅支付宽限期；创建订阅授权方案时把该默认值解析并保存为方案实际值，不存放支付渠道混合 JSON。
+- 邮箱密码登录与 User Profile；
+- Session/CSRF Token Hash 和撤销；
+- 每请求读取 active Membership；
+- Owner/Admin/Member/Viewer 现有权限矩阵；
+- 最后一个 active Owner 的数据库不变量；
+- 密码修改撤销其他 Admin Session。
 
-独立表的原因是这些配置需要唯一约束、索引、状态和审计，继续放在 `accounts.payment_configs` JSON 中会使查询和局部更新不可验证。
+Session 只绑定 User，不长期缓存 Instance 角色。
 
-## 8. 测试与正式环境一致性
+### M03 Invitation
 
-测试和正式环境使用相同：
+- Owner 创建、撤销和重新发送 Invitation；
+- 使用当前 Instance 的 Email Integration；
+- 新 User 自设密码，已有 User 先认证；
+- 原子接受、Membership、新 User/Session（如需要）与审计；
+- 与 Customer Magic Link 共享服务端一次性链接组件。
 
-- Webhook 路由；
-- 支付 Adapter；
-- Fulfillment Service；
-- License 和 Subscription 状态机；
-- Email Delivery 和重试流程；
-- SDK 接口和验证路径。
+Admin Invitation 页面属于 LicenKit；Customer Magic Link 页面属于使用方 Customer Site。两端通过合同测试保持相同安全机制，不虚构共享前端包。
 
-只允许以下配置不同：
+### M04 Product、Plan 与 Signing
 
-- 支付平台 sandbox/live 环境；
-- Webhook Secret、域名和资源 ID；
-- 测试接收端点；
-- 重试时间等显式环境配置。
+- Product、Release 和 Signing Key；
+- License Plan 条款与修订；
+- Product → Plan 的支付宽限期快照；
+- Ed25519 Key 生命周期；
+- Release Artifact Hash 与更新权益判断。
 
-不得为正式环境增加一条测试环境未经过的“真实发码”旁路，也不得用 Mock 接口替代正式模块接口。
+### M05 License、Activation 与 Trial
 
-## 9. 安全边界
+- 手动/API/支付签发；
+- Plan → License 条款快照；
+- Registration Key、Machine Token 和 Signed License Token；
+- 席位上限、激活、验证、停用和撤销；
+- 无需支付方式的设备 Trial Claim。
 
-- `account_id` 是服务端安全上下文：所有 Repository/Service 方法必须显式接收它，所有读取、更新和删除条件都包含它；跨账户外键由数据库复合约束拒绝；
-- 管理员 Session 服务端存储且可吊销；所有管理路由必须声明权限，未声明或未命中角色矩阵时默认拒绝；
-- 支付 Webhook 必须对原始请求体验签；包括 custom provider 在内都不能跳过签名；
-- Paddle Client-side Token 和 Price ID 可以公开，但 API Key、Webhook Secret、通知端点或内部诊断细节不能进入静态产品页；
-- 服务端对已验签 Transaction 强制校验一个 Price、数量 1、active Offer 和 Provider/Product 环境一致；draft Sandbox Offer 只接受一次性管理员验证例外；
-- 产品私钥、支付 Secret 和出站 HMAC Secret 必须加密持久化；
-- 加密字段使用带版本的 AES-256-GCM 信封，保存 key ID、96-bit 随机 nonce、ciphertext 和 tag，并把 `account_id + table + row_id + field` 作为 AAD；轮换期间保留解密旧 key 的能力；
-- 注册码和机器令牌只保存哈希；
-- Trial Token 只保存哈希，并同时绑定 Account、Product 与设备指纹；重复领取不能返回旧 Token 或延长试用；
-- Magic Link Token 和 Customer Session Token 只保存哈希，完整值不得进入日志或普通审计；
-- Magic Link 请求页必须使用 Turnstile，并由 Worker 调用 Siteverify 校验成功、单次 Token、固定 action 和 `system_settings.site_url` hostname；Widget 成功回调本身不是安全边界；
-- 已存在 Customer 的重复 Magic Link 请求使用 D1 Login Challenge 执行冷却；冷却命中时返回统一 accepted，不创建新通知、不吊销旧链接；
-- Magic Link 默认 15 分钟有效且只能消费一次；公开请求不得泄露 Customer 是否存在；
-- Magic Link 落地页不得加载第三方资源，使用 URL Fragment 传 Token、`Referrer-Policy: no-referrer`，立即清理浏览器地址；GET 不消费 Token，必须由用户显式动作触发 POST，避免邮件扫描器提前消费；
-- Admin 与 Customer Session 必须使用 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie；另发与 Session 绑定的 Secure、SameSite=Lax、host-only CSRF Cookie。所有 Cookie 鉴权写操作同时验证精确 Origin、`X-CSRF-Token` Header 与 CSRF Cookie 常量时间相等，并校验 Token Hash 属于当前 Session；SameSite 不能单独替代 CSRF 校验；
-- Customer Session 默认有效 7 天；释放设备、注册码轮换、安全重置和支付门户跳转要求最近 15 分钟内完成 Magic Link 验证；
-- Customer API 的持久层查询必须同时限定账户和 Customer 归属；
-- Customer Portal 不直接修改支付状态，只能跳转支付平台并等待已验签 Webhook；
-- 客户端公钥应随应用内置或通过可信发布链固定，不能把同一不可信运行时服务返回的公钥直接作为离线信任根；
-- App 只提交版本号和平台；服务端使用 Product Release 的受信 `released_at`，并把 Release 身份与发布时间写入 Signed License Token；
-- Signed License Token 固定使用 JWS `alg=EdDSA` 和专用 `typ`，SDK 必须拒绝算法降级、未知 `kid`、错误类型和不符合预期的 Claim；
-- 自部署应用不在 Worker 内保存通用限流计数，也不为此引入 KV、Durable Object 或 D1 限流表。部署时必须在 Cloudflare Zone 级 WAF Rate Limiting Rules 配置边缘保护；建议按方法与路径分别覆盖 Setup 写入、管理员登录、管理端写操作、客户端激活/校验/解绑、Trial Claim/校验、Customer 敏感写操作和 Webhook 测试。具体阈值与可用匹配条件由实际流量和 Cloudflare WAF 套餐决定，不写入应用业务合同；
-- License Key、Delivery 敏感负载和完整支付包体不能进入普通审计详情或应用日志。
+Signed License Token 使用 `ins` Claim。CLI/SDK 按显式 `instanceId/instanceID` 验证，不接受旧 Claim。
 
-V1 出站 URL 只允许公网 HTTPS：禁止 URL credentials、非标准端口、IP literal、localhost 和已知私网/链路本地/云元数据目标；`fetch` 使用 `redirect: manual`，每个重定向目标重新执行同一策略。Cloudflare Workers 的出站请求还经过平台代理的公网边界，但应用不能把平台限制当成唯一校验。
+### M06 Billing 与 Webhook
 
-单独 DNS 预解析无法把后续 `fetch` 固定到同一个 IP，不能独自解决 DNS rebinding。V1 不支持任意私网 URL，也不引入 VPC Service/Tunnel；未来如 Cloud 产品确有私网需求，必须作为新的基础设施能力单独设计和批准。
+- Instance 内 Provider 配置；
+- Offer Mapping；
+- Webhook 原始 Body 验签和持久化；
+- Billing Customer、Subscription、Adjustment 镜像；
+- 幂等、乱序保护和履约；
+- Sandbox 闭环验证。
 
-## 10. 可观测性与就绪检查
+Webhook 路径先使用 `instance_slug` 解析 Instance，然后只在该边界内选择 Provider 和处理对象。
 
-Readiness 至少覆盖：
+### M07 Email Delivery
 
-- D1 可读写；
-- D1 `system_settings` 记录的 Scheduled Worker 最近一次完整成功执行时间未超过告警阈值；
-- 最老的待履约事件和待发送 Delivery 未超过积压阈值；
-- `STORAGE_ENCRYPTION_KEY` 可解密一条健康检查样本；
-- 启用中的 Billing Provider 配置可解密；
-- 使用 `signed` 凭证模式的 Product 存在可用签名密钥；
-- 存在一条 active Email Integration，Provider 已注册且加密凭证可解密并通过 Adapter 校验；
-- 四种 Email Template Binding 各自是否 active；配置测试由管理员按需即时执行，结果不持久化；
-- active Paddle Provider 的 Client-side Token、Webhook Secret 和环境匹配，最小事件合同完整；
-- 启用了 Customer API 读穿、定期对账或托管客户门户时，对应 Paddle API Key 可解密、环境和最小权限匹配；
-- Turnstile Sitekey/Secret 已配置，Siteverify 可用且 Widget hostname 与 `site_url` 一致；
-- 部署检查确认上述 Zone 级 WAF Rate Limiting Rules 已配置；Worker 运行时无法在不引入额外 Cloudflare 管理凭证的情况下自行读取该控制面事实，因此 `/system/readiness` 不伪造这一检查；
-- 最近 System Issue 的类别、来源、错误码、次数和最新诊断；它只提示，不进入 Readiness；
-- 每个 active Offer 的 Provider/Product 环境一致性、`customer.license_issued@1` 当前 Binding、真实 Sandbox 端到端验收和 Checkout Readiness 状态；找回、安全重置和 Magic Link 状态独立展示，不进入 Offer 门禁；
-- 待处理或失败事件没有超过告警阈值。
+- Email Integration 和 Provider Template Binding；
+- 类型化、版本化变量合同；
+- 先持久化 Delivery，再调用 Provider；
+- 自动重试、等待配置、人工重发和敏感变量清理；
+- Customer 与 Instance Invitation 两类收件人。
 
-健康检查只报告能力状态，不读取或返回明文 Secret。
+模板文案和 HTML 由 Provider 托管，LicenKit 不复制模板正文。
+
+### M08 Customer 身份与 Portal API
+
+- Magic Link Challenge；
+- Customer Session；
+- License、设备和支付订阅读取；
+- 释放设备、普通找回和安全重置。
+
+Customer Site 的页面、路由、品牌和托管由使用方负责。
+
+### M09 System Issue 与审计
+
+- `system_issues` 聚合可归属 Instance 的 Billing/Webhook/Email 业务错误；
+- 业务对象继续保存自己的状态和原始错误；
+- identity/instance 两类审计范围；
+- Issue 只告警，不作为产品操作门禁。
+
+### M10 Admin、CLI 与 SDK
+
+- Admin 提供 Instance、Members、Profile、System Issues 及共用顶部告警；
+- Instance 状态只读，不提供切换或新建入口；
+- CLI/SDK 对外使用 Instance 命名并验证 `ins` Claim；
+- 客户端不持有私钥或 Provider Secret。
+
+## 4. 请求上下文与隔离
+
+### 4.1 Admin 请求
+
+```text
+Session Cookie
+  -> session_token_hash
+  -> User
+  -> 自部署唯一 active Instance
+  -> 当前 active Membership
+  -> userId + instanceId + instanceRole
+```
+
+写请求额外校验精确 Origin、CSRF Cookie、`X-CSRF-Token` 和 Session 绑定的 CSRF Hash。
+
+### 4.2 Customer 请求
+
+```text
+instance_slug 或明确 instance_id
+  -> Instance
+  -> Customer Session Token Hash
+  -> instance_id + customer_id
+```
+
+Customer Session 不与 Admin Session 混用。
+
+### 4.3 Client 请求
+
+客户端显式发送 `instance_id + product_id`。Registration Key、Machine Token 或 Trial Token 的查找和更新都同时包含 Instance；Signed License Token 本地校验 `ins`。
+
+### 4.4 Webhook 请求
+
+`instance_slug` 来自路径，不从 Event Payload 猜测。服务端在该 Instance 内定位 Provider，使用原始 Body 验签，再以 Instance 范围的幂等键持久化。
+
+## 5. 写入边界与事务
+
+### 5.1 Setup
+
+User、Instance、Owner Membership、Session、审计和 Bootstrap 固定单例行必须位于同一个 D1 `batch()`。只有提交成功后才设置浏览器 Cookie。
+
+### 5.2 Membership 修改
+
+角色/状态更新、必要 Session 处理和审计位于同一个批次。数据库 Trigger 在最后一个 active Owner 被移除时抛出 `LAST_ACTIVE_OWNER_REQUIRED` 并回滚。
+
+### 5.3 Invitation 接受
+
+终态更新必须按 Invitation 主键触发数据库守卫。Invitation、Membership、可选 User/Session、Delivery 处理和审计原子提交；影响 0 行不是事务失败机制。
+
+### 5.4 Customer Magic Link
+
+Challenge 终态更新、Customer Session、Delivery 处理和审计原子提交。数据库 Trigger 对重复、过期、撤销或并发消费抛出 `CUSTOMER_LOGIN_CHALLENGE_NOT_CONSUMABLE`，整个批次回滚。
+
+### 5.5 支付履约
+
+至少把 Inbound Event 状态、Customer/Provider 映射、Subscription/Adjustment、License、Delivery 和审计中的相关写入放入一个明确履约批次。Provider 网络调用不能假装属于 D1 事务；先保存意图/状态，提交后调用，再持久化结果。
+
+### 5.6 License Key 轮换
+
+旧 Key 失效、`key_version` 增加、Rotation、Delivery 和审计原子提交。明文新 Key 只存在于当前响应或加密 Delivery 变量的有限生命周期内。
+
+## 6. D1 原子性规则
+
+1. 先构造全部受参数化语句，再调用一次 `DB.batch()`。
+2. 需要“最多一次”的终态转换必须由 Check/唯一约束/Trigger 抛错，而不是依赖更新影响行数。
+3. 并发安全不能只靠应用层先读后写。
+4. 数据库错误应保留原始错误码和原因链；API 可以映射稳定业务码，但不能把不同失败归一成一个无法诊断的冲突。
+5. 不把外部 HTTP 调用包装成虚假的数据库事务；用持久状态和幂等恢复跨系统边界。
+
+## 7. Scheduled Worker
+
+Scheduled Handler 是唯一允许跨 Instance 发现任务的内部边界：
+
+1. 分页查询存在到期任务的 active Instance；
+2. 对每个 Instance 分页领取 Inbound Event 和 Email Delivery；
+3. 领取和更新始终包含 `instance_id + object_id + status/lease`；
+4. 清理到期的加密载荷与邮件变量；
+5. 单个业务对象失败保存原始状态和 System Issue，继续处理其他对象；
+6. 顶层 Worker/D1/Cron 异常进入 Workers Logs 和 Cron Events。
+
+系统不维护 `scheduler_health` 或最近成功时间，也不以 Scheduler 状态阻塞 Admin 产品操作。
+
+## 8. 并发与事件顺序
+
+- Setup：固定 Bootstrap 主键使并发提交最多一个成功；
+- Membership：数据库保证最后一个 active Owner 不被并发移除；
+- Invitation/Magic Link：数据库终态守卫使并发消费最多一个成功；
+- Activation：唯一索引和 Trigger 保证设备幂等与席位上限；
+- Webhook：Instance 范围的 Event 唯一键保证幂等；
+- Provider 镜像：按外部发生时间和 Event ID 拒绝旧事件覆盖新状态；
+- Scheduler：租约带状态条件，超时任务可被安全重新领取。
+
+## 9. 错误模型
+
+错误至少保留四层：
+
+```text
+稳定业务错误码
+原始数据库或 Provider 错误码
+经过必要脱敏的诊断详情
+request_id / event_id / delivery_id 等追踪身份
+```
+
+不得把整个错误包体隐藏，也不得丢弃具体 Provider、Trigger 或约束原因。对外响应只脱敏 Secret、Token、密码、注册码和敏感载荷。
+
+System Issue 是聚合视图，不覆盖业务对象的原始错误。管理员标记 Issue 已处理，不会自动改变 Event、Delivery、License 或重试状态。
+
+## 10. 配置模型
+
+### 10.1 Deployment 配置
+
+- Worker、D1、Assets、Cron 和 Observability：根 `wrangler.jsonc`；
+- Setup/Encryption/Turnstile 等 Secret：Cloudflare Secrets；
+- 初始 migration：`apps/server/drizzle/0000_v1_initial.sql`。
+
+### 10.2 Instance 配置
+
+- `instances`：名称、Slug、Site URL、只读状态；
+- Billing/Email 凭据：Admin 写入后加密存储；
+- Product：支付环境、宽限期、试用；
+- Plan：授权条款快照。
+
+不建立通用 `instance_settings`，没有独立生命周期的字段直接属于其领域对象。
+
+### 10.3 公开命名
+
+```text
+JSON / DB     instance_id, instance_slug
+TypeScript    instanceId, instanceSlug
+Swift         instanceID, instanceSlug
+Environment   LICENKIT_INSTANCE_ID, VITE_LICENKIT_INSTANCE_SLUG
+CLI           --instance
+Signed Claim  ins
+```
+
+不做别名兼容或双写。
+
+## 11. 测试与正式环境一致性
+
+测试和正式版本使用相同模块、接口、事务、权限和错误模型。差异只来自环境配置、资源绑定和 Provider Sandbox/Live 凭据。
+
+测试替身必须实现同一接口和调用关系。不能通过只在测试环境存在的绕过开关证明生产路径正确。
+
+## 12. 安全边界
+
+- 密码使用服务端强 Hash；
+- Session、CSRF、Magic Link、Invitation、Registration Key、Machine Token 只存 Hash；
+- Provider Secret、邮件变量和短期敏感载荷加密存储；
+- 一次性链接使用 Fragment，页面立即清理，只在内存保管；
+- 所有 Instance 关联由复合外键和查询条件共同保证；
+- Admin 写请求校验 Origin 与 CSRF；
+- Customer Site 不持有服务端 Secret；
+- 私钥不下发 CLI/SDK；客户端只配置公钥；
+- 日志和审计禁止明文敏感值。
+
+## 13. 可观测性与就绪检查
+
+根 Wrangler 配置显式开启 Workers Observability。远程运行证据来自：
+
+- Cloudflare Workers Logs；
+- Cron Trigger 与 Cron Events；
+- 请求 ID 关联的 API 日志；
+- Instance 内业务对象状态和 `system_issues`。
+
+Readiness 只检查处理请求必需的 Worker/D1 绑定和数据库访问，不读取 System Issue 或 Scheduler 状态作为业务门禁。
+
+因此：代码存在 `scheduled()` 处理器不等于远程 Cron 已运行；本地测试通过也不等于远程 D1 migration、Bindings、Observability 或 Customer Site 已验收。

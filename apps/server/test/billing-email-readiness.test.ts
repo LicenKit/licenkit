@@ -5,14 +5,14 @@ import { evaluateBillingOfferReadiness, type BillingOfferReadinessRow } from "..
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const NOW = new Date("2026-09-20T10:00:00.000Z");
-const ACCOUNT_ID = "acc_billing_email_readiness";
+const INSTANCE_ID = "acc_billing_email_readiness";
 const INTEGRATION_ID = "emi_billing_email_readiness";
 const LICENSE_ISSUED = EMAIL_NOTIFICATION_CONTRACTS.find((contract) => contract.notificationType === "customer.license_issued")!;
 const OTHER_CONTRACTS = EMAIL_NOTIFICATION_CONTRACTS.filter((contract) => contract.notificationType !== "customer.license_issued");
 
 const OFFER_ROW: BillingOfferReadinessRow = {
   id: "off_billing_email_readiness",
-  account_id: ACCOUNT_ID,
+  instance_id: INSTANCE_ID,
   external_price_id: "pri_billingemailreadiness",
   product_id: "prd_00000000000000000000000001",
   license_plan_id: "pln_billing_email_readiness",
@@ -36,40 +36,33 @@ describe("Billing Email Delivery Readiness", () => {
   beforeEach(() => {
     testEnv = createTestEnv();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO system_settings (
-         id, instance_name, app_url, site_url, scheduler_last_success_at,
-         scheduler_last_duration_ms, initialized_at, updated_at
-       ) VALUES ('current', 'LicenKit', 'https://app.example.test',
-         'https://site.example.test', ?, 250, ?, ?)`,
-    ).run(NOW.toISOString(), NOW.toISOString(), NOW.toISOString());
-    testEnv.sqliteDb.prepare(
-      `INSERT INTO accounts (id, name, slug, status, created_at, updated_at)
-       VALUES (?, 'Billing Email', 'billing-email', 'active', ?, ?)`,
-    ).run(ACCOUNT_ID, NOW.toISOString(), NOW.toISOString());
+      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
+       VALUES (?, 'Billing Email', 'billing-email', 'https://site.example.test', 'active', ?, ?)`,
+    ).run(INSTANCE_ID, NOW.toISOString(), NOW.toISOString());
   });
 
   async function seedIntegration() {
     const ciphertext = await encryptEnvelopeV1(
       JSON.stringify({ version: 1, apiKey: "re_billing_email_readiness" }),
       testEnv.env,
-      { accountId: ACCOUNT_ID, table: "email_integrations", rowId: INTEGRATION_ID, field: "credential_ciphertext" },
+      { instanceId: INSTANCE_ID, table: "email_integrations", rowId: INTEGRATION_ID, field: "credential_ciphertext" },
     );
     testEnv.sqliteDb.prepare(
       `INSERT INTO email_integrations (
-         id, account_id, provider, name, credential_ciphertext,
+         id, instance_id, provider, name, credential_ciphertext,
          default_from_email, max_automatic_attempts, status, created_at, updated_at
        ) VALUES (?, ?, 'resend', 'Primary', ?, 'licenses@example.test', 4, 'active', ?, ?)`,
-    ).run(INTEGRATION_ID, ACCOUNT_ID, ciphertext, NOW.toISOString(), NOW.toISOString());
+    ).run(INTEGRATION_ID, INSTANCE_ID, ciphertext, NOW.toISOString(), NOW.toISOString());
   }
 
   function seedBindings(contracts: readonly { notificationType: string; version: number }[]) {
     for (const [index, contract] of contracts.entries()) {
       testEnv.sqliteDb.prepare(
         `INSERT INTO email_template_bindings (
-           id, account_id, email_integration_id, notification_type,
+           id, instance_id, email_integration_id, notification_type,
            contract_version, provider_template_ref, status, created_at, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-      ).run(`etb_readiness_${index}`, ACCOUNT_ID, INTEGRATION_ID, contract.notificationType, contract.version, `template-${index}`, NOW.toISOString(), NOW.toISOString());
+      ).run(`etb_readiness_${index}`, INSTANCE_ID, INTEGRATION_ID, contract.notificationType, contract.version, `template-${index}`, NOW.toISOString(), NOW.toISOString());
     }
   }
 
@@ -99,6 +92,7 @@ describe("Billing Email Delivery Readiness", () => {
     const result = await evaluate();
     expect(result.checks.map((item) => item.key)).not.toContain("email_template_tests");
     expect(result.checks.map((item) => item.key)).not.toContain("email_system_issues");
+    expect(result.checks.map((item) => item.key)).not.toContain("scheduled_worker_health");
     expect(check(result, "email_template_bindings").status).toBe("ready");
   });
 

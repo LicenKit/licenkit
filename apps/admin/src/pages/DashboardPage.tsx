@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
-import { Activity, Boxes, Building2, ChevronLeft, ChevronRight, CircleDollarSign, KeyRound, LayoutDashboard, LogOut, Menu, ScrollText, ShieldCheck, UsersRound, X } from "lucide-react";
-import type { Account, AdminUser } from "../lib/api-client";
+import { Activity, Boxes, Building2, ChevronLeft, ChevronRight, CircleDollarSign, ContactRound, KeyRound, LayoutDashboard, LogOut, Menu, ScrollText, ShieldCheck, UserRound, UsersRound, X } from "lucide-react";
+import type { AdminSession } from "../lib/api-client";
 import { Button } from "../components/ui";
 import { OverviewView } from "./admin/OverviewView";
 import { ProductsView } from "./admin/ProductsView";
@@ -9,9 +9,12 @@ import { LicensesView } from "./admin/LicensesView";
 import { CustomersView } from "./admin/CustomersView";
 import { BillingView } from "./admin/BillingView";
 import { OperationsView } from "./admin/OperationsView";
-import { AccountView } from "./admin/AccountView";
+import { InstanceView } from "./admin/InstanceView";
+import { MembersView } from "./admin/MembersView";
+import { ProfileView } from "./admin/ProfileView";
+import { InstanceIssueAlert } from "./admin/InstanceIssueAlert";
 
-type Section = "overview" | "products" | "license-plans" | "licenses" | "customers" | "billing" | "operations" | "account";
+type Section = "overview" | "products" | "license-plans" | "licenses" | "customers" | "billing" | "operations" | "instance" | "members" | "profile";
 interface NavItem { id: Section; label: string; description: string; icon: ComponentType<{ className?: string }> }
 
 const nav: Array<{ label: string; items: NavItem[] }> = [
@@ -26,18 +29,24 @@ const nav: Array<{ label: string; items: NavItem[] }> = [
   ] },
   { label: "商业闭环", items: [
     { id: "billing", label: "支付与 Offer", description: "Paddle 连接与收款就绪", icon: CircleDollarSign },
-    { id: "operations", label: "事件与投递", description: "Inbound Event、Delivery 诊断", icon: Activity },
+    { id: "operations", label: "事件与投递", description: "System Issue、Event 与 Delivery", icon: Activity },
   ] },
-  { label: "管理", items: [{ id: "account", label: "账户与团队", description: "Account 默认值与权限", icon: Building2 }] },
+  { label: "管理", items: [
+    { id: "instance", label: "Instance", description: "实例身份与只读状态", icon: Building2 },
+    { id: "members", label: "Members", description: "邀请与 Membership", icon: ContactRound },
+    { id: "profile", label: "Profile", description: "当前 User 的资料与密码", icon: UserRound },
+  ] },
 ];
 
-export function DashboardPage({ user, account, onLogout }: { user: AdminUser; account: Account; onLogout: () => void }) {
+export function DashboardPage({ session, onSessionChange, onLogout }: { session: AdminSession; onSessionChange: (session: AdminSession) => void; onLogout: () => void }) {
   const [section, setSection] = useState<Section>("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const visibleNav = user.role === "owner" ? nav : nav.map((group) => ({ ...group, items: group.items.filter((item) => item.id !== "account") })).filter((group) => group.items.length > 0);
-  const current = visibleNav.flatMap((group) => group.items).find((item) => item.id === section)!;
+  const [issueRevision, setIssueRevision] = useState(0);
+  const { user, instance, membership } = session;
+  const current = nav.flatMap((group) => group.items).find((item) => item.id === section)!;
   const CurrentIcon = current.icon;
+  const canWrite = membership.role === "owner" || membership.role === "admin";
 
   return (
     <div className={collapsed ? "admin-shell sidebar-collapsed" : "admin-shell"}>
@@ -49,7 +58,7 @@ export function DashboardPage({ user, account, onLogout }: { user: AdminUser; ac
           <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭导航"><X className="size-5" /></button>
         </header>
         <nav className="sidebar-nav" aria-label="主导航">
-          {visibleNav.map((group) => (
+          {nav.map((group) => (
             <div className="nav-group" key={group.label}>
               <span className="nav-group-label">{group.label}</span>
               {group.items.map((item) => {
@@ -65,7 +74,7 @@ export function DashboardPage({ user, account, onLogout }: { user: AdminUser; ac
           ))}
         </nav>
         <footer className="sidebar-footer">
-          <div className="account-chip"><span>{account.name.slice(0, 1).toUpperCase()}</span><div><strong>{account.name}</strong><small>{account.slug}</small></div></div>
+          <div className="instance-chip"><span>{instance.name.slice(0, 1).toUpperCase()}</span><div><strong>{instance.name}</strong><small>{instance.slug}</small></div></div>
           <button className="collapse-button" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? "展开导航" : "收起导航"}>{collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}</button>
         </footer>
       </aside>
@@ -73,17 +82,20 @@ export function DashboardPage({ user, account, onLogout }: { user: AdminUser; ac
         <header className="admin-topbar">
           <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} aria-label="打开导航"><Menu className="size-5" /></button>
           <div className="topbar-context"><CurrentIcon className="size-4" /><span>{current.label}</span></div>
-          <div className="topbar-user"><div><strong>{user.name}</strong><span>{user.role} · {user.email}</span></div><Button variant="ghost" onClick={onLogout}><LogOut className="size-4" />退出</Button></div>
+          <div className="topbar-user"><div><strong>{user.name}</strong><span>{membership.role} · {user.email}</span></div><Button variant="ghost" onClick={onLogout}><LogOut className="size-4" />退出</Button></div>
         </header>
         <div className="admin-content">
+          <InstanceIssueAlert refreshKey={issueRevision} onOpenIssues={() => setSection("operations")} />
           {section === "overview" ? <OverviewView /> : null}
-          {section === "products" ? <ProductsView canWrite={user.role === "owner" || user.role === "admin"} /> : null}
-          {section === "license-plans" ? <LicensePlansView canWrite={user.role === "owner" || user.role === "admin"} /> : null}
-          {section === "licenses" ? <LicensesView canManage={user.role === "owner" || user.role === "admin"} canSupport={user.role !== "viewer"} /> : null}
-          {section === "customers" ? <CustomersView canManage={user.role === "owner" || user.role === "admin"} /> : null}
-          {section === "billing" ? <BillingView canManage={user.role === "owner" || user.role === "admin"} /> : null}
-          {section === "operations" ? <OperationsView canManage={user.role === "owner" || user.role === "admin"} /> : null}
-          {section === "account" ? <AccountView user={user} account={account} /> : null}
+          {section === "products" ? <ProductsView canWrite={canWrite} /> : null}
+          {section === "license-plans" ? <LicensePlansView canWrite={canWrite} /> : null}
+          {section === "licenses" ? <LicensesView canManage={canWrite} canSupport={membership.role !== "viewer"} /> : null}
+          {section === "customers" ? <CustomersView canManage={canWrite} /> : null}
+          {section === "billing" ? <BillingView canManage={canWrite} /> : null}
+          {section === "operations" ? <OperationsView canManage={canWrite} onIssuesChanged={() => setIssueRevision((value) => value + 1)} /> : null}
+          {section === "instance" ? <InstanceView initialInstance={instance} /> : null}
+          {section === "members" ? <MembersView currentUserId={user.id} canManage={membership.role === "owner"} /> : null}
+          {section === "profile" ? <ProfileView initialUser={user} onUserUpdated={(updatedUser) => onSessionChange({ ...session, user: updatedUser })} /> : null}
         </div>
       </div>
     </div>

@@ -68,6 +68,26 @@ function redactErrorSource(value: unknown, key = ""): unknown {
   return value;
 }
 
+function publicJsonKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+function serializePublicErrorValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(serializePublicErrorValue);
+  if (!value || typeof value !== "object") return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      publicJsonKey(key),
+      serializePublicErrorValue(nested),
+    ]),
+  );
+}
+
 export const errorHandler: ErrorHandler = (err, c) => {
   const requestId = c.get("requestId") || c.req.header("x-request-id") || "unknown";
 
@@ -87,7 +107,7 @@ export const errorHandler: ErrorHandler = (err, c) => {
         error: {
           code: appError.code || "APP_ERROR",
           message: err.message,
-          ...(appError.details ? { details: appError.details } : {}),
+          ...(appError.details ? { details: serializePublicErrorValue(appError.details) } : {}),
           request_id: requestId,
         },
       },

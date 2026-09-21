@@ -205,7 +205,7 @@ export async function fetchPaddleCustomer(
   }
 
   const apiKey = await decryptEnvelopeV1(provider.api_secret_ciphertext, env, {
-    accountId: provider.account_id,
+    instanceId: provider.instance_id,
     table: "billing_providers",
     rowId: provider.id,
     field: "api_secret_ciphertext",
@@ -295,7 +295,7 @@ export async function createPaddleCustomerPortalSession(
     );
   }
   const apiKey = await decryptEnvelopeV1(provider.api_secret_ciphertext, env, {
-    accountId: provider.account_id,
+    instanceId: provider.instance_id,
     table: "billing_providers",
     rowId: provider.id,
     field: "api_secret_ciphertext",
@@ -384,7 +384,7 @@ export async function probePaddleCustomerRead(
     );
   }
   const apiKey = await decryptEnvelopeV1(provider.api_secret_ciphertext, env, {
-    accountId: provider.account_id,
+    instanceId: provider.instance_id,
     table: "billing_providers",
     rowId: provider.id,
     field: "api_secret_ciphertext",

@@ -9,12 +9,12 @@ export interface BillingCryptoEnv {
 export function encryptBillingProviderSecret(
   plaintext: string,
   env: BillingCryptoEnv,
-  accountId: string,
+  instanceId: string,
   providerId: string,
   field: "webhook_secret_ciphertext" | "api_secret_ciphertext",
 ): Promise<string> {
   return encryptEnvelopeV1(plaintext, env, {
-    accountId,
+    instanceId,
     table: "billing_providers",
     rowId: providerId,
     field,
@@ -26,7 +26,7 @@ export function decryptBillingProviderWebhookSecret(
   env: BillingCryptoEnv,
 ): Promise<string> {
   return decryptEnvelopeV1(provider.webhook_secret_ciphertext, env, {
-    accountId: provider.account_id,
+    instanceId: provider.instance_id,
     table: "billing_providers",
     rowId: provider.id,
     field: "webhook_secret_ciphertext",
@@ -36,11 +36,11 @@ export function decryptBillingProviderWebhookSecret(
 export function encryptInboundPayload(
   plaintext: string,
   env: BillingCryptoEnv,
-  accountId: string,
+  instanceId: string,
   eventId: string,
 ): Promise<string> {
   return encryptEnvelopeV1(plaintext, env, {
-    accountId,
+    instanceId,
     table: "inbound_events",
     rowId: eventId,
     field: "payload_ciphertext",
@@ -50,11 +50,11 @@ export function encryptInboundPayload(
 export function decryptInboundPayload(
   ciphertext: string,
   env: BillingCryptoEnv,
-  accountId: string,
+  instanceId: string,
   eventId: string,
 ): Promise<string> {
   return decryptEnvelopeV1(ciphertext, env, {
-    accountId,
+    instanceId,
     table: "inbound_events",
     rowId: eventId,
     field: "payload_ciphertext",

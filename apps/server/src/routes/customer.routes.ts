@@ -42,7 +42,7 @@ function writeGuards() {
 }
 
 function triggerCustomerDeliveryInBackground(c: any, input: {
-  accountId: string;
+  instanceId: string;
   deliveryId: string;
 }): void {
   const reportRegistrationFailure = (error: unknown) => {
@@ -51,7 +51,7 @@ function triggerCustomerDeliveryInBackground(c: any, input: {
     // encrypted email command or its sensitive License variables.
     console.error("Customer email Delivery background trigger could not be registered", {
       code: "EMAIL_DELIVERY_BACKGROUND_TRIGGER_FAILED",
-      accountId: input.accountId,
+      instanceId: input.instanceId,
       deliveryId: input.deliveryId,
       errorType: error instanceof Error ? error.name : typeof error,
     });
@@ -66,7 +66,7 @@ function triggerCustomerDeliveryInBackground(c: any, input: {
   const dispatch = dispatchDelivery({
     db: c.env.DB,
     env: c.env,
-    accountId: input.accountId,
+    instanceId: input.instanceId,
     deliveryId: input.deliveryId,
   }).then(() => undefined);
   try {
@@ -77,7 +77,7 @@ function triggerCustomerDeliveryInBackground(c: any, input: {
     void dispatch.catch((dispatchError) => {
       console.error("Customer email Delivery background dispatch failed", {
         code: "EMAIL_DELIVERY_BACKGROUND_DISPATCH_FAILED",
-        accountId: input.accountId,
+        instanceId: input.instanceId,
         deliveryId: input.deliveryId,
         errorType: dispatchError instanceof Error ? dispatchError.name : typeof dispatchError,
       });
@@ -87,14 +87,14 @@ function triggerCustomerDeliveryInBackground(c: any, input: {
 }
 
 customerRouter.get("/me", async (c) => {
-  const accountId = c.get("accountId")!;
+  const instanceId = c.get("instanceId")!;
   const id = customerId(c);
   const result = await c.env.DB
     .prepare(
       `SELECT id, email, name, status, created_at, updated_at
-       FROM customers WHERE account_id = ?1 AND id = ?2 LIMIT 1`
+       FROM customers WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
     )
-    .bind(accountId, id)
+    .bind(instanceId, id)
     .all();
   const row = result.results[0];
   if (!row) throw new NotFoundError("Customer not found");
@@ -110,11 +110,11 @@ customerRouter.get("/licenses", async (c) => {
               l.max_activations, l.features_json, l.expires_at, l.updates_until,
               l.created_at, l.updated_at
        FROM licenses AS l
-       JOIN products AS p ON p.account_id = l.account_id AND p.id = l.product_id
-       WHERE l.account_id = ?1 AND l.customer_id = ?2
+       JOIN products AS p ON p.instance_id = l.instance_id AND p.id = l.product_id
+       WHERE l.instance_id = ?1 AND l.customer_id = ?2
        ORDER BY l.created_at DESC`
     )
-    .bind(c.get("accountId")!, customerId(c))
+    .bind(c.get("instanceId")!, customerId(c))
     .all<any>();
   return c.json({
     success: true,
@@ -132,11 +132,11 @@ customerRouter.get("/licenses/:licenseId", async (c) => {
               l.max_activations, l.features_json, l.expires_at, l.updates_until,
               l.created_at, l.updated_at
        FROM licenses AS l
-       JOIN products AS p ON p.account_id = l.account_id AND p.id = l.product_id
-       WHERE l.account_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
+       JOIN products AS p ON p.instance_id = l.instance_id AND p.id = l.product_id
+       WHERE l.instance_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
        LIMIT 1`
     )
-    .bind(c.get("accountId")!, customerId(c), c.req.param("licenseId"))
+    .bind(c.get("instanceId")!, customerId(c), c.req.param("licenseId"))
     .all<any>();
   const row = result.results[0];
   if (!row) throw new NotFoundError("License not found");
@@ -150,11 +150,11 @@ customerRouter.get("/licenses/:licenseId/activations", async (c) => {
       `SELECT a.id, a.name, a.platform, a.status, a.activated_at,
               a.last_validated_at, a.deactivated_at, a.revoked_at
        FROM activations AS a
-       JOIN licenses AS l ON l.account_id = a.account_id AND l.id = a.license_id
-       WHERE a.account_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
+       JOIN licenses AS l ON l.instance_id = a.instance_id AND l.id = a.license_id
+       WHERE a.instance_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
        ORDER BY a.activated_at DESC`
     )
-    .bind(c.get("accountId")!, customerId(c), c.req.param("licenseId"))
+    .bind(c.get("instanceId")!, customerId(c), c.req.param("licenseId"))
     .all();
   return c.json({ success: true, data: { items: result.results } });
 });
@@ -168,29 +168,29 @@ customerRouter.get("/licenses/:licenseId/subscription", async (c) => {
               s.cancel_at_period_end
        FROM licenses AS l
        LEFT JOIN billing_subscriptions AS s
-         ON s.account_id = l.account_id AND s.license_id = l.id
-       WHERE l.account_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
+         ON s.instance_id = l.instance_id AND s.license_id = l.id
+       WHERE l.instance_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
        LIMIT 1`
     )
-    .bind(c.get("accountId")!, customerId(c), c.req.param("licenseId"))
+    .bind(c.get("instanceId")!, customerId(c), c.req.param("licenseId"))
     .all<any>();
   const row = result.results[0];
   if (!row) throw new NotFoundError("License not found");
   return c.json({
     success: true,
     data: {
-      licenseId: row.license_id,
-      licenseModel: row.license_model,
-      renewalMode: row.renewal_mode,
-      expiresAt: row.expires_at,
-      billingSubscription: row.renewal_mode === "billing" && row.subscription_id
+      license_id: row.license_id,
+      license_model: row.license_model,
+      renewal_mode: row.renewal_mode,
+      expires_at: row.expires_at,
+      billing_subscription: row.renewal_mode === "billing" && row.subscription_id
         ? {
             id: row.subscription_id,
             status: row.subscription_status,
-            currentPeriodStart: row.current_period_start,
-            currentPeriodEnd: row.current_period_end,
-            nextBilledAt: row.next_billed_at,
-            cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
+            current_period_start: row.current_period_start,
+            current_period_end: row.current_period_end,
+            next_billed_at: row.next_billed_at,
+            cancel_at_period_end: Boolean(row.cancel_at_period_end),
           }
         : null,
     },
@@ -201,19 +201,19 @@ customerRouter.post(
   "/licenses/:licenseId/activations/:activationId/deactivate",
   ...writeGuards(),
   async (c) => {
-    const accountId = c.get("accountId")!;
+    const instanceId = c.get("instanceId")!;
     const ownerCustomerId = customerId(c);
     const licenseId = c.req.param("licenseId");
     const activationId = c.req.param("activationId");
     const exists = await c.env.DB
       .prepare(
         `SELECT a.id FROM activations AS a
-         JOIN licenses AS l ON l.account_id = a.account_id AND l.id = a.license_id
-         WHERE a.account_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
+         JOIN licenses AS l ON l.instance_id = a.instance_id AND l.id = a.license_id
+         WHERE a.instance_id = ?1 AND l.customer_id = ?2 AND l.id = ?3
            AND a.id = ?4 AND a.status = 'active'
          LIMIT 1`
       )
-      .bind(accountId, ownerCustomerId, licenseId, activationId)
+      .bind(instanceId, ownerCustomerId, licenseId, activationId)
       .all<{ id: string }>();
     if (!exists.results[0]) throw new NotFoundError("Activation not found");
     const now = new Date().toISOString();
@@ -222,16 +222,16 @@ customerRouter.post(
         .prepare(
           `UPDATE activations
            SET status = 'deactivated', deactivated_at = ?1, updated_at = ?1
-           WHERE account_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'
+           WHERE instance_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'
              AND EXISTS (
                SELECT 1 FROM licenses
-               WHERE account_id = ?2 AND id = ?3 AND customer_id = ?5
+               WHERE instance_id = ?2 AND id = ?3 AND customer_id = ?5
              )`
         )
-        .bind(now, accountId, licenseId, activationId, ownerCustomerId),
+        .bind(now, instanceId, licenseId, activationId, ownerCustomerId),
       prepareAuditInsert({
         db: c.env.DB,
-        accountId,
+        instanceId,
         actor: { type: "customer", id: ownerCustomerId },
         action: "customer.activation.deactivated",
         resourceType: "activation",
@@ -249,12 +249,12 @@ customerRouter.post(
 );
 
 async function rotateFromCustomer(c: any, reason: "recovery" | "security_reset") {
-  const accountId = c.get("accountId") as string;
+  const instanceId = c.get("instanceId") as string;
   const ownerCustomerId = customerId(c);
   const result = await rotateLicenseKey({
     db: c.env.DB,
     env: c.env,
-    accountId,
+    instanceId,
     licenseId: c.req.param("licenseId"),
     actor: { type: "customer", id: ownerCustomerId },
     reason,
@@ -264,14 +264,22 @@ async function rotateFromCustomer(c: any, reason: "recovery" | "security_reset")
   });
   if (result.delivery.status === "pending") {
     triggerCustomerDeliveryInBackground(c, {
-      accountId,
+      instanceId,
       deliveryId: result.delivery.id,
     });
   }
   c.header("Cache-Control", "no-store");
   return c.json({
     success: true,
-    data: { license: result.license, licenseKey: result.licenseKey, delivery: result.delivery },
+    data: {
+      license: {
+        id: result.license.id,
+        customer_id: result.license.customerId,
+        key_version: result.license.keyVersion,
+      },
+      license_key: result.licenseKey,
+      delivery: result.delivery,
+    },
   });
 }
 
@@ -287,15 +295,15 @@ customerRouter.post(
   "/licenses/:licenseId/subscription/portal-session",
   ...writeGuards(),
   async (c) => {
-    const accountId = c.get("accountId")!;
+    const instanceId = c.get("instanceId")!;
     const ownerCustomerId = customerId(c);
     const licenseId = c.req.param("licenseId");
     const licenseResult = await c.env.DB
       .prepare(
         `SELECT license_model, renewal_mode FROM licenses
-         WHERE account_id = ?1 AND customer_id = ?2 AND id = ?3 LIMIT 1`
+         WHERE instance_id = ?1 AND customer_id = ?2 AND id = ?3 LIMIT 1`
       )
-      .bind(accountId, ownerCustomerId, licenseId)
+      .bind(instanceId, ownerCustomerId, licenseId)
       .all<{ license_model: string; renewal_mode: string }>();
     const license = licenseResult.results[0];
     if (!license) throw new NotFoundError("License not found");
@@ -316,14 +324,14 @@ customerRouter.post(
     const result = await createCustomerPortalSession({
       db: c.env.DB,
       env: c.env,
-      accountId,
+      instanceId,
       customerId: ownerCustomerId,
       licenseId,
     });
     await c.env.DB.batch([
       prepareAuditInsert({
         db: c.env.DB,
-        accountId,
+        instanceId,
         actor: { type: "customer", id: ownerCustomerId },
         action: "customer.subscription.portal_session_created",
         resourceType: "license",
@@ -334,6 +342,6 @@ customerRouter.post(
       }),
     ]);
     c.header("Cache-Control", "no-store");
-    return c.json({ success: true, data: { url: result.url, expiresAt: result.expiresAt } });
+    return c.json({ success: true, data: { url: result.url, expires_at: result.expiresAt } });
   }
 );

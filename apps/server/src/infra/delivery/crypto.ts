@@ -12,7 +12,7 @@ interface EnvelopeV1 {
 }
 
 export interface EnvelopeIdentity {
-  accountId: string;
+  instanceId: string;
   table: string;
   rowId: string;
   field: string;
@@ -24,7 +24,7 @@ export interface DeliveryCryptoEnv {
 }
 
 function aadFor(identity: EnvelopeIdentity): string {
-  return [identity.accountId, identity.table, identity.rowId, identity.field].join("\u001f");
+  return [identity.instanceId, identity.table, identity.rowId, identity.field].join("\u001f");
 }
 
 async function deriveKey(secret: string): Promise<CryptoKey> {
@@ -96,4 +96,3 @@ export async function decryptEnvelopeV1(
     throw new Error("DELIVERY_ENVELOPE_AUTHENTICATION_FAILED");
   }
 }
-

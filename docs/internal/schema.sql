@@ -1,1327 +1,1268 @@
--- LicenKit V1 target schema for Cloudflare D1 / SQLite.
--- This is a design asset. The executable Drizzle schema and generated initial
--- migration must express the same constraints before V1 implementation starts.
+-- LicenKit User / Instance target schema for Cloudflare D1 / SQLite.
+-- This file mirrors apps/server/drizzle/0000_v1_initial.sql for maintainer review.
+-- The Drizzle schema remains the executable source; custom Triggers are maintained
+-- in the initial migration and verified by v1-schema-constraints.test.ts.
 
 PRAGMA foreign_keys = ON;
 
--- 用途：保存整套自部署实例的初始化结果、公开地址和 Scheduled Worker 最近一次成功心跳，是全局状态而不是租户数据。
--- 机制：固定主键 `current` 保证全库只有一行；Scheduler 只更新成对的成功时间与耗时；初始化后删除由 Trigger 拒绝。
-CREATE TABLE system_settings (
-    id TEXT PRIMARY KEY CHECK (id = 'current'),
-    instance_name TEXT NOT NULL,
-    app_url TEXT NOT NULL,
-    site_url TEXT NOT NULL,
-    api_base_url TEXT,
-    scheduler_last_success_at TEXT,
-    scheduler_last_duration_ms INTEGER
-        CHECK (scheduler_last_duration_ms IS NULL OR scheduler_last_duration_ms >= 0),
-    initialized_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK (
-        (scheduler_last_success_at IS NULL AND scheduler_last_duration_ms IS NULL)
-        OR
-        (scheduler_last_success_at IS NOT NULL AND scheduler_last_duration_ms IS NOT NULL)
-    )
+CREATE TABLE `activations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`license_id` text NOT NULL,
+	`fingerprint_hash` text NOT NULL,
+	`machine_token_hash` text NOT NULL,
+	`name` text,
+	`platform` text,
+	`first_ip` text,
+	`status` text DEFAULT 'active' NOT NULL,
+	`activated_at` text NOT NULL,
+	`last_validated_at` text,
+	`deactivated_at` text,
+	`revoked_at` text,
+	`revoke_reason` text,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`license_id`) REFERENCES `licenses`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_activations_status" CHECK("activations"."status" in ('active', 'deactivated', 'revoked'))
 );
-
-CREATE TRIGGER trg_system_settings_prevent_delete
-BEFORE DELETE ON system_settings
-BEGIN
-    SELECT RAISE(ABORT, 'SYSTEM_SETUP_STATE_DELETE_FORBIDDEN');
-END;
--- 用途：保存租户账户，是用户、客户、产品、授权和支付数据的最上层隔离边界。
--- 机制：`slug` 全局唯一用于稳定定位账户；状态控制账户是否可继续提供服务，默认宽限期供订阅授权快照使用。
-CREATE TABLE accounts (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    slug TEXT NOT NULL,
-    default_subscription_payment_grace_seconds INTEGER NOT NULL DEFAULT 432000
-        CHECK (default_subscription_payment_grace_seconds >= 0),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'suspended', 'archived')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (slug)
+--> statement-breakpoint
+CREATE INDEX `idx_activations_license_status` ON `activations` (`instance_id`,`license_id`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_activations_token_hash` ON `activations` (`instance_id`,`machine_token_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_activations_active_fingerprint` ON `activations` (`instance_id`,`license_id`,`fingerprint_hash`) WHERE "activations"."status" = 'active';--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_activations_instance_id` ON `activations` (`instance_id`,`id`);--> statement-breakpoint
+CREATE TABLE `admin_sessions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`session_token_hash` text NOT NULL,
+	`csrf_token_hash` text NOT NULL,
+	`expires_at` text NOT NULL,
+	`last_seen_at` text,
+	`revoked_at` text,
+	`created_at` text NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict
 );
-
--- 用途：保存账户内的后台管理员身份，不与购买者 Customer 身份混用。
--- 机制：邮箱在同一账户内大小写不敏感且唯一；角色决定权限，状态决定是否允许继续登录。
-CREATE TABLE users (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    email TEXT NOT NULL COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member', 'viewer')),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'disabled')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, email)
+--> statement-breakpoint
+CREATE INDEX `idx_admin_sessions_user_expiry` ON `admin_sessions` (`user_id`,`expires_at`);--> statement-breakpoint
+CREATE INDEX `idx_admin_sessions_lookup` ON `admin_sessions` (`session_token_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_admin_sessions_token_hash` ON `admin_sessions` (`session_token_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_admin_sessions_csrf_token_hash` ON `admin_sessions` (`csrf_token_hash`);--> statement-breakpoint
+CREATE TABLE `audit_logs` (
+	`id` text PRIMARY KEY NOT NULL,
+	`scope_type` text NOT NULL,
+	`instance_id` text,
+	`actor_type` text NOT NULL,
+	`actor_user_id` text,
+	`actor_customer_id` text,
+	`action` text NOT NULL,
+	`resource_type` text NOT NULL,
+	`resource_id` text,
+	`request_id` text,
+	`details_redacted_json` text DEFAULT '{}' NOT NULL,
+	`ip` text,
+	`user_agent` text,
+	`created_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`actor_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`actor_customer_id`) REFERENCES `customers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_audit_logs_actor_type" CHECK("audit_logs"."actor_type" in ('user', 'customer', 'system')),
+	CONSTRAINT "ck_audit_logs_scope_type" CHECK("audit_logs"."scope_type" in ('identity', 'instance')),
+	CONSTRAINT "ck_audit_logs_scope" CHECK(("audit_logs"."scope_type" = 'identity'
+          and "audit_logs"."instance_id" is null
+          and "audit_logs"."actor_type" = 'user'
+          and "audit_logs"."actor_user_id" is not null)
+        or ("audit_logs"."scope_type" = 'instance' and "audit_logs"."instance_id" is not null)),
+	CONSTRAINT "ck_audit_logs_details_json" CHECK(json_valid("audit_logs"."details_redacted_json")),
+	CONSTRAINT "ck_audit_logs_actor" CHECK(("audit_logs"."actor_type" = 'user'
+          and "audit_logs"."actor_user_id" is not null
+          and "audit_logs"."actor_customer_id" is null)
+        or ("audit_logs"."actor_type" = 'customer'
+          and "audit_logs"."actor_customer_id" is not null
+          and "audit_logs"."actor_user_id" is null)
+        or ("audit_logs"."actor_type" = 'system'
+          and "audit_logs"."actor_user_id" is null
+          and "audit_logs"."actor_customer_id" is null))
 );
-
-CREATE INDEX idx_users_account_status
-    ON users(account_id, status);
-
--- 用途：保存可吊销的后台登录会话。
--- 机制：数据库只保存 Session Token 和 CSRF Token 的哈希；每条会话绑定同账户 User，并通过过期和吊销时间控制有效性。
-CREATE TABLE admin_sessions (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    user_id TEXT NOT NULL,
-    session_token_hash TEXT NOT NULL,
-    csrf_token_hash TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    last_seen_at TEXT,
-    revoked_at TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (session_token_hash),
-    UNIQUE (csrf_token_hash),
-    FOREIGN KEY (account_id, user_id)
-        REFERENCES users(account_id, id) ON DELETE RESTRICT
+--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_instance_created` ON `audit_logs` (`instance_id`,"created_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_resource` ON `audit_logs` (`instance_id`,`resource_type`,`resource_id`,"created_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_action` ON `audit_logs` (`instance_id`,`action`,"created_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_identity_created` ON `audit_logs` (`actor_user_id`,"created_at" desc) WHERE "audit_logs"."scope_type" = 'identity';--> statement-breakpoint
+CREATE TABLE `billing_adjustments` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`billing_provider_id` text NOT NULL,
+	`license_id` text,
+	`external_adjustment_id` text NOT NULL,
+	`external_transaction_id` text NOT NULL,
+	`external_subscription_id` text,
+	`external_customer_id` text NOT NULL,
+	`provider_action` text NOT NULL,
+	`adjustment_type` text,
+	`provider_status` text NOT NULL,
+	`currency_code` text NOT NULL,
+	`total_amount` text NOT NULL,
+	`provider_reason` text,
+	`automatic_effect` text DEFAULT 'none' NOT NULL,
+	`review_status` text NOT NULL,
+	`resolution_action` text,
+	`resolution_reason` text,
+	`resolved_by_user_id` text,
+	`resolved_at` text,
+	`last_external_occurred_at` text NOT NULL,
+	`last_external_event_id` text NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`resolved_by_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`billing_provider_id`) REFERENCES `billing_providers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`license_id`) REFERENCES `licenses`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_billing_adjustments_action" CHECK("billing_adjustments"."provider_action" in (
+        'credit', 'refund', 'chargeback', 'chargeback_reverse',
+        'chargeback_warning', 'chargeback_warning_reverse', 'credit_reverse'
+      )),
+	CONSTRAINT "ck_billing_adjustments_type" CHECK("billing_adjustments"."adjustment_type" is null or "billing_adjustments"."adjustment_type" in ('full', 'partial')),
+	CONSTRAINT "ck_billing_adjustments_provider_status" CHECK("billing_adjustments"."provider_status" in ('pending_approval', 'approved', 'rejected', 'reversed')),
+	CONSTRAINT "ck_billing_adjustments_automatic_effect" CHECK("billing_adjustments"."automatic_effect" in ('none', 'license_suspended')),
+	CONSTRAINT "ck_billing_adjustments_review_status" CHECK("billing_adjustments"."review_status" in ('not_required', 'open', 'resolved')),
+	CONSTRAINT "ck_billing_adjustments_resolution_action" CHECK("billing_adjustments"."resolution_action" is null or "billing_adjustments"."resolution_action" in (
+        'no_action', 'keep_suspended', 'reinstate', 'revoke', 'security_reset'
+      )),
+	CONSTRAINT "ck_billing_adjustments_effect_license" CHECK("billing_adjustments"."automatic_effect" = 'none' or "billing_adjustments"."license_id" is not null),
+	CONSTRAINT "ck_billing_adjustments_not_required" CHECK("billing_adjustments"."review_status" <> 'not_required' or "billing_adjustments"."automatic_effect" = 'none'),
+	CONSTRAINT "ck_billing_adjustments_resolution" CHECK(("billing_adjustments"."review_status" in ('not_required', 'open')
+          and "billing_adjustments"."resolution_action" is null
+          and "billing_adjustments"."resolution_reason" is null
+          and "billing_adjustments"."resolved_by_user_id" is null
+          and "billing_adjustments"."resolved_at" is null)
+        or ("billing_adjustments"."review_status" = 'resolved'
+          and "billing_adjustments"."resolution_action" is not null
+          and "billing_adjustments"."resolution_reason" is not null
+          and "billing_adjustments"."resolved_by_user_id" is not null
+          and "billing_adjustments"."resolved_at" is not null))
 );
-
-CREATE INDEX idx_admin_sessions_user_expiry
-    ON admin_sessions(account_id, user_id, expires_at);
-
-CREATE INDEX idx_admin_sessions_lookup
-    ON admin_sessions(account_id, session_token_hash);
-
--- 用途：保存购买者的稳定内部身份，承载 License 归属和 Customer Portal 访问。
--- 机制：邮箱在同一账户内大小写不敏感且唯一；禁用只关闭客户访问，不隐式改变其 License 状态。
-CREATE TABLE customers (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    email TEXT NOT NULL COLLATE NOCASE,
-    name TEXT,
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'disabled')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, email)
+--> statement-breakpoint
+CREATE INDEX `idx_billing_adjustments_review` ON `billing_adjustments` (`instance_id`,`review_status`,"updated_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_billing_adjustments_transaction` ON `billing_adjustments` (`instance_id`,`billing_provider_id`,`external_transaction_id`,"updated_at" desc);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_adjustments_instance_id` ON `billing_adjustments` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_adjustments_external` ON `billing_adjustments` (`instance_id`,`billing_provider_id`,`external_adjustment_id`);--> statement-breakpoint
+CREATE TABLE `billing_checkout_verifications` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`billing_offer_id` text NOT NULL,
+	`requested_by_user_id` text NOT NULL,
+	`token_hash` text NOT NULL,
+	`status` text DEFAULT 'pending' NOT NULL,
+	`external_transaction_id` text,
+	`license_id` text,
+	`delivery_id` text,
+	`expires_at` text NOT NULL,
+	`completed_at` text,
+	`last_error_code` text,
+	`last_error_detail` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`requested_by_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`billing_offer_id`) REFERENCES `billing_offers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`license_id`) REFERENCES `licenses`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`delivery_id`) REFERENCES `email_deliveries`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_billing_checkout_verifications_status" CHECK("billing_checkout_verifications"."status" in ('pending', 'delivery_pending', 'completed', 'needs_attention', 'expired', 'cancelled')),
+	CONSTRAINT "ck_billing_checkout_verifications_expiry" CHECK("billing_checkout_verifications"."expires_at" > "billing_checkout_verifications"."created_at"),
+	CONSTRAINT "ck_billing_checkout_verifications_evidence" CHECK("billing_checkout_verifications"."status" not in ('delivery_pending', 'completed')
+        or ("billing_checkout_verifications"."external_transaction_id" is not null
+          and "billing_checkout_verifications"."license_id" is not null
+          and "billing_checkout_verifications"."delivery_id" is not null)),
+	CONSTRAINT "ck_billing_checkout_verifications_completed" CHECK(("billing_checkout_verifications"."status" = 'completed' and "billing_checkout_verifications"."completed_at" is not null)
+        or ("billing_checkout_verifications"."status" <> 'completed' and "billing_checkout_verifications"."completed_at" is null))
 );
-
-CREATE INDEX idx_customers_account_status
-    ON customers(account_id, status, created_at DESC);
-
--- 用途：保存一次 Magic Link 请求及其一次性认证凭证。
--- 机制：只保存 Token 哈希，并用过期、消费、吊销时间判断可用性；关联 Delivery 追踪实际通知，按 Customer 的创建时间索引可支持重复请求冷却和旧 Challenge 吊销。
-CREATE TABLE customer_login_challenges (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    customer_id TEXT NOT NULL,
-    token_hash TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    consumed_at TEXT,
-    revoked_at TEXT,
-    delivery_id TEXT NOT NULL,
-    requested_ip TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, customer_id, id),
-    UNIQUE (token_hash),
-    FOREIGN KEY (account_id, customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, customer_id, delivery_id)
-        REFERENCES email_deliveries(account_id, customer_id, id) ON DELETE RESTRICT
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_checkout_verifications_transaction` ON `billing_checkout_verifications` (`instance_id`,`billing_offer_id`,`external_transaction_id`) WHERE "billing_checkout_verifications"."external_transaction_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_billing_checkout_verifications_status_expiry` ON `billing_checkout_verifications` (`instance_id`,`status`,`expires_at`);--> statement-breakpoint
+CREATE INDEX `idx_billing_checkout_verifications_offer` ON `billing_checkout_verifications` (`instance_id`,`billing_offer_id`,"completed_at" desc);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_checkout_verifications_instance_id` ON `billing_checkout_verifications` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_checkout_verifications_token_hash` ON `billing_checkout_verifications` (`token_hash`);--> statement-breakpoint
+CREATE TABLE `billing_customers` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`billing_provider_id` text NOT NULL,
+	`customer_id` text,
+	`external_customer_id` text NOT NULL,
+	`provider_email` text COLLATE NOCASE NOT NULL,
+	`provider_name` text,
+	`provider_status` text NOT NULL,
+	`link_status` text NOT NULL,
+	`last_sync_source` text NOT NULL,
+	`external_updated_at` text NOT NULL,
+	`last_external_event_id` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`billing_provider_id`) REFERENCES `billing_providers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`customer_id`) REFERENCES `customers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_billing_customers_provider_status" CHECK("billing_customers"."provider_status" in ('active', 'archived')),
+	CONSTRAINT "ck_billing_customers_link_status" CHECK("billing_customers"."link_status" in ('pending', 'linked', 'email_mismatch', 'needs_attention')),
+	CONSTRAINT "ck_billing_customers_sync_source" CHECK("billing_customers"."last_sync_source" in ('webhook', 'api', 'reconciliation')),
+	CONSTRAINT "ck_billing_customers_link" CHECK(("billing_customers"."customer_id" is null and "billing_customers"."link_status" in ('pending', 'needs_attention'))
+        or ("billing_customers"."customer_id" is not null and "billing_customers"."link_status" in ('linked', 'email_mismatch')))
 );
-
-CREATE INDEX idx_customer_login_challenges_customer
-    ON customer_login_challenges(account_id, customer_id, created_at DESC);
-
-CREATE INDEX idx_customer_login_challenges_lookup
-    ON customer_login_challenges(account_id, token_hash);
-
-CREATE INDEX idx_customer_login_challenges_expiry
-    ON customer_login_challenges(account_id, expires_at, consumed_at, revoked_at);
-
--- 用途：保存 Customer 消费 Magic Link 后建立的 Portal 会话。
--- 机制：每个 Challenge 最多绑定一个 Session；数据库只保存 Session/CSRF Token 哈希，并在每次使用时结合过期、吊销和 Customer 状态校验。
-CREATE TABLE customer_sessions (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    customer_id TEXT NOT NULL,
-    login_challenge_id TEXT NOT NULL,
-    session_token_hash TEXT NOT NULL,
-    csrf_token_hash TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    last_seen_at TEXT,
-    revoked_at TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (login_challenge_id),
-    UNIQUE (session_token_hash),
-    UNIQUE (csrf_token_hash),
-    FOREIGN KEY (account_id, customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, customer_id, login_challenge_id)
-        REFERENCES customer_login_challenges(account_id, customer_id, id) ON DELETE RESTRICT
+--> statement-breakpoint
+CREATE INDEX `idx_billing_customers_customer` ON `billing_customers` (`instance_id`,`customer_id`,"updated_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_billing_customers_link_status` ON `billing_customers` (`instance_id`,`billing_provider_id`,`link_status`,`updated_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_customers_instance_id` ON `billing_customers` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_customers_instance_provider_customer` ON `billing_customers` (`instance_id`,`billing_provider_id`,`external_customer_id`);--> statement-breakpoint
+CREATE TABLE `billing_offers` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`billing_provider_id` text NOT NULL,
+	`external_price_id` text NOT NULL,
+	`product_id` text NOT NULL,
+	`license_plan_id` text NOT NULL,
+	`purchase_type` text NOT NULL,
+	`status` text DEFAULT 'draft' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`billing_provider_id`) REFERENCES `billing_providers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`) REFERENCES `products`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`,`license_plan_id`) REFERENCES `license_plans`(`instance_id`,`product_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_billing_offers_purchase_type" CHECK("billing_offers"."purchase_type" in ('one_time', 'subscription')),
+	CONSTRAINT "ck_billing_offers_status" CHECK("billing_offers"."status" in ('draft', 'active', 'archived'))
 );
-
-CREATE INDEX idx_customer_sessions_customer_expiry
-    ON customer_sessions(account_id, customer_id, expires_at);
-
-CREATE INDEX idx_customer_sessions_lookup
-    ON customer_sessions(account_id, session_token_hash);
-
--- 用途：保存账户销售和签发授权的产品定义，也是 Release、Plan、License 与 Offer 的业务根节点。
--- 机制：`slug` 在账户内唯一；收款环境一次只选择 sandbox 或 live，试用开关与时长由约束保持一致，归档不删除历史。
-CREATE TABLE products (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    slug TEXT NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT,
-    -- Selects the only provider environment allowed to issue usable
-    -- payment-sourced Licenses for this Product. NULL means that public
-    -- Checkout is not configured.
-    billing_environment TEXT
-        CHECK (billing_environment IN ('sandbox', 'live')),
-    trial_enabled INTEGER NOT NULL DEFAULT 0
-        CHECK (trial_enabled IN (0, 1)),
-    trial_duration_seconds INTEGER CHECK (trial_duration_seconds > 0),
-    trial_features_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(trial_features_json) AND json_type(trial_features_json) = 'array'),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'archived')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK (trial_enabled = 0 OR trial_duration_seconds IS NOT NULL),
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, slug)
+--> statement-breakpoint
+CREATE INDEX `idx_billing_offers_plan_status` ON `billing_offers` (`instance_id`,`license_plan_id`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_offers_instance_id` ON `billing_offers` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_offers_price` ON `billing_offers` (`instance_id`,`billing_provider_id`,`external_price_id`);--> statement-breakpoint
+CREATE TABLE `billing_providers` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`provider` text NOT NULL,
+	`environment` text NOT NULL,
+	`client_side_token` text NOT NULL,
+	`webhook_secret_ciphertext` text NOT NULL,
+	`api_secret_ciphertext` text,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_billing_providers_environment" CHECK("billing_providers"."environment" in ('sandbox', 'live')),
+	CONSTRAINT "ck_billing_providers_status" CHECK("billing_providers"."status" in ('active', 'disabled')),
+	CONSTRAINT "ck_billing_providers_client_side_token" CHECK(("billing_providers"."environment" = 'sandbox' and substr("billing_providers"."client_side_token", 1, 5) = 'test_')
+        or ("billing_providers"."environment" = 'live' and substr("billing_providers"."client_side_token", 1, 5) = 'live_'))
 );
-
-CREATE INDEX idx_products_account_status
-    ON products(account_id, status);
-
--- 用途：保存可被客户端声明和服务端信任的产品发布工件事实。
--- 机制：产品、版本和平台组合唯一，SHA-256 格式受约束；身份、工件哈希和发布时间由 Trigger 锁定且整行不可删除，只允许修正说明或下载地址。
-CREATE TABLE product_releases (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    product_id TEXT NOT NULL,
-    version TEXT NOT NULL,
-    platform TEXT NOT NULL,
-    description TEXT,
-    download_url TEXT,
-    artifact_sha256 TEXT NOT NULL,
-    released_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, product_id, version, platform),
-    FOREIGN KEY (account_id, product_id)
-        REFERENCES products(account_id, id) ON DELETE RESTRICT,
-    CHECK (
-        length(artifact_sha256) = 64
-        AND artifact_sha256 = lower(artifact_sha256)
-        AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'
-    )
+--> statement-breakpoint
+CREATE INDEX `idx_billing_providers_instance_status` ON `billing_providers` (`instance_id`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_providers_instance_id` ON `billing_providers` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_providers_identity` ON `billing_providers` (`instance_id`,`provider`,`environment`);--> statement-breakpoint
+CREATE TABLE `billing_subscriptions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`billing_provider_id` text NOT NULL,
+	`license_id` text NOT NULL,
+	`external_subscription_id` text NOT NULL,
+	`external_customer_id` text NOT NULL,
+	`external_price_id` text NOT NULL,
+	`status` text NOT NULL,
+	`current_period_start` text,
+	`current_period_end` text,
+	`next_billed_at` text,
+	`trial_type` text,
+	`trial_started_at` text,
+	`trial_ends_at` text,
+	`cancel_at_period_end` integer DEFAULT false NOT NULL,
+	`last_external_occurred_at` text,
+	`last_external_event_id` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`billing_provider_id`) REFERENCES `billing_providers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`billing_provider_id`,`external_customer_id`) REFERENCES `billing_customers`(`instance_id`,`billing_provider_id`,`external_customer_id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`license_id`) REFERENCES `licenses`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_billing_subscriptions_status" CHECK("billing_subscriptions"."status" in ('trialing', 'active', 'past_due', 'paused', 'canceled')),
+	CONSTRAINT "ck_billing_subscriptions_trial_type" CHECK("billing_subscriptions"."trial_type" is null or "billing_subscriptions"."trial_type" = 'free_payment_method_required'),
+	CONSTRAINT "ck_billing_subscriptions_cancel" CHECK("billing_subscriptions"."cancel_at_period_end" in (0, 1)),
+	CONSTRAINT "ck_billing_subscriptions_trial_fields" CHECK(("billing_subscriptions"."trial_type" is null
+          and "billing_subscriptions"."trial_started_at" is null
+          and "billing_subscriptions"."trial_ends_at" is null)
+        or ("billing_subscriptions"."trial_type" is not null
+          and "billing_subscriptions"."trial_started_at" is not null
+          and "billing_subscriptions"."trial_ends_at" is not null
+          and "billing_subscriptions"."trial_ends_at" > "billing_subscriptions"."trial_started_at")),
+	CONSTRAINT "ck_billing_subscriptions_trialing" CHECK("billing_subscriptions"."status" <> 'trialing'
+        or ("billing_subscriptions"."trial_type" = 'free_payment_method_required'
+          and "billing_subscriptions"."trial_started_at" is not null
+          and "billing_subscriptions"."trial_ends_at" is not null
+          and "billing_subscriptions"."next_billed_at" is not null))
 );
-
-CREATE INDEX idx_product_releases_lookup
-    ON product_releases(account_id, product_id, version, platform);
-
+--> statement-breakpoint
+CREATE INDEX `idx_billing_subscriptions_status_period` ON `billing_subscriptions` (`instance_id`,`status`,`current_period_end`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_subscriptions_instance_id` ON `billing_subscriptions` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_subscriptions_external` ON `billing_subscriptions` (`instance_id`,`billing_provider_id`,`external_subscription_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_billing_subscriptions_license` ON `billing_subscriptions` (`instance_id`,`license_id`);--> statement-breakpoint
+CREATE TABLE `customer_login_challenges` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`customer_id` text NOT NULL,
+	`token_hash` text NOT NULL,
+	`expires_at` text NOT NULL,
+	`consumed_at` text,
+	`revoked_at` text,
+	`delivery_id` text NOT NULL,
+	`requested_ip` text,
+	`created_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`customer_id`) REFERENCES `customers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`customer_id`,`delivery_id`) REFERENCES `email_deliveries`(`instance_id`,`customer_id`,`id`) ON UPDATE no action ON DELETE restrict
+);
+--> statement-breakpoint
+CREATE INDEX `idx_customer_login_challenges_customer` ON `customer_login_challenges` (`instance_id`,`customer_id`,"created_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_customer_login_challenges_lookup` ON `customer_login_challenges` (`instance_id`,`token_hash`);--> statement-breakpoint
+CREATE INDEX `idx_customer_login_challenges_expiry` ON `customer_login_challenges` (`instance_id`,`expires_at`,`consumed_at`,`revoked_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customer_login_challenges_instance_id` ON `customer_login_challenges` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customer_login_challenges_customer_id` ON `customer_login_challenges` (`instance_id`,`customer_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customer_login_challenges_token_hash` ON `customer_login_challenges` (`token_hash`);--> statement-breakpoint
+CREATE TABLE `customer_sessions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`customer_id` text NOT NULL,
+	`login_challenge_id` text NOT NULL,
+	`session_token_hash` text NOT NULL,
+	`csrf_token_hash` text NOT NULL,
+	`expires_at` text NOT NULL,
+	`last_seen_at` text,
+	`revoked_at` text,
+	`created_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`customer_id`) REFERENCES `customers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`customer_id`,`login_challenge_id`) REFERENCES `customer_login_challenges`(`instance_id`,`customer_id`,`id`) ON UPDATE no action ON DELETE restrict
+);
+--> statement-breakpoint
+CREATE INDEX `idx_customer_sessions_customer_expiry` ON `customer_sessions` (`instance_id`,`customer_id`,`expires_at`);--> statement-breakpoint
+CREATE INDEX `idx_customer_sessions_lookup` ON `customer_sessions` (`instance_id`,`session_token_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customer_sessions_instance_id` ON `customer_sessions` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customer_sessions_challenge` ON `customer_sessions` (`instance_id`,`login_challenge_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customer_sessions_token_hash` ON `customer_sessions` (`session_token_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customer_sessions_csrf_token_hash` ON `customer_sessions` (`csrf_token_hash`);--> statement-breakpoint
+CREATE TABLE `customers` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`email` text COLLATE NOCASE NOT NULL,
+	`name` text,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_customers_status" CHECK("customers"."status" in ('active', 'disabled'))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_customers_instance_status` ON `customers` (`instance_id`,`status`,"created_at" desc);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customers_instance_id` ON `customers` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customers_instance_email` ON `customers` (`instance_id`,`email`);--> statement-breakpoint
+CREATE TABLE `deployment_bootstrap` (
+	`singleton_key` text PRIMARY KEY NOT NULL,
+	`completed_at` text NOT NULL,
+	CONSTRAINT "ck_deployment_bootstrap_singleton" CHECK("deployment_bootstrap"."singleton_key" = 'deployment')
+);
+--> statement-breakpoint
+CREATE TABLE `email_deliveries` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`recipient_type` text NOT NULL,
+	`customer_id` text,
+	`notification_type` text NOT NULL,
+	`contract_version` integer NOT NULL,
+	`recipient_email` text COLLATE NOCASE NOT NULL,
+	`variables_ciphertext` text,
+	`send_expires_at` text,
+	`variables_expires_at` text,
+	`status` text DEFAULT 'pending' NOT NULL,
+	`attempt_count` integer DEFAULT 0 NOT NULL,
+	`next_attempt_at` text,
+	`provider_message_id` text,
+	`last_error_json` text,
+	`locked_by` text,
+	`locked_until` text,
+	`accepted_at` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`customer_id`) REFERENCES `customers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_email_deliveries_contract_version" CHECK("email_deliveries"."contract_version" >= 1),
+	CONSTRAINT "ck_email_deliveries_recipient" CHECK(("email_deliveries"."recipient_type" = 'customer' and "email_deliveries"."customer_id" is not null)
+        or ("email_deliveries"."recipient_type" = 'instance_invitation' and "email_deliveries"."customer_id" is null)),
+	CONSTRAINT "ck_email_deliveries_status" CHECK("email_deliveries"."status" in (
+        'pending', 'processing', 'waiting_configuration', 'retry_scheduled',
+        'accepted', 'failed', 'expired', 'cancelled'
+      )),
+	CONSTRAINT "ck_email_deliveries_attempt_count" CHECK("email_deliveries"."attempt_count" >= 0),
+	CONSTRAINT "ck_email_deliveries_last_error_json" CHECK("email_deliveries"."last_error_json" is null
+        or (json_valid("email_deliveries"."last_error_json") and json_type("email_deliveries"."last_error_json") = 'object')),
+	CONSTRAINT "ck_email_deliveries_lock" CHECK(("email_deliveries"."status" = 'processing'
+          and "email_deliveries"."locked_by" is not null
+          and "email_deliveries"."locked_until" is not null)
+        or ("email_deliveries"."status" <> 'processing'
+          and "email_deliveries"."locked_by" is null
+          and "email_deliveries"."locked_until" is null)),
+	CONSTRAINT "ck_email_deliveries_acceptance" CHECK(("email_deliveries"."status" = 'accepted'
+          and "email_deliveries"."provider_message_id" is not null
+          and "email_deliveries"."accepted_at" is not null
+          and "email_deliveries"."last_error_json" is null)
+        or ("email_deliveries"."status" <> 'accepted'
+          and "email_deliveries"."provider_message_id" is null
+          and "email_deliveries"."accepted_at" is null)),
+	CONSTRAINT "ck_email_deliveries_variables" CHECK(("email_deliveries"."status" in ('expired', 'cancelled') and "email_deliveries"."variables_ciphertext" is null)
+        or ("email_deliveries"."status" in (
+          'pending', 'processing', 'waiting_configuration', 'retry_scheduled', 'failed'
+        ) and "email_deliveries"."variables_ciphertext" is not null)
+        or ("email_deliveries"."status" = 'accepted')),
+	CONSTRAINT "ck_email_deliveries_retention" CHECK(("email_deliveries"."status" = 'accepted' and "email_deliveries"."variables_expires_at" is not null)
+        or ("email_deliveries"."status" <> 'accepted' and "email_deliveries"."variables_expires_at" is null))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_email_deliveries_status_schedule` ON `email_deliveries` (`instance_id`,`status`,`next_attempt_at`,`locked_until`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_email_deliveries_customer` ON `email_deliveries` (`instance_id`,`customer_id`,"created_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_email_deliveries_payload_retention` ON `email_deliveries` (`variables_expires_at`,`id`) WHERE "email_deliveries"."status" = 'accepted' and "email_deliveries"."variables_ciphertext" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_email_deliveries_instance_id` ON `email_deliveries` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_email_deliveries_customer_id` ON `email_deliveries` (`instance_id`,`customer_id`,`id`);--> statement-breakpoint
+CREATE TABLE `email_integrations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`provider` text NOT NULL,
+	`name` text NOT NULL,
+	`credential_ciphertext` text NOT NULL,
+	`default_from_email` text COLLATE NOCASE NOT NULL,
+	`default_from_name` text,
+	`reply_to_email` text COLLATE NOCASE,
+	`max_automatic_attempts` integer DEFAULT 4 NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_email_integrations_provider" CHECK("email_integrations"."provider" = 'resend'),
+	CONSTRAINT "ck_email_integrations_max_attempts" CHECK("email_integrations"."max_automatic_attempts" between 1 and 20),
+	CONSTRAINT "ck_email_integrations_status" CHECK("email_integrations"."status" in ('active', 'disabled'))
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_email_integrations_active_instance` ON `email_integrations` (`instance_id`) WHERE "email_integrations"."status" = 'active';--> statement-breakpoint
+CREATE INDEX `idx_email_integrations_instance_status` ON `email_integrations` (`instance_id`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_email_integrations_instance_id` ON `email_integrations` (`instance_id`,`id`);--> statement-breakpoint
+CREATE TABLE `email_template_bindings` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`email_integration_id` text NOT NULL,
+	`notification_type` text NOT NULL,
+	`contract_version` integer NOT NULL,
+	`provider_template_ref` text NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`email_integration_id`) REFERENCES `email_integrations`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_email_template_bindings_contract_version" CHECK("email_template_bindings"."contract_version" >= 1),
+	CONSTRAINT "ck_email_template_bindings_template_ref" CHECK(length(trim("email_template_bindings"."provider_template_ref")) > 0),
+	CONSTRAINT "ck_email_template_bindings_status" CHECK("email_template_bindings"."status" in ('active', 'disabled'))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_email_template_bindings_lookup` ON `email_template_bindings` (`instance_id`,`email_integration_id`,`notification_type`,`contract_version`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_email_template_bindings_instance_id` ON `email_template_bindings` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_email_template_bindings_integration_id` ON `email_template_bindings` (`instance_id`,`email_integration_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_email_template_bindings_contract` ON `email_template_bindings` (`instance_id`,`email_integration_id`,`notification_type`);--> statement-breakpoint
+CREATE TABLE `inbound_events` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`billing_provider_id` text NOT NULL,
+	`external_event_id` text NOT NULL,
+	`external_event_type` text NOT NULL,
+	`external_customer_id` text,
+	`external_transaction_id` text,
+	`external_subscription_id` text,
+	`external_adjustment_id` text,
+	`external_occurred_at` text,
+	`payload_ciphertext` text,
+	`payload_hash` text NOT NULL,
+	`payload_expires_at` text NOT NULL,
+	`payload_cleared_at` text,
+	`status` text DEFAULT 'pending' NOT NULL,
+	`attempt_count` integer DEFAULT 0 NOT NULL,
+	`next_attempt_at` text,
+	`locked_by` text,
+	`locked_until` text,
+	`result_type` text,
+	`result_reference_id` text,
+	`last_error_code` text,
+	`last_error_detail` text,
+	`received_at` text NOT NULL,
+	`processed_at` text,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`billing_provider_id`) REFERENCES `billing_providers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_inbound_events_status" CHECK("inbound_events"."status" in ('pending', 'processing', 'processed', 'failed', 'needs_attention')),
+	CONSTRAINT "ck_inbound_events_attempt_count" CHECK("inbound_events"."attempt_count" >= 0)
+);
+--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_status_schedule` ON `inbound_events` (`instance_id`,`status`,`next_attempt_at`,`locked_until`,`received_at`);--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_provider_type` ON `inbound_events` (`instance_id`,`billing_provider_id`,`external_event_type`,"received_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_customer` ON `inbound_events` (`instance_id`,`billing_provider_id`,`external_customer_id`,"received_at" desc) WHERE "inbound_events"."external_customer_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_transaction` ON `inbound_events` (`instance_id`,`billing_provider_id`,`external_transaction_id`,"received_at" desc) WHERE "inbound_events"."external_transaction_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_subscription` ON `inbound_events` (`instance_id`,`billing_provider_id`,`external_subscription_id`,"received_at" desc) WHERE "inbound_events"."external_subscription_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_adjustment` ON `inbound_events` (`instance_id`,`billing_provider_id`,`external_adjustment_id`,"received_at" desc) WHERE "inbound_events"."external_adjustment_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_inbound_events_payload_retention` ON `inbound_events` (`payload_expires_at`,`id`) WHERE "inbound_events"."payload_ciphertext" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_inbound_events_instance_id` ON `inbound_events` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_inbound_events_external` ON `inbound_events` (`instance_id`,`billing_provider_id`,`external_event_id`);--> statement-breakpoint
+CREATE TABLE `instance_invitations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`email` text COLLATE NOCASE NOT NULL,
+	`role` text NOT NULL,
+	`token_hash` text NOT NULL,
+	`status` text DEFAULT 'pending' NOT NULL,
+	`invited_by_user_id` text NOT NULL,
+	`accepted_by_user_id` text,
+	`delivery_id` text NOT NULL,
+	`expires_at` text NOT NULL,
+	`accepted_at` text,
+	`revoked_at` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`invited_by_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`accepted_by_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`delivery_id`) REFERENCES `email_deliveries`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_instance_invitations_role" CHECK("instance_invitations"."role" in ('owner', 'admin', 'member', 'viewer')),
+	CONSTRAINT "ck_instance_invitations_status" CHECK("instance_invitations"."status" in ('pending', 'accepted', 'revoked', 'expired')),
+	CONSTRAINT "ck_instance_invitations_expiry" CHECK("instance_invitations"."expires_at" > "instance_invitations"."created_at"),
+	CONSTRAINT "ck_instance_invitations_terminal_state" CHECK(("instance_invitations"."status" in ('pending', 'expired')
+          and "instance_invitations"."accepted_by_user_id" is null
+          and "instance_invitations"."accepted_at" is null
+          and "instance_invitations"."revoked_at" is null)
+        or ("instance_invitations"."status" = 'accepted'
+          and "instance_invitations"."accepted_by_user_id" is not null
+          and "instance_invitations"."accepted_at" is not null
+          and "instance_invitations"."revoked_at" is null)
+        or ("instance_invitations"."status" = 'revoked'
+          and "instance_invitations"."accepted_by_user_id" is null
+          and "instance_invitations"."accepted_at" is null
+          and "instance_invitations"."revoked_at" is not null))
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_instance_invitations_pending_email` ON `instance_invitations` (`instance_id`,`email`) WHERE "instance_invitations"."status" = 'pending';--> statement-breakpoint
+CREATE INDEX `idx_instance_invitations_status_expiry` ON `instance_invitations` (`instance_id`,`status`,`expires_at`);--> statement-breakpoint
+CREATE INDEX `idx_instance_invitations_invited_by` ON `instance_invitations` (`instance_id`,`invited_by_user_id`,"created_at" desc);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_instance_invitations_instance_id` ON `instance_invitations` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_instance_invitations_token_hash` ON `instance_invitations` (`token_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_instance_invitations_delivery` ON `instance_invitations` (`instance_id`,`delivery_id`);--> statement-breakpoint
+CREATE TABLE `instance_memberships` (
+	`instance_id` text NOT NULL,
+	`user_id` text NOT NULL,
+	`role` text NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`joined_by_invitation_id` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	PRIMARY KEY(`instance_id`, `user_id`),
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`joined_by_invitation_id`) REFERENCES `instance_invitations`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_instance_memberships_role" CHECK("instance_memberships"."role" in ('owner', 'admin', 'member', 'viewer')),
+	CONSTRAINT "ck_instance_memberships_status" CHECK("instance_memberships"."status" in ('active', 'disabled', 'removed'))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_instance_memberships_user_status` ON `instance_memberships` (`user_id`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_instance_memberships_instance_status` ON `instance_memberships` (`instance_id`,`status`,`role`);--> statement-breakpoint
+CREATE INDEX `idx_instance_memberships_active_owner` ON `instance_memberships` (`instance_id`) WHERE "instance_memberships"."role" = 'owner' and "instance_memberships"."status" = 'active';--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_instance_memberships_invitation` ON `instance_memberships` (`instance_id`,`joined_by_invitation_id`);--> statement-breakpoint
+CREATE TABLE `instances` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`slug` text NOT NULL,
+	`site_url` text NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	CONSTRAINT "ck_instances_slug" CHECK(length("instances"."slug") > 0
+        and "instances"."slug" = lower("instances"."slug")
+        and "instances"."slug" not glob '*[^a-z0-9-]*'
+        and "instances"."slug" not like '-%'
+        and "instances"."slug" not like '%-'),
+	CONSTRAINT "ck_instances_status" CHECK("instances"."status" in ('active', 'suspended', 'archived'))
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_instances_slug` ON `instances` (`slug`);--> statement-breakpoint
+CREATE TABLE `license_key_rotations` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`license_id` text NOT NULL,
+	`from_version` integer NOT NULL,
+	`to_version` integer NOT NULL,
+	`reason` text NOT NULL,
+	`revoked_activations` integer DEFAULT false NOT NULL,
+	`initiated_by_user_id` text,
+	`initiated_by_customer_id` text,
+	`delivery_id` text,
+	`created_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`initiated_by_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`license_id`) REFERENCES `licenses`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`initiated_by_customer_id`) REFERENCES `customers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`delivery_id`) REFERENCES `email_deliveries`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_license_key_rotations_from" CHECK("license_key_rotations"."from_version" >= 1),
+	CONSTRAINT "ck_license_key_rotations_to" CHECK("license_key_rotations"."to_version" > "license_key_rotations"."from_version"),
+	CONSTRAINT "ck_license_key_rotations_reason" CHECK("license_key_rotations"."reason" in ('recovery', 'security_reset', 'admin')),
+	CONSTRAINT "ck_license_key_rotations_revoked" CHECK("license_key_rotations"."revoked_activations" in (0, 1)),
+	CONSTRAINT "ck_license_key_rotations_initiator" CHECK("license_key_rotations"."initiated_by_user_id" is null or "license_key_rotations"."initiated_by_customer_id" is null)
+);
+--> statement-breakpoint
+CREATE INDEX `idx_license_key_rotations_license` ON `license_key_rotations` (`instance_id`,`license_id`,"created_at" desc);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_license_key_rotations_instance_id` ON `license_key_rotations` (`instance_id`,`id`);--> statement-breakpoint
+CREATE TABLE `license_plans` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`product_id` text NOT NULL,
+	`name` text NOT NULL,
+	`revision` integer DEFAULT 1 NOT NULL,
+	`license_model` text NOT NULL,
+	`credential_mode` text NOT NULL,
+	`default_term_seconds` integer,
+	`update_window_seconds` integer,
+	`signed_token_ttl_seconds` integer DEFAULT 0 NOT NULL,
+	`payment_grace_seconds` integer NOT NULL,
+	`max_activations` integer DEFAULT 1 NOT NULL,
+	`features_json` text DEFAULT '[]' NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`) REFERENCES `products`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_license_plans_revision" CHECK("license_plans"."revision" >= 1),
+	CONSTRAINT "ck_license_plans_license_model" CHECK("license_plans"."license_model" in ('perpetual', 'fixed_term', 'subscription')),
+	CONSTRAINT "ck_license_plans_credential_mode" CHECK("license_plans"."credential_mode" in ('opaque', 'signed')),
+	CONSTRAINT "ck_license_plans_default_term_seconds" CHECK("license_plans"."default_term_seconds" is null or "license_plans"."default_term_seconds" > 0),
+	CONSTRAINT "ck_license_plans_update_window_seconds" CHECK("license_plans"."update_window_seconds" is null or "license_plans"."update_window_seconds" > 0),
+	CONSTRAINT "ck_license_plans_signed_token_ttl" CHECK("license_plans"."signed_token_ttl_seconds" >= 0),
+	CONSTRAINT "ck_license_plans_payment_grace" CHECK("license_plans"."payment_grace_seconds" >= 0),
+	CONSTRAINT "ck_license_plans_max_activations" CHECK("license_plans"."max_activations" >= 1),
+	CONSTRAINT "ck_license_plans_features_json" CHECK(json_valid("license_plans"."features_json") and json_type("license_plans"."features_json") = 'array'),
+	CONSTRAINT "ck_license_plans_status" CHECK("license_plans"."status" in ('active', 'archived')),
+	CONSTRAINT "ck_license_plans_term_model" CHECK(("license_plans"."license_model" = 'fixed_term' and "license_plans"."default_term_seconds" is not null)
+        or ("license_plans"."license_model" in ('perpetual', 'subscription') and "license_plans"."default_term_seconds" is null)),
+	CONSTRAINT "ck_license_plans_update_model" CHECK("license_plans"."license_model" = 'perpetual' or "license_plans"."update_window_seconds" is null),
+	CONSTRAINT "ck_license_plans_credential_ttl" CHECK(("license_plans"."credential_mode" = 'opaque' and "license_plans"."signed_token_ttl_seconds" = 0)
+        or ("license_plans"."credential_mode" = 'signed' and "license_plans"."signed_token_ttl_seconds" > 0)),
+	CONSTRAINT "ck_license_plans_payment_grace_model" CHECK(("license_plans"."license_model" = 'subscription' and "license_plans"."payment_grace_seconds" >= 0)
+        or ("license_plans"."license_model" in ('perpetual', 'fixed_term') and "license_plans"."payment_grace_seconds" = 0))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_license_plans_product_status` ON `license_plans` (`instance_id`,`product_id`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_license_plans_instance_id` ON `license_plans` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_license_plans_product_id` ON `license_plans` (`instance_id`,`product_id`,`id`);--> statement-breakpoint
+CREATE TABLE `licenses` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`customer_id` text NOT NULL,
+	`product_id` text NOT NULL,
+	`plan_id` text NOT NULL,
+	`plan_revision` integer NOT NULL,
+	`license_model` text NOT NULL,
+	`renewal_mode` text NOT NULL,
+	`credential_mode` text NOT NULL,
+	`signed_token_ttl_seconds` integer NOT NULL,
+	`payment_grace_seconds` integer NOT NULL,
+	`max_activations` integer NOT NULL,
+	`features_json` text DEFAULT '[]' NOT NULL,
+	`key_hash` text NOT NULL,
+	`key_version` integer DEFAULT 1 NOT NULL,
+	`key_rotated_at` text,
+	`source` text DEFAULT 'manual' NOT NULL,
+	`source_billing_provider_id` text,
+	`source_external_transaction_id` text,
+	`is_checkout_verification` integer DEFAULT false NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`status_reason` text,
+	`expires_at` text,
+	`updates_until` text,
+	`suspended_at` text,
+	`revoked_at` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`customer_id`) REFERENCES `customers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`) REFERENCES `products`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`,`plan_id`) REFERENCES `license_plans`(`instance_id`,`product_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`source_billing_provider_id`) REFERENCES `billing_providers`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_licenses_plan_revision" CHECK("licenses"."plan_revision" >= 1),
+	CONSTRAINT "ck_licenses_license_model" CHECK("licenses"."license_model" in ('perpetual', 'fixed_term', 'subscription')),
+	CONSTRAINT "ck_licenses_renewal_mode" CHECK("licenses"."renewal_mode" in ('none', 'manual', 'billing')),
+	CONSTRAINT "ck_licenses_credential_mode" CHECK("licenses"."credential_mode" in ('opaque', 'signed')),
+	CONSTRAINT "ck_licenses_signed_token_ttl" CHECK("licenses"."signed_token_ttl_seconds" >= 0),
+	CONSTRAINT "ck_licenses_payment_grace" CHECK("licenses"."payment_grace_seconds" >= 0),
+	CONSTRAINT "ck_licenses_max_activations" CHECK("licenses"."max_activations" >= 1),
+	CONSTRAINT "ck_licenses_features_json" CHECK(json_valid("licenses"."features_json") and json_type("licenses"."features_json") = 'array'),
+	CONSTRAINT "ck_licenses_key_version" CHECK("licenses"."key_version" >= 1),
+	CONSTRAINT "ck_licenses_source" CHECK("licenses"."source" in ('manual', 'api', 'payment')),
+	CONSTRAINT "ck_licenses_verification" CHECK("licenses"."is_checkout_verification" in (0, 1)),
+	CONSTRAINT "ck_licenses_status" CHECK("licenses"."status" in ('active', 'suspended', 'revoked')),
+	CONSTRAINT "ck_licenses_expiry_model" CHECK(("licenses"."license_model" = 'perpetual' and "licenses"."expires_at" is null)
+        or ("licenses"."license_model" in ('fixed_term', 'subscription') and "licenses"."expires_at" is not null)),
+	CONSTRAINT "ck_licenses_update_model" CHECK("licenses"."license_model" = 'perpetual' or "licenses"."updates_until" is null),
+	CONSTRAINT "ck_licenses_credential_ttl" CHECK(("licenses"."credential_mode" = 'opaque' and "licenses"."signed_token_ttl_seconds" = 0)
+        or ("licenses"."credential_mode" = 'signed' and "licenses"."signed_token_ttl_seconds" > 0)),
+	CONSTRAINT "ck_licenses_payment_grace_model" CHECK(("licenses"."license_model" = 'subscription' and "licenses"."payment_grace_seconds" >= 0)
+        or ("licenses"."license_model" in ('perpetual', 'fixed_term') and "licenses"."payment_grace_seconds" = 0)),
+	CONSTRAINT "ck_licenses_source_reference" CHECK(("licenses"."source" = 'payment'
+          and "licenses"."source_billing_provider_id" is not null
+          and "licenses"."source_external_transaction_id" is not null)
+        or ("licenses"."source" in ('manual', 'api')
+          and "licenses"."source_billing_provider_id" is null
+          and "licenses"."source_external_transaction_id" is null)),
+	CONSTRAINT "ck_licenses_checkout_verification" CHECK("licenses"."is_checkout_verification" = 0
+        or ("licenses"."source" = 'payment'
+          and "licenses"."status" = 'suspended'
+          and "licenses"."status_reason" = 'checkout_verification')),
+	CONSTRAINT "ck_licenses_renewal_authority" CHECK(("licenses"."license_model" in ('perpetual', 'fixed_term') and "licenses"."renewal_mode" = 'none')
+        or ("licenses"."license_model" = 'subscription'
+          and "licenses"."renewal_mode" = 'manual'
+          and "licenses"."source" in ('manual', 'api'))
+        or ("licenses"."license_model" = 'subscription'
+          and "licenses"."renewal_mode" = 'billing'
+          and "licenses"."source" = 'payment')),
+	CONSTRAINT "ck_licenses_manual_expiry" CHECK("licenses"."renewal_mode" <> 'manual' or "licenses"."expires_at" > "licenses"."created_at"),
+	CONSTRAINT "ck_licenses_billing_grace" CHECK("licenses"."renewal_mode" = 'billing' or "licenses"."payment_grace_seconds" = 0)
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_licenses_source_transaction` ON `licenses` (`instance_id`,`source_billing_provider_id`,`source_external_transaction_id`) WHERE "licenses"."source_billing_provider_id" is not null and "licenses"."source_external_transaction_id" is not null;--> statement-breakpoint
+CREATE INDEX `idx_licenses_instance_status` ON `licenses` (`instance_id`,`status`,"created_at" desc);--> statement-breakpoint
+CREATE INDEX `idx_licenses_product_plan` ON `licenses` (`instance_id`,`product_id`,`plan_id`);--> statement-breakpoint
+CREATE INDEX `idx_licenses_customer` ON `licenses` (`instance_id`,`customer_id`,"created_at" desc);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_licenses_instance_id` ON `licenses` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_licenses_instance_key_hash` ON `licenses` (`instance_id`,`key_hash`);--> statement-breakpoint
+CREATE TABLE `product_releases` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`product_id` text NOT NULL,
+	`version` text NOT NULL,
+	`platform` text NOT NULL,
+	`description` text,
+	`download_url` text,
+	`artifact_sha256` text NOT NULL,
+	`released_at` text NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`) REFERENCES `products`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_product_releases_artifact_sha256" CHECK(length("product_releases"."artifact_sha256") = 64
+        and "product_releases"."artifact_sha256" = lower("product_releases"."artifact_sha256")
+        and "product_releases"."artifact_sha256" not glob '*[^0-9a-f]*')
+);
+--> statement-breakpoint
+CREATE INDEX `idx_product_releases_lookup` ON `product_releases` (`instance_id`,`product_id`,`version`,`platform`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_product_releases_instance_id` ON `product_releases` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_product_releases_identity` ON `product_releases` (`instance_id`,`product_id`,`version`,`platform`);--> statement-breakpoint
+CREATE TABLE `products` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`slug` text NOT NULL,
+	`name` text NOT NULL,
+	`description` text,
+	`billing_environment` text,
+	`payment_grace_seconds` integer DEFAULT 0 NOT NULL,
+	`trial_enabled` integer DEFAULT false NOT NULL,
+	`trial_duration_seconds` integer,
+	`trial_features_json` text DEFAULT '[]' NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_products_billing_environment" CHECK("products"."billing_environment" in ('sandbox', 'live')),
+	CONSTRAINT "ck_products_payment_grace" CHECK("products"."payment_grace_seconds" >= 0),
+	CONSTRAINT "ck_products_trial_enabled" CHECK("products"."trial_enabled" in (0, 1)),
+	CONSTRAINT "ck_products_trial_duration_seconds" CHECK("products"."trial_duration_seconds" is null or "products"."trial_duration_seconds" > 0),
+	CONSTRAINT "ck_products_trial_features_json" CHECK(json_valid("products"."trial_features_json") and json_type("products"."trial_features_json") = 'array'),
+	CONSTRAINT "ck_products_status" CHECK("products"."status" in ('active', 'archived')),
+	CONSTRAINT "ck_products_trial_configuration" CHECK("products"."trial_enabled" = 0 or "products"."trial_duration_seconds" is not null)
+);
+--> statement-breakpoint
+CREATE INDEX `idx_products_instance_status` ON `products` (`instance_id`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_products_instance_id` ON `products` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_products_instance_slug` ON `products` (`instance_id`,`slug`);--> statement-breakpoint
+CREATE TABLE `signing_keys` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`product_id` text NOT NULL,
+	`algorithm` text DEFAULT 'Ed25519' NOT NULL,
+	`source` text NOT NULL,
+	`public_key` text NOT NULL,
+	`private_key_ciphertext` text NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`created_at` text NOT NULL,
+	`retired_at` text,
+	`revoked_at` text,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`) REFERENCES `products`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_signing_keys_algorithm" CHECK("signing_keys"."algorithm" = 'Ed25519'),
+	CONSTRAINT "ck_signing_keys_source" CHECK("signing_keys"."source" in ('generated', 'uploaded')),
+	CONSTRAINT "ck_signing_keys_status" CHECK("signing_keys"."status" in ('active', 'retired', 'revoked'))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_signing_keys_product_status` ON `signing_keys` (`instance_id`,`product_id`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_signing_keys_product_active` ON `signing_keys` (`instance_id`,`product_id`) WHERE "signing_keys"."status" = 'active';--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_signing_keys_instance_id` ON `signing_keys` (`instance_id`,`id`);--> statement-breakpoint
+CREATE TABLE `system_issues` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`category` text NOT NULL,
+	`source_type` text NOT NULL,
+	`source_id` text NOT NULL,
+	`operation` text NOT NULL,
+	`error_code` text NOT NULL,
+	`error_detail_json` text NOT NULL,
+	`status` text DEFAULT 'pending' NOT NULL,
+	`occurrence_count` integer DEFAULT 1 NOT NULL,
+	`first_seen_at` text NOT NULL,
+	`last_seen_at` text NOT NULL,
+	`processed_at` text,
+	`processed_by_user_id` text,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`processed_by_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_system_issues_category" CHECK("system_issues"."category" in ('billing', 'webhook', 'email')),
+	CONSTRAINT "ck_system_issues_status" CHECK("system_issues"."status" in ('pending', 'processed')),
+	CONSTRAINT "ck_system_issues_occurrence_count" CHECK("system_issues"."occurrence_count" >= 1),
+	CONSTRAINT "ck_system_issues_seen_order" CHECK("system_issues"."last_seen_at" >= "system_issues"."first_seen_at"),
+	CONSTRAINT "ck_system_issues_error_detail_json" CHECK(json_valid("system_issues"."error_detail_json") and json_type("system_issues"."error_detail_json") = 'object'),
+	CONSTRAINT "ck_system_issues_processing" CHECK(("system_issues"."status" = 'pending'
+          and "system_issues"."processed_at" is null
+          and "system_issues"."processed_by_user_id" is null)
+        or ("system_issues"."status" = 'processed'
+          and "system_issues"."processed_at" is not null
+          and "system_issues"."processed_by_user_id" is not null))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_system_issues_recent` ON `system_issues` (`instance_id`,`status`,`last_seen_at`);--> statement-breakpoint
+CREATE INDEX `idx_system_issues_source` ON `system_issues` (`instance_id`,`category`,`source_type`,`source_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_system_issues_instance_id` ON `system_issues` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_system_issues_identity` ON `system_issues` (`instance_id`,`category`,`source_type`,`source_id`,`operation`,`error_code`);--> statement-breakpoint
+CREATE TABLE `trial_claims` (
+	`id` text PRIMARY KEY NOT NULL,
+	`instance_id` text NOT NULL,
+	`product_id` text NOT NULL,
+	`fingerprint_hash` text NOT NULL,
+	`trial_token_hash` text NOT NULL,
+	`features_json` text DEFAULT '[]' NOT NULL,
+	`claimed_at` text NOT NULL,
+	`expires_at` text NOT NULL,
+	`last_validated_at` text,
+	`revoked_at` text,
+	`revoke_reason` text,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
+	FOREIGN KEY (`instance_id`,`product_id`) REFERENCES `products`(`instance_id`,`id`) ON UPDATE no action ON DELETE restrict,
+	CONSTRAINT "ck_trial_claims_features_json" CHECK(json_valid("trial_claims"."features_json") and json_type("trial_claims"."features_json") = 'array'),
+	CONSTRAINT "ck_trial_claims_expiry" CHECK("trial_claims"."expires_at" > "trial_claims"."claimed_at"),
+	CONSTRAINT "ck_trial_claims_revocation" CHECK(("trial_claims"."revoked_at" is null and "trial_claims"."revoke_reason" is null)
+        or ("trial_claims"."revoked_at" is not null and "trial_claims"."revoke_reason" is not null))
+);
+--> statement-breakpoint
+CREATE INDEX `idx_trial_claims_lookup` ON `trial_claims` (`instance_id`,`product_id`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_trial_claims_expiry` ON `trial_claims` (`instance_id`,`product_id`,`expires_at`,`revoked_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_trial_claims_instance_id` ON `trial_claims` (`instance_id`,`id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_trial_claims_token_hash` ON `trial_claims` (`instance_id`,`trial_token_hash`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_trial_claims_device` ON `trial_claims` (`instance_id`,`product_id`,`fingerprint_hash`);--> statement-breakpoint
+CREATE TABLE `users` (
+	`id` text PRIMARY KEY NOT NULL,
+	`email` text COLLATE NOCASE NOT NULL,
+	`password_hash` text NOT NULL,
+	`name` text NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_users_email` ON `users` (`email`);
+--> statement-breakpoint
 CREATE TRIGGER trg_product_releases_immutable_identity
-BEFORE UPDATE OF id, account_id, product_id, version, platform, artifact_sha256, released_at
+BEFORE UPDATE OF id, instance_id, product_id, version, platform, artifact_sha256, released_at
 ON product_releases
 WHEN NEW.id IS NOT OLD.id
-  OR NEW.account_id IS NOT OLD.account_id
+  OR NEW.instance_id IS NOT OLD.instance_id
   OR NEW.product_id IS NOT OLD.product_id
   OR NEW.version IS NOT OLD.version
   OR NEW.platform IS NOT OLD.platform
   OR NEW.artifact_sha256 IS NOT OLD.artifact_sha256
   OR NEW.released_at IS NOT OLD.released_at
 BEGIN
-    SELECT RAISE(ABORT, 'PRODUCT_RELEASE_IDENTITY_IMMUTABLE');
+  SELECT RAISE(ABORT, 'PRODUCT_RELEASE_IDENTITY_IMMUTABLE');
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_product_releases_prevent_delete
 BEFORE DELETE ON product_releases
 BEGIN
-    SELECT RAISE(ABORT, 'PRODUCT_RELEASE_DELETE_FORBIDDEN');
+  SELECT RAISE(ABORT, 'PRODUCT_RELEASE_DELETE_FORBIDDEN');
 END;
-
--- 用途：保存产品签发离线凭证所需的 Ed25519 密钥材料。
--- 机制：私钥只保存密文，每个产品最多一个 active key；轮换通过保留 retired/revoked 旧公钥继续验证历史凭证。
-CREATE TABLE signing_keys (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    product_id TEXT NOT NULL,
-    algorithm TEXT NOT NULL DEFAULT 'Ed25519'
-        CHECK (algorithm = 'Ed25519'),
-    source TEXT NOT NULL CHECK (source IN ('generated', 'uploaded')),
-    public_key TEXT NOT NULL,
-    private_key_ciphertext TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'retired', 'revoked')),
-    created_at TEXT NOT NULL,
-    retired_at TEXT,
-    revoked_at TEXT,
-    UNIQUE (account_id, id),
-    FOREIGN KEY (account_id, product_id)
-        REFERENCES products(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_signing_keys_product_status
-    ON signing_keys(account_id, product_id, status);
-
-CREATE UNIQUE INDEX uq_signing_keys_product_active
-    ON signing_keys(account_id, product_id)
-    WHERE status = 'active';
-
--- 用途：保存产品可签发的授权方案模板。
--- 机制：版本号和状态管理方案演进；授权类型、凭证模式、有效期、宽限期和激活上限通过 CHECK 形成合法组合，签发时复制到 License 快照。
-CREATE TABLE license_plans (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    product_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
-    license_model TEXT NOT NULL
-        CHECK (license_model IN ('perpetual', 'fixed_term', 'subscription')),
-    credential_mode TEXT NOT NULL
-        CHECK (credential_mode IN ('opaque', 'signed')),
-    default_term_seconds INTEGER CHECK (default_term_seconds > 0),
-    update_window_seconds INTEGER CHECK (update_window_seconds > 0),
-    signed_token_ttl_seconds INTEGER NOT NULL DEFAULT 0
-        CHECK (signed_token_ttl_seconds >= 0),
-    payment_grace_seconds INTEGER NOT NULL
-        CHECK (payment_grace_seconds >= 0),
-    max_activations INTEGER NOT NULL DEFAULT 1
-        CHECK (max_activations >= 1),
-    features_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(features_json) AND json_type(features_json) = 'array'),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'archived')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK (
-        (license_model = 'fixed_term' AND default_term_seconds IS NOT NULL)
-        OR (license_model IN ('perpetual', 'subscription') AND default_term_seconds IS NULL)
-    ),
-    CHECK (
-        license_model = 'perpetual'
-        OR update_window_seconds IS NULL
-    ),
-    CHECK (
-        (credential_mode = 'opaque' AND signed_token_ttl_seconds = 0)
-        OR (credential_mode = 'signed' AND signed_token_ttl_seconds > 0)
-    ),
-    CHECK (
-        (license_model = 'subscription' AND payment_grace_seconds >= 0)
-        OR (license_model IN ('perpetual', 'fixed_term') AND payment_grace_seconds = 0)
-    ),
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, product_id, id),
-    FOREIGN KEY (account_id, product_id)
-        REFERENCES products(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_license_plans_product_status
-    ON license_plans(account_id, product_id, status);
-
--- 用途：保存已经签发给 Customer 的授权及其当前生命周期状态。
--- 机制：签发时复制 Plan 条款，避免后续模板修改回写旧授权；注册码只存哈希，支付来源用外部交易唯一键幂等，验证 License 被约束为不可激活的 suspended 状态。
-CREATE TABLE licenses (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    customer_id TEXT NOT NULL,
-    product_id TEXT NOT NULL,
-    plan_id TEXT NOT NULL,
-    plan_revision INTEGER NOT NULL CHECK (plan_revision >= 1),
-
-    -- Immutable-by-default License Terms snapshot.
-    license_model TEXT NOT NULL
-        CHECK (license_model IN ('perpetual', 'fixed_term', 'subscription')),
-    renewal_mode TEXT NOT NULL
-        CHECK (renewal_mode IN ('none', 'manual', 'billing')),
-    credential_mode TEXT NOT NULL
-        CHECK (credential_mode IN ('opaque', 'signed')),
-    signed_token_ttl_seconds INTEGER NOT NULL CHECK (signed_token_ttl_seconds >= 0),
-    payment_grace_seconds INTEGER NOT NULL CHECK (payment_grace_seconds >= 0),
-    max_activations INTEGER NOT NULL CHECK (max_activations >= 1),
-    features_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(features_json) AND json_type(features_json) = 'array'),
-
-    key_hash TEXT NOT NULL,
-    key_version INTEGER NOT NULL DEFAULT 1 CHECK (key_version >= 1),
-    key_rotated_at TEXT,
-    source TEXT NOT NULL DEFAULT 'manual'
-        CHECK (source IN ('manual', 'api', 'payment')),
-    source_billing_provider_id TEXT,
-    source_external_transaction_id TEXT,
-    -- A real Sandbox end-to-end verification issues and delivers a key, but
-    -- the key must never become an activatable customer entitlement.
-    is_checkout_verification INTEGER NOT NULL DEFAULT 0
-        CHECK (is_checkout_verification IN (0, 1)),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'suspended', 'revoked')),
-    status_reason TEXT,
-    expires_at TEXT,
-    updates_until TEXT,
-    suspended_at TEXT,
-    revoked_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, key_hash),
-    CHECK (
-        (license_model = 'perpetual' AND expires_at IS NULL)
-        OR (license_model IN ('fixed_term', 'subscription') AND expires_at IS NOT NULL)
-    ),
-    CHECK (
-        license_model = 'perpetual'
-        OR updates_until IS NULL
-    ),
-    CHECK (
-        (credential_mode = 'opaque' AND signed_token_ttl_seconds = 0)
-        OR (credential_mode = 'signed' AND signed_token_ttl_seconds > 0)
-    ),
-    CHECK (
-        (license_model = 'subscription' AND payment_grace_seconds >= 0)
-        OR (license_model IN ('perpetual', 'fixed_term') AND payment_grace_seconds = 0)
-    ),
-    CHECK (
-        (source = 'payment' AND source_billing_provider_id IS NOT NULL
-            AND source_external_transaction_id IS NOT NULL)
-        OR (source IN ('manual', 'api') AND source_billing_provider_id IS NULL
-            AND source_external_transaction_id IS NULL)
-    ),
-    CHECK (
-        is_checkout_verification = 0
-        OR (
-            source = 'payment'
-            AND status = 'suspended'
-            AND status_reason = 'checkout_verification'
-        )
-    ),
-    CHECK (
-        (license_model IN ('perpetual', 'fixed_term') AND renewal_mode = 'none')
-        OR (
-            license_model = 'subscription'
-            AND renewal_mode = 'manual'
-            AND source IN ('manual', 'api')
-        )
-        OR (
-            license_model = 'subscription'
-            AND renewal_mode = 'billing'
-            AND source = 'payment'
-        )
-    ),
-    CHECK (renewal_mode <> 'manual' OR expires_at > created_at),
-    CHECK (renewal_mode = 'billing' OR payment_grace_seconds = 0),
-    FOREIGN KEY (account_id, customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, product_id)
-        REFERENCES products(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, product_id, plan_id)
-        REFERENCES license_plans(account_id, product_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, source_billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE UNIQUE INDEX uq_licenses_source_transaction
-    ON licenses(account_id, source_billing_provider_id, source_external_transaction_id)
-    WHERE source_billing_provider_id IS NOT NULL
-      AND source_external_transaction_id IS NOT NULL;
-
-CREATE INDEX idx_licenses_account_status
-    ON licenses(account_id, status, created_at DESC);
-
-CREATE INDEX idx_licenses_product_plan
-    ON licenses(account_id, product_id, plan_id);
-
-CREATE INDEX idx_licenses_customer
-    ON licenses(account_id, customer_id, created_at DESC);
-
--- 用途：记录注册码从旧版本轮换到新版本的历史和发起来源。
--- 机制：版本必须单向递增，区分找回、安全重置和管理员操作，并关联可选 Delivery；注册码明文本身不进入本表。
-CREATE TABLE license_key_rotations (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    license_id TEXT NOT NULL,
-    from_version INTEGER NOT NULL CHECK (from_version >= 1),
-    to_version INTEGER NOT NULL CHECK (to_version > from_version),
-    reason TEXT NOT NULL CHECK (reason IN ('recovery', 'security_reset', 'admin')),
-    revoked_activations INTEGER NOT NULL DEFAULT 0
-        CHECK (revoked_activations IN (0, 1)),
-    initiated_by_user_id TEXT,
-    initiated_by_customer_id TEXT,
-    delivery_id TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    CHECK (initiated_by_user_id IS NULL OR initiated_by_customer_id IS NULL),
-    FOREIGN KEY (account_id, license_id)
-        REFERENCES licenses(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, initiated_by_user_id)
-        REFERENCES users(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, initiated_by_customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, delivery_id)
-        REFERENCES email_deliveries(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_license_key_rotations_license
-    ON license_key_rotations(account_id, license_id, created_at DESC);
-
--- 用途：保存一条 License 与具体设备之间的激活绑定及其历史状态。
--- 机制：设备指纹和机器令牌只存哈希；同一 License/指纹最多一个 active 绑定，插入或重新激活时由 Trigger 按 License 快照强制执行激活上限。
-CREATE TABLE activations (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    license_id TEXT NOT NULL,
-    fingerprint_hash TEXT NOT NULL,
-    machine_token_hash TEXT NOT NULL,
-    name TEXT,
-    platform TEXT,
-    first_ip TEXT,
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'deactivated', 'revoked')),
-    activated_at TEXT NOT NULL,
-    last_validated_at TEXT,
-    deactivated_at TEXT,
-    revoked_at TEXT,
-    revoke_reason TEXT,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    FOREIGN KEY (account_id, license_id)
-        REFERENCES licenses(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_activations_license_status
-    ON activations(account_id, license_id, status);
-
-CREATE INDEX idx_activations_token_hash
-    ON activations(account_id, machine_token_hash);
-
-CREATE UNIQUE INDEX uq_activations_active_fingerprint
-    ON activations(account_id, license_id, fingerprint_hash)
-    WHERE status = 'active';
-
+--> statement-breakpoint
 CREATE TRIGGER trg_activations_enforce_limit_on_insert
 BEFORE INSERT ON activations
 WHEN NEW.status = 'active'
 BEGIN
-    SELECT CASE
-        WHEN (
-            SELECT COUNT(*)
-            FROM activations
-            WHERE account_id = NEW.account_id
-              AND license_id = NEW.license_id
-              AND status = 'active'
-        ) >= (
-            SELECT max_activations
-            FROM licenses
-            WHERE account_id = NEW.account_id
-              AND id = NEW.license_id
-        )
-        THEN RAISE(ABORT, 'LICENSE_ACTIVATION_LIMIT_REACHED')
-    END;
+  SELECT (CASE
+    WHEN (
+      SELECT COUNT(*) FROM activations
+      WHERE instance_id = NEW.instance_id
+        AND license_id = NEW.license_id
+        AND status = 'active'
+    ) >= (
+      SELECT max_activations FROM licenses
+      WHERE instance_id = NEW.instance_id AND id = NEW.license_id
+    ) THEN RAISE(ABORT, 'LICENSE_ACTIVATION_LIMIT_REACHED')
+  END);
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_activations_enforce_limit_on_reactivate
 BEFORE UPDATE OF status ON activations
 WHEN OLD.status <> 'active' AND NEW.status = 'active'
 BEGIN
-    SELECT CASE
-        WHEN (
-            SELECT COUNT(*)
-            FROM activations
-            WHERE account_id = NEW.account_id
-              AND license_id = NEW.license_id
-              AND status = 'active'
-        ) >= (
-            SELECT max_activations
-            FROM licenses
-            WHERE account_id = NEW.account_id
-              AND id = NEW.license_id
-        )
-        THEN RAISE(ABORT, 'LICENSE_ACTIVATION_LIMIT_REACHED')
-    END;
+  SELECT (CASE
+    WHEN (
+      SELECT COUNT(*) FROM activations
+      WHERE instance_id = NEW.instance_id
+        AND license_id = NEW.license_id
+        AND status = 'active'
+    ) >= (
+      SELECT max_activations FROM licenses
+      WHERE instance_id = NEW.instance_id AND id = NEW.license_id
+    ) THEN RAISE(ABORT, 'LICENSE_ACTIVATION_LIMIT_REACHED')
+  END);
 END;
-
--- 用途：保存不依赖支付的产品设备试用领取记录。
--- 机制：同一账户、产品和设备指纹只能领取一次；Token 只存哈希，过期时间固定，吊销时间与原因必须成对出现。
-CREATE TABLE trial_claims (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    product_id TEXT NOT NULL,
-    fingerprint_hash TEXT NOT NULL,
-    trial_token_hash TEXT NOT NULL,
-    features_json TEXT NOT NULL DEFAULT '[]'
-        CHECK (json_valid(features_json) AND json_type(features_json) = 'array'),
-    claimed_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    last_validated_at TEXT,
-    revoked_at TEXT,
-    revoke_reason TEXT,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, trial_token_hash),
-    UNIQUE (account_id, product_id, fingerprint_hash),
-    CHECK (expires_at > claimed_at),
-    CHECK (
-        (revoked_at IS NULL AND revoke_reason IS NULL)
-        OR (revoked_at IS NOT NULL AND revoke_reason IS NOT NULL)
-    ),
-    FOREIGN KEY (account_id, product_id)
-        REFERENCES products(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_trial_claims_lookup
-    ON trial_claims(account_id, product_id, id);
-
-CREATE INDEX idx_trial_claims_expiry
-    ON trial_claims(account_id, product_id, expires_at, revoked_at);
-
--- 用途：保存账户连接到支付平台的 sandbox 或 live 配置。
--- 机制：Client-side Token 是可公开给 Paddle.js 的凭证，Webhook/API Secret 保存密文；账户、平台和环境组合唯一，Token 前缀必须与环境一致。
-CREATE TABLE billing_providers (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    provider TEXT NOT NULL,
-    environment TEXT NOT NULL CHECK (environment IN ('sandbox', 'live')),
-    -- Public Paddle.js credential. This is intentionally returned by the
-    -- public Checkout configuration API and must never be an API key.
-    client_side_token TEXT NOT NULL,
-    webhook_secret_ciphertext TEXT NOT NULL,
-    -- Optional server-side credential for provider API capabilities such as
-    -- customer portal sessions or explicitly enabled reconciliation.
-    api_secret_ciphertext TEXT,
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'disabled')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK (
-        (environment = 'sandbox' AND substr(client_side_token, 1, 5) = 'test_')
-        OR (environment = 'live' AND substr(client_side_token, 1, 5) = 'live_')
-    ),
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, provider, environment)
-);
-
-CREATE INDEX idx_billing_providers_account_status
-    ON billing_providers(account_id, status);
-
--- 用途：给管理员展示支付、回调和邮件链路最近出现的错误信号。
--- 机制：按来源和错误码去重并累加次数；管理员只能标记待处理/已处理，新错误会重新变为待处理；Issue 不控制重试、恢复或业务对象状态。
-CREATE TABLE system_issues (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    category TEXT NOT NULL CHECK (category IN ('billing', 'webhook', 'email')),
-    source_type TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    error_code TEXT NOT NULL,
-    error_detail_json TEXT NOT NULL
-        CHECK (json_valid(error_detail_json) AND json_type(error_detail_json) = 'object'),
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'processed')),
-    occurrence_count INTEGER NOT NULL DEFAULT 1
-        CHECK (occurrence_count >= 1),
-    first_seen_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL,
-    processed_at TEXT,
-    processed_by_user_id TEXT,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, category, source_type, source_id, operation, error_code),
-    CHECK (last_seen_at >= first_seen_at),
-    CHECK (
-        (status = 'pending' AND processed_at IS NULL AND processed_by_user_id IS NULL)
-        OR (status = 'processed' AND processed_at IS NOT NULL AND processed_by_user_id IS NOT NULL)
-    ),
-    FOREIGN KEY (account_id, processed_by_user_id)
-        REFERENCES users(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_system_issues_recent
-    ON system_issues(account_id, status, last_seen_at DESC);
-
-CREATE INDEX idx_system_issues_source
-    ON system_issues(account_id, category, source_type, source_id);
-
--- 用途：保存支付平台 Customer 的本地镜像及其与内部 Customer 的稳定映射。
--- 机制：外部 Customer ID 在同一 Provider 连接内唯一；Webhook/API/对账共用同一记录，并用 pending、linked、email_mismatch、needs_attention 表达链接是否可安全用于履约。
-CREATE TABLE billing_customers (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    billing_provider_id TEXT NOT NULL,
-    customer_id TEXT,
-    external_customer_id TEXT NOT NULL,
-    provider_email TEXT NOT NULL COLLATE NOCASE,
-    provider_name TEXT,
-    provider_status TEXT NOT NULL
-        CHECK (provider_status IN ('active', 'archived')),
-    link_status TEXT NOT NULL
-        CHECK (link_status IN ('pending', 'linked', 'email_mismatch', 'needs_attention')),
-    last_sync_source TEXT NOT NULL
-        CHECK (last_sync_source IN ('webhook', 'api', 'reconciliation')),
-    -- Paddle customer.updated_at may be null on creation; persist
-    -- COALESCE(provider updated_at, provider created_at) as the version time.
-    external_updated_at TEXT NOT NULL,
-    last_external_event_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (billing_provider_id, external_customer_id),
-    UNIQUE (account_id, billing_provider_id, external_customer_id),
-    CHECK (
-        (customer_id IS NULL AND link_status IN ('pending', 'needs_attention'))
-        OR (customer_id IS NOT NULL AND link_status IN ('linked', 'email_mismatch'))
-    ),
-    FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_billing_customers_customer
-    ON billing_customers(account_id, customer_id, updated_at DESC);
-
-CREATE INDEX idx_billing_customers_link_status
-    ON billing_customers(account_id, billing_provider_id, link_status, updated_at);
-
--- 用途：把一个支付平台 Price 精确映射到 Product、License Plan 和购买类型。
--- 机制：Offer 从 draft 开始，显式通过 Readiness 后才能 active；同一 Provider 下 Price 唯一，产生 Checkout Verification 后关键映射由 Trigger 锁定，变更合同应归档并新建。
-CREATE TABLE billing_offers (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    billing_provider_id TEXT NOT NULL,
-    external_price_id TEXT NOT NULL,
-    product_id TEXT NOT NULL,
-    license_plan_id TEXT NOT NULL,
-    purchase_type TEXT NOT NULL
-        CHECK (purchase_type IN ('one_time', 'subscription')),
-    status TEXT NOT NULL DEFAULT 'draft'
-        CHECK (status IN ('draft', 'active', 'archived')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (billing_provider_id, external_price_id),
-    FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, product_id)
-        REFERENCES products(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, product_id, license_plan_id)
-        REFERENCES license_plans(account_id, product_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_billing_offers_plan_status
-    ON billing_offers(account_id, license_plan_id, status);
-
--- 用途：保存支付平台 Subscription 与本地 License 的一对一镜像。
--- 机制：以外部 Subscription ID 幂等更新，用外部事件时间和事件 ID 处理乱序；周期、试用和取消字段驱动同一 License 的续期、宽限或停止续期。
-CREATE TABLE billing_subscriptions (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    billing_provider_id TEXT NOT NULL,
-    license_id TEXT NOT NULL,
-    external_subscription_id TEXT NOT NULL,
-    external_customer_id TEXT NOT NULL,
-    external_price_id TEXT NOT NULL,
-    status TEXT NOT NULL
-        CHECK (status IN ('trialing', 'active', 'past_due', 'paused', 'canceled')),
-    current_period_start TEXT,
-    current_period_end TEXT,
-    next_billed_at TEXT,
-    trial_type TEXT
-        CHECK (trial_type IN ('free_payment_method_required')),
-    trial_started_at TEXT,
-    trial_ends_at TEXT,
-    cancel_at_period_end INTEGER NOT NULL DEFAULT 0
-        CHECK (cancel_at_period_end IN (0, 1)),
-    last_external_occurred_at TEXT,
-    last_external_event_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (billing_provider_id, external_subscription_id),
-    UNIQUE (license_id),
-    CHECK (
-        (trial_type IS NULL AND trial_started_at IS NULL AND trial_ends_at IS NULL)
-        OR (
-            trial_type IS NOT NULL
-            AND trial_started_at IS NOT NULL
-            AND trial_ends_at IS NOT NULL
-            AND trial_ends_at > trial_started_at
-        )
-    ),
-    CHECK (
-        status <> 'trialing'
-        OR (
-            trial_type = 'free_payment_method_required'
-            AND trial_started_at IS NOT NULL
-            AND trial_ends_at IS NOT NULL
-            AND next_billed_at IS NOT NULL
-        )
-    ),
-    FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, billing_provider_id, external_customer_id)
-        REFERENCES billing_customers(account_id, billing_provider_id, external_customer_id)
-        ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, license_id)
-        REFERENCES licenses(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_billing_subscriptions_status_period
-    ON billing_subscriptions(account_id, status, current_period_end);
-
--- 用途：保存退款、拒付、撤销等支付调整事实及需要人工处理的决定。
--- 机制：外部 Adjustment ID 保证幂等；Provider 原始动作和状态原样保留，自动影响与人工 review/resolution 分开，只有明确条件满足时才关联并暂停 License。
-CREATE TABLE billing_adjustments (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    billing_provider_id TEXT NOT NULL,
-    license_id TEXT,
-    external_adjustment_id TEXT NOT NULL,
-    external_transaction_id TEXT NOT NULL,
-    external_subscription_id TEXT,
-    external_customer_id TEXT NOT NULL,
-    provider_action TEXT NOT NULL
-        CHECK (provider_action IN (
-            'credit',
-            'refund',
-            'chargeback',
-            'chargeback_reverse',
-            'chargeback_warning',
-            'chargeback_warning_reverse',
-            'credit_reverse'
-        )),
-    adjustment_type TEXT CHECK (adjustment_type IN ('full', 'partial')),
-    provider_status TEXT NOT NULL
-        CHECK (provider_status IN ('pending_approval', 'approved', 'rejected', 'reversed')),
-    currency_code TEXT NOT NULL,
-    total_amount TEXT NOT NULL,
-    provider_reason TEXT,
-    automatic_effect TEXT NOT NULL DEFAULT 'none'
-        CHECK (automatic_effect IN ('none', 'license_suspended')),
-    review_status TEXT NOT NULL
-        CHECK (review_status IN ('not_required', 'open', 'resolved')),
-    resolution_action TEXT
-        CHECK (resolution_action IN (
-            'no_action',
-            'keep_suspended',
-            'reinstate',
-            'revoke',
-            'security_reset'
-        )),
-    resolution_reason TEXT,
-    resolved_by_user_id TEXT,
-    resolved_at TEXT,
-    last_external_occurred_at TEXT NOT NULL,
-    last_external_event_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (billing_provider_id, external_adjustment_id),
-    CHECK (automatic_effect = 'none' OR license_id IS NOT NULL),
-    CHECK (review_status <> 'not_required' OR automatic_effect = 'none'),
-    CHECK (
-        (review_status IN ('not_required', 'open')
-            AND resolution_action IS NULL
-            AND resolution_reason IS NULL
-            AND resolved_by_user_id IS NULL
-            AND resolved_at IS NULL)
-        OR (review_status = 'resolved'
-            AND resolution_action IS NOT NULL
-            AND resolution_reason IS NOT NULL
-            AND resolved_by_user_id IS NOT NULL
-            AND resolved_at IS NOT NULL)
-    ),
-    FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, license_id)
-        REFERENCES licenses(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, resolved_by_user_id)
-        REFERENCES users(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_billing_adjustments_review
-    ON billing_adjustments(account_id, review_status, updated_at DESC);
-
-CREATE INDEX idx_billing_adjustments_transaction
-    ON billing_adjustments(account_id, billing_provider_id, external_transaction_id, updated_at DESC);
-
--- 用途：保存每个已验签支付入站事件及其处理状态，是 Webhook 幂等和故障恢复的事实入口。
--- 机制：Provider/外部事件 ID 唯一；加密负载有独立清理期限，Worker 通过状态、重试时间和租约领取任务；`attempt_count` 与 `last_error_*` 只保存当前汇总，V1 不建立 Inbound Attempt 历史表。
-CREATE TABLE inbound_events (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    billing_provider_id TEXT NOT NULL,
-    external_event_id TEXT NOT NULL,
-    external_event_type TEXT NOT NULL,
-    external_customer_id TEXT,
-    external_transaction_id TEXT,
-    external_subscription_id TEXT,
-    external_adjustment_id TEXT,
-    external_occurred_at TEXT,
-    payload_ciphertext TEXT,
-    payload_hash TEXT NOT NULL,
-    payload_expires_at TEXT NOT NULL,
-    payload_cleared_at TEXT,
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'processing', 'processed', 'failed', 'needs_attention')),
-    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-    next_attempt_at TEXT,
-    locked_by TEXT,
-    locked_until TEXT,
-    result_type TEXT,
-    result_reference_id TEXT,
-    last_error_code TEXT,
-    last_error_detail TEXT,
-    received_at TEXT NOT NULL,
-    processed_at TEXT,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (billing_provider_id, external_event_id),
-    FOREIGN KEY (account_id, billing_provider_id)
-        REFERENCES billing_providers(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_inbound_events_status_schedule
-    ON inbound_events(account_id, status, next_attempt_at, locked_until, received_at);
-
-CREATE INDEX idx_inbound_events_provider_type
-    ON inbound_events(account_id, billing_provider_id, external_event_type, received_at DESC);
-
-CREATE INDEX idx_inbound_events_customer
-    ON inbound_events(account_id, billing_provider_id, external_customer_id, received_at DESC)
-    WHERE external_customer_id IS NOT NULL;
-
-CREATE INDEX idx_inbound_events_transaction
-    ON inbound_events(account_id, billing_provider_id, external_transaction_id, received_at DESC)
-    WHERE external_transaction_id IS NOT NULL;
-
-CREATE INDEX idx_inbound_events_subscription
-    ON inbound_events(account_id, billing_provider_id, external_subscription_id, received_at DESC)
-    WHERE external_subscription_id IS NOT NULL;
-
-CREATE INDEX idx_inbound_events_adjustment
-    ON inbound_events(account_id, billing_provider_id, external_adjustment_id, received_at DESC)
-    WHERE external_adjustment_id IS NOT NULL;
-
-CREATE INDEX idx_inbound_events_payload_retention
-    ON inbound_events(payload_expires_at, id)
-    WHERE payload_ciphertext IS NOT NULL;
-
--- 用途：保存 Account 的邮件供应商连接和共享发件配置。
--- 机制：凭证只保存密文；V1 明确拒绝未注册 Provider；条件唯一索引保证每个 Account 最多一个 active Integration。
-CREATE TABLE email_integrations (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    provider TEXT NOT NULL CHECK (provider = 'resend'),
-    name TEXT NOT NULL,
-    credential_ciphertext TEXT NOT NULL,
-    default_from_email TEXT NOT NULL COLLATE NOCASE,
-    default_from_name TEXT,
-    reply_to_email TEXT COLLATE NOCASE,
-    max_automatic_attempts INTEGER NOT NULL DEFAULT 4
-        CHECK (max_automatic_attempts BETWEEN 1 AND 20),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'disabled')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id)
-);
-
-CREATE UNIQUE INDEX uq_email_integrations_active_account
-    ON email_integrations(account_id)
-    WHERE status = 'active';
-
-CREATE INDEX idx_email_integrations_account_status
-    ON email_integrations(account_id, status);
-
--- 用途：把代码中预定义的 LicenKit 邮件合同绑定到外部模板引用。
--- 机制：合同键在 Integration 内唯一；配置测试只即时返回结果，不保存 revision 或测试证据。
-CREATE TABLE email_template_bindings (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    email_integration_id TEXT NOT NULL,
-    notification_type TEXT NOT NULL,
-    contract_version INTEGER NOT NULL CHECK (contract_version >= 1),
-    provider_template_ref TEXT NOT NULL CHECK (length(trim(provider_template_ref)) > 0),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'disabled')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, email_integration_id, id),
-    UNIQUE (account_id, email_integration_id, notification_type),
-    FOREIGN KEY (account_id, email_integration_id)
-        REFERENCES email_integrations(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_email_template_bindings_lookup
-    ON email_template_bindings(
-        account_id, email_integration_id, notification_type, contract_version, status
-    );
-
--- 用途：保存一封业务邮件的事件变量、唯一收件地址和当前发送状态。
--- 机制：事件变量加密保存，发送时读取最新 Integration/Binding；业务发送期限与 accepted 后的敏感变量清理期限分离；只保存总尝试次数和最近一次完整诊断，不建立逐次 Attempt 表。
-CREATE TABLE email_deliveries (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    customer_id TEXT NOT NULL,
-    notification_type TEXT NOT NULL,
-    contract_version INTEGER NOT NULL CHECK (contract_version >= 1),
-    recipient_email TEXT NOT NULL COLLATE NOCASE,
-    variables_ciphertext TEXT,
-    send_expires_at TEXT,
-    variables_expires_at TEXT,
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN (
-            'pending',
-            'processing',
-            'waiting_configuration',
-            'retry_scheduled',
-            'accepted',
-            'failed',
-            'expired',
-            'cancelled'
-        )),
-    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-    next_attempt_at TEXT,
-    provider_message_id TEXT,
-    last_error_json TEXT CHECK (
-        last_error_json IS NULL
-        OR (json_valid(last_error_json) AND json_type(last_error_json) = 'object')
-    ),
-    locked_by TEXT,
-    locked_until TEXT,
-    accepted_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (account_id, customer_id, id),
-    CHECK (
-        (status = 'processing'
-            AND locked_by IS NOT NULL
-            AND locked_until IS NOT NULL)
-        OR (status <> 'processing'
-            AND locked_by IS NULL
-            AND locked_until IS NULL)
-    ),
-    CHECK (
-        (status = 'accepted'
-            AND provider_message_id IS NOT NULL
-            AND accepted_at IS NOT NULL
-            AND last_error_json IS NULL)
-        OR (status <> 'accepted'
-            AND provider_message_id IS NULL
-            AND accepted_at IS NULL)
-    ),
-    CHECK (
-        (status IN ('expired', 'cancelled') AND variables_ciphertext IS NULL)
-        OR (status IN (
-            'pending', 'processing', 'waiting_configuration', 'retry_scheduled', 'failed'
-        ) AND variables_ciphertext IS NOT NULL)
-        OR status = 'accepted'
-    ),
-    CHECK (
-        (status = 'accepted' AND variables_expires_at IS NOT NULL)
-        OR (status <> 'accepted' AND variables_expires_at IS NULL)
-    ),
-    FOREIGN KEY (account_id, customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_email_deliveries_status_schedule
-    ON email_deliveries(account_id, status, next_attempt_at, locked_until, created_at);
-
-CREATE INDEX idx_email_deliveries_customer
-    ON email_deliveries(account_id, customer_id, created_at DESC);
-
-CREATE INDEX idx_email_deliveries_payload_retention
-    ON email_deliveries(variables_expires_at, id)
-    WHERE status = 'accepted' AND variables_ciphertext IS NOT NULL;
-
--- 用途：保存管理员在 Offer 激活前发起的真实 Sandbox Checkout 闭环验证。
--- 机制：只保存一次性验证 Token 哈希并绑定 draft Sandbox Offer；已验签交易创建不可激活 License 和真实 Delivery，只有 Delivery accepted 才 completed，身份字段由 Trigger 禁止改绑或延长。
-CREATE TABLE billing_checkout_verifications (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    billing_offer_id TEXT NOT NULL,
-    requested_by_user_id TEXT NOT NULL,
-    -- Only the hash is persisted. The plaintext high-entropy token is
-    -- returned once to the authenticated admin SDK and copied into Paddle
-    -- custom_data solely to authorize this non-activatable test fulfillment.
-    token_hash TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN (
-            'pending',
-            'delivery_pending',
-            'completed',
-            'needs_attention',
-            'expired',
-            'cancelled'
-        )),
-    external_transaction_id TEXT,
-    license_id TEXT,
-    delivery_id TEXT,
-    expires_at TEXT NOT NULL,
-    completed_at TEXT,
-    last_error_code TEXT,
-    last_error_detail TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    UNIQUE (token_hash),
-    CHECK (expires_at > created_at),
-    CHECK (
-        status NOT IN ('delivery_pending', 'completed')
-        OR (
-            external_transaction_id IS NOT NULL
-            AND license_id IS NOT NULL
-            AND delivery_id IS NOT NULL
-        )
-    ),
-    CHECK (
-        (status = 'completed' AND completed_at IS NOT NULL)
-        OR (status <> 'completed' AND completed_at IS NULL)
-    ),
-    FOREIGN KEY (account_id, billing_offer_id)
-        REFERENCES billing_offers(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, requested_by_user_id)
-        REFERENCES users(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, license_id)
-        REFERENCES licenses(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, delivery_id)
-        REFERENCES email_deliveries(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE UNIQUE INDEX uq_billing_checkout_verifications_transaction
-    ON billing_checkout_verifications(account_id, billing_offer_id, external_transaction_id)
-    WHERE external_transaction_id IS NOT NULL;
-
-CREATE INDEX idx_billing_checkout_verifications_status_expiry
-    ON billing_checkout_verifications(account_id, status, expires_at);
-
-CREATE INDEX idx_billing_checkout_verifications_offer
-    ON billing_checkout_verifications(account_id, billing_offer_id, completed_at DESC);
-
--- 用途：记录管理员、Customer 和系统对安全或业务状态的关键操作。
--- 机制：Actor 类型决定必须关联哪一种身份，资源和 request ID 串联调用链；详情只保存经过字段级脱敏的合法 JSON，服务层按只追加日志使用。
-CREATE TABLE audit_logs (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    actor_type TEXT NOT NULL CHECK (actor_type IN ('user', 'customer', 'system')),
-    actor_user_id TEXT,
-    actor_customer_id TEXT,
-    action TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    resource_id TEXT,
-    request_id TEXT,
-    details_redacted_json TEXT NOT NULL DEFAULT '{}'
-        CHECK (json_valid(details_redacted_json)),
-    ip TEXT,
-    user_agent TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE (account_id, id),
-    CHECK (
-        (actor_type = 'user' AND actor_user_id IS NOT NULL AND actor_customer_id IS NULL)
-        OR (actor_type = 'customer' AND actor_customer_id IS NOT NULL AND actor_user_id IS NULL)
-        OR (actor_type = 'system' AND actor_user_id IS NULL AND actor_customer_id IS NULL)
-    ),
-    FOREIGN KEY (account_id, actor_user_id)
-        REFERENCES users(account_id, id) ON DELETE RESTRICT,
-    FOREIGN KEY (account_id, actor_customer_id)
-        REFERENCES customers(account_id, id) ON DELETE RESTRICT
-);
-
-CREATE INDEX idx_audit_logs_account_created
-    ON audit_logs(account_id, created_at DESC);
-
-CREATE INDEX idx_audit_logs_resource
-    ON audit_logs(account_id, resource_type, resource_id, created_at DESC);
-
-CREATE INDEX idx_audit_logs_action
-    ON audit_logs(account_id, action, created_at DESC);
-
--- Billing environment and Checkout verification are security boundaries, not
--- presentation-only fields. Keep the database fail-closed if an application
--- path forgets one of the service-layer checks.
+--> statement-breakpoint
 CREATE TRIGGER trg_billing_providers_immutable_identity
-BEFORE UPDATE OF account_id, provider, environment ON billing_providers
-WHEN NEW.account_id IS NOT OLD.account_id
+BEFORE UPDATE OF instance_id, provider, environment ON billing_providers
+WHEN NEW.instance_id IS NOT OLD.instance_id
   OR NEW.provider IS NOT OLD.provider
   OR NEW.environment IS NOT OLD.environment
 BEGIN
-    SELECT RAISE(ABORT, 'billing_provider_identity_immutable');
+  SELECT RAISE(ABORT, 'billing_provider_identity_immutable');
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_products_guard_billing_environment_change
 BEFORE UPDATE OF billing_environment ON products
 WHEN NEW.billing_environment IS NOT OLD.billing_environment
 BEGIN
-    SELECT CASE
-        WHEN EXISTS (
-            SELECT 1
-            FROM billing_offers AS offer
-            WHERE offer.account_id = OLD.account_id
-              AND offer.product_id = OLD.id
-              AND offer.status = 'active'
-        )
-        OR EXISTS (
-            SELECT 1
-            FROM licenses AS license
-            WHERE license.account_id = OLD.account_id
-              AND license.product_id = OLD.id
-              AND license.source = 'payment'
-              AND license.is_checkout_verification = 0
-        )
-        THEN RAISE(ABORT, 'product_billing_environment_locked')
-    END;
+  SELECT (CASE WHEN EXISTS (
+    SELECT 1 FROM billing_offers AS offer
+    WHERE offer.instance_id = OLD.instance_id
+      AND offer.product_id = OLD.id
+      AND offer.status = 'active'
+  ) OR EXISTS (
+    SELECT 1 FROM licenses AS license
+    WHERE license.instance_id = OLD.instance_id
+      AND license.product_id = OLD.id
+      AND license.source = 'payment'
+      AND license.is_checkout_verification = 0
+  ) THEN RAISE(ABORT, 'product_billing_environment_locked') END);
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_billing_offers_active_environment_on_insert
 BEFORE INSERT ON billing_offers
 WHEN NEW.status = 'active'
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
-        SELECT 1
-        FROM products AS product
-        JOIN billing_providers AS provider
-          ON provider.account_id = NEW.account_id
-         AND provider.id = NEW.billing_provider_id
-        WHERE product.account_id = NEW.account_id
-          AND product.id = NEW.product_id
-          AND product.billing_environment IS NOT NULL
-          AND product.billing_environment = provider.environment
-    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END;
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM products AS product
+    JOIN billing_providers AS provider
+      ON provider.instance_id = NEW.instance_id
+     AND provider.id = NEW.billing_provider_id
+    WHERE product.instance_id = NEW.instance_id
+      AND product.id = NEW.product_id
+      AND product.billing_environment IS NOT NULL
+      AND product.billing_environment = provider.environment
+  ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END);
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_billing_offers_active_environment_on_update
-BEFORE UPDATE OF status, billing_provider_id, product_id, account_id ON billing_offers
+BEFORE UPDATE OF status, billing_provider_id, product_id, instance_id ON billing_offers
 WHEN NEW.status = 'active'
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
-        SELECT 1
-        FROM products AS product
-        JOIN billing_providers AS provider
-          ON provider.account_id = NEW.account_id
-         AND provider.id = NEW.billing_provider_id
-        WHERE product.account_id = NEW.account_id
-          AND product.id = NEW.product_id
-          AND product.billing_environment IS NOT NULL
-          AND product.billing_environment = provider.environment
-    ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END;
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM products AS product
+    JOIN billing_providers AS provider
+      ON provider.instance_id = NEW.instance_id
+     AND provider.id = NEW.billing_provider_id
+    WHERE product.instance_id = NEW.instance_id
+      AND product.id = NEW.product_id
+      AND product.billing_environment IS NOT NULL
+      AND product.billing_environment = provider.environment
+  ) THEN RAISE(ABORT, 'billing_offer_environment_mismatch') END);
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_billing_offers_lock_verified_mapping
-BEFORE UPDATE OF account_id, billing_provider_id, external_price_id,
-    product_id, license_plan_id, purchase_type ON billing_offers
+BEFORE UPDATE OF instance_id, billing_provider_id, external_price_id,
+  product_id, license_plan_id, purchase_type ON billing_offers
 WHEN EXISTS (
-    SELECT 1
-    FROM billing_checkout_verifications AS verification
-    WHERE verification.account_id = OLD.account_id
-      AND verification.billing_offer_id = OLD.id
+  SELECT 1 FROM billing_checkout_verifications AS verification
+  WHERE verification.instance_id = OLD.instance_id
+    AND verification.billing_offer_id = OLD.id
 )
 BEGIN
-    SELECT RAISE(ABORT, 'verified_billing_offer_mapping_immutable');
+  SELECT RAISE(ABORT, 'verified_billing_offer_mapping_immutable');
 END;
-
-CREATE TRIGGER trg_licenses_manual_issue_invariant
-BEFORE INSERT ON licenses
-WHEN NEW.source = 'manual'
-  AND NOT EXISTS (
-    SELECT 1
-    FROM license_plans AS plan
-    JOIN products AS product
-      ON product.account_id = plan.account_id
-     AND product.id = plan.product_id
-    JOIN customers AS customer
-      ON customer.account_id = plan.account_id
-     AND customer.id = NEW.customer_id
-    WHERE plan.account_id = NEW.account_id
-      AND plan.id = NEW.plan_id
-      AND plan.product_id = NEW.product_id
-      AND plan.revision = NEW.plan_revision
-      AND plan.status = 'active'
-      AND product.status = 'active'
-      AND customer.status = 'active'
-      AND (
-        NEW.credential_mode <> 'signed'
-        OR EXISTS (
-          SELECT 1 FROM signing_keys AS signing_key
-          WHERE signing_key.account_id = NEW.account_id
-            AND signing_key.product_id = NEW.product_id
-            AND signing_key.status = 'active'
-        )
-      )
-  )
-BEGIN
-    SELECT RAISE(ABORT, 'LICENSE_MANUAL_ISSUE_INVARIANT');
-END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_licenses_payment_environment_on_insert
 BEFORE INSERT ON licenses
 WHEN NEW.source = 'payment' AND NEW.is_checkout_verification = 0
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
-        SELECT 1
-        FROM products AS product
-        JOIN billing_providers AS provider
-          ON provider.account_id = NEW.account_id
-         AND provider.id = NEW.source_billing_provider_id
-        WHERE product.account_id = NEW.account_id
-          AND product.id = NEW.product_id
-          AND product.billing_environment IS NOT NULL
-          AND product.billing_environment = provider.environment
-    ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END;
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM products AS product
+    JOIN billing_providers AS provider
+      ON provider.instance_id = NEW.instance_id
+     AND provider.id = NEW.source_billing_provider_id
+    WHERE product.instance_id = NEW.instance_id
+      AND product.id = NEW.product_id
+      AND product.billing_environment IS NOT NULL
+      AND product.billing_environment = provider.environment
+  ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END);
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_licenses_verification_environment_on_insert
 BEFORE INSERT ON licenses
 WHEN NEW.is_checkout_verification = 1
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
-        SELECT 1
-        FROM billing_providers AS provider
-        WHERE provider.account_id = NEW.account_id
-          AND provider.id = NEW.source_billing_provider_id
-          AND provider.environment = 'sandbox'
-    ) THEN RAISE(ABORT, 'checkout_verification_requires_sandbox') END;
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM billing_providers AS provider
+    WHERE provider.instance_id = NEW.instance_id
+      AND provider.id = NEW.source_billing_provider_id
+      AND provider.environment = 'sandbox'
+  ) THEN RAISE(ABORT, 'checkout_verification_requires_sandbox') END);
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_licenses_verification_flag_immutable
 BEFORE UPDATE OF is_checkout_verification ON licenses
 WHEN NEW.is_checkout_verification IS NOT OLD.is_checkout_verification
 BEGIN
-    SELECT RAISE(ABORT, 'checkout_verification_flag_immutable');
+  SELECT RAISE(ABORT, 'checkout_verification_flag_immutable');
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_checkout_verifications_require_draft_sandbox
 BEFORE INSERT ON billing_checkout_verifications
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
-        SELECT 1
-        FROM billing_offers AS offer
-        JOIN billing_providers AS provider
-          ON provider.account_id = NEW.account_id
-         AND provider.id = offer.billing_provider_id
-        WHERE offer.account_id = NEW.account_id
-          AND offer.id = NEW.billing_offer_id
-          AND offer.status = 'draft'
-          AND provider.environment = 'sandbox'
-    ) THEN RAISE(ABORT, 'checkout_verification_requires_draft_sandbox_offer') END;
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM billing_offers AS offer
+    JOIN billing_providers AS provider
+      ON provider.instance_id = NEW.instance_id
+     AND provider.id = offer.billing_provider_id
+    WHERE offer.instance_id = NEW.instance_id
+      AND offer.id = NEW.billing_offer_id
+      AND offer.status = 'draft'
+      AND provider.environment = 'sandbox'
+  ) THEN RAISE(ABORT, 'checkout_verification_requires_draft_sandbox_offer') END);
 END;
-
+--> statement-breakpoint
 CREATE TRIGGER trg_checkout_verifications_immutable_identity
-BEFORE UPDATE OF id, account_id, billing_offer_id, requested_by_user_id,
-    token_hash, expires_at, created_at
-ON billing_checkout_verifications
+BEFORE UPDATE OF id, instance_id, billing_offer_id, requested_by_user_id,
+  token_hash, expires_at, created_at ON billing_checkout_verifications
 WHEN NEW.id IS NOT OLD.id
-  OR NEW.account_id IS NOT OLD.account_id
+  OR NEW.instance_id IS NOT OLD.instance_id
   OR NEW.billing_offer_id IS NOT OLD.billing_offer_id
   OR NEW.requested_by_user_id IS NOT OLD.requested_by_user_id
   OR NEW.token_hash IS NOT OLD.token_hash
   OR NEW.expires_at IS NOT OLD.expires_at
   OR NEW.created_at IS NOT OLD.created_at
 BEGIN
-    SELECT RAISE(ABORT, 'checkout_verification_identity_immutable');
+  SELECT RAISE(ABORT, 'checkout_verification_identity_immutable');
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_licenses_manual_issue_invariant
+BEFORE INSERT ON licenses
+WHEN NEW.source = 'manual' AND NOT EXISTS (
+  SELECT 1 FROM license_plans AS plan
+  JOIN products AS product
+    ON product.instance_id = plan.instance_id
+   AND product.id = plan.product_id
+  JOIN customers AS customer
+    ON customer.instance_id = plan.instance_id
+   AND customer.id = NEW.customer_id
+  WHERE plan.instance_id = NEW.instance_id
+    AND plan.id = NEW.plan_id
+    AND plan.product_id = NEW.product_id
+    AND plan.revision = NEW.plan_revision
+    AND plan.status = 'active'
+    AND product.status = 'active'
+    AND customer.status = 'active'
+    AND (
+      NEW.credential_mode <> 'signed'
+      OR EXISTS (
+        SELECT 1 FROM signing_keys AS signing_key
+        WHERE signing_key.instance_id = NEW.instance_id
+          AND signing_key.product_id = NEW.product_id
+          AND signing_key.status = 'active'
+      )
+    )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'LICENSE_MANUAL_ISSUE_INVARIANT');
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_license_plans_payment_grace_snapshot
+BEFORE INSERT ON license_plans
+WHEN NEW.license_model = 'subscription'
+BEGIN
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM products
+    WHERE instance_id = NEW.instance_id
+      AND id = NEW.product_id
+      AND payment_grace_seconds = NEW.payment_grace_seconds
+  ) THEN RAISE(ABORT, 'LICENSE_PLAN_PAYMENT_GRACE_MISMATCH') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_licenses_payment_grace_snapshot
+BEFORE INSERT ON licenses
+WHEN NEW.renewal_mode = 'billing'
+BEGIN
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM license_plans
+    WHERE instance_id = NEW.instance_id
+      AND product_id = NEW.product_id
+      AND id = NEW.plan_id
+      AND payment_grace_seconds = NEW.payment_grace_seconds
+  ) THEN RAISE(ABORT, 'LICENSE_PAYMENT_GRACE_MISMATCH') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_instance_memberships_last_owner_update
+BEFORE UPDATE OF role, status ON instance_memberships
+WHEN OLD.role = 'owner' AND OLD.status = 'active'
+  AND (NEW.role <> 'owner' OR NEW.status <> 'active')
+  AND EXISTS (
+    SELECT 1 FROM instances
+    WHERE id = OLD.instance_id AND status = 'active'
+  )
+BEGIN
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM instance_memberships
+    WHERE instance_id = OLD.instance_id
+      AND user_id <> OLD.user_id
+      AND role = 'owner'
+      AND status = 'active'
+  ) THEN RAISE(ABORT, 'LAST_ACTIVE_OWNER_REQUIRED') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_instance_memberships_last_owner_delete
+BEFORE DELETE ON instance_memberships
+WHEN OLD.role = 'owner' AND OLD.status = 'active'
+  AND EXISTS (
+    SELECT 1 FROM instances
+    WHERE id = OLD.instance_id AND status = 'active'
+  )
+BEGIN
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM instance_memberships
+    WHERE instance_id = OLD.instance_id
+      AND user_id <> OLD.user_id
+      AND role = 'owner'
+      AND status = 'active'
+  ) THEN RAISE(ABORT, 'LAST_ACTIVE_OWNER_REQUIRED') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_instance_memberships_invitation_on_insert
+BEFORE INSERT ON instance_memberships
+WHEN NOT (
+  NEW.role = 'owner'
+  AND NEW.status = 'active'
+  AND NEW.joined_by_invitation_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM deployment_bootstrap)
+  AND NOT EXISTS (SELECT 1 FROM instance_memberships)
+)
+BEGIN
+  SELECT (CASE WHEN NEW.status <> 'active' OR NOT EXISTS (
+    SELECT 1 FROM instance_invitations AS invitation
+    JOIN users AS invited_user ON invited_user.id = NEW.user_id
+    WHERE invitation.instance_id = NEW.instance_id
+      AND invitation.id = NEW.joined_by_invitation_id
+      AND invitation.status = 'pending'
+      AND julianday(invitation.expires_at) > julianday('now')
+      AND invitation.email = invited_user.email COLLATE NOCASE
+      AND invitation.role = NEW.role
+  ) THEN RAISE(ABORT, 'MEMBERSHIP_INVITATION_REQUIRED') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_instance_memberships_invitation_on_rejoin
+BEFORE UPDATE OF status, role, joined_by_invitation_id ON instance_memberships
+WHEN OLD.status = 'removed' AND NEW.status = 'active'
+BEGIN
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM instance_invitations AS invitation
+    JOIN users AS invited_user ON invited_user.id = NEW.user_id
+    WHERE invitation.instance_id = NEW.instance_id
+      AND invitation.id = NEW.joined_by_invitation_id
+      AND invitation.status = 'pending'
+      AND julianday(invitation.expires_at) > julianday('now')
+      AND invitation.email = invited_user.email COLLATE NOCASE
+      AND invitation.role = NEW.role
+  ) THEN RAISE(ABORT, 'MEMBERSHIP_INVITATION_REQUIRED') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_instance_invitations_create_guard
+BEFORE INSERT ON instance_invitations
+BEGIN
+  SELECT (CASE WHEN NEW.status <> 'pending'
+    OR NEW.accepted_by_user_id IS NOT NULL
+    OR NEW.accepted_at IS NOT NULL
+    OR NEW.revoked_at IS NOT NULL
+    OR julianday(NEW.expires_at) <= julianday('now')
+    THEN RAISE(ABORT, 'INSTANCE_INVITATION_CREATE_INVALID') END);
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM instance_memberships
+    WHERE instance_id = NEW.instance_id
+      AND user_id = NEW.invited_by_user_id
+      AND role = 'owner'
+      AND status = 'active'
+  ) THEN RAISE(ABORT, 'INSTANCE_INVITATION_ACTIVE_OWNER_REQUIRED') END);
+  SELECT (CASE WHEN NOT EXISTS (
+    SELECT 1 FROM email_deliveries
+    WHERE instance_id = NEW.instance_id
+      AND id = NEW.delivery_id
+      AND recipient_type = 'instance_invitation'
+      AND customer_id IS NULL
+      AND recipient_email = NEW.email COLLATE NOCASE
+      AND status IN ('pending', 'waiting_configuration')
+  ) THEN RAISE(ABORT, 'INSTANCE_INVITATION_DELIVERY_INVALID') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_instance_invitations_terminal_guard
+BEFORE UPDATE OF status ON instance_invitations
+BEGIN
+  SELECT (CASE WHEN OLD.status <> 'pending'
+    THEN RAISE(ABORT, 'INSTANCE_INVITATION_ALREADY_FINALIZED') END);
+  SELECT (CASE WHEN NEW.status NOT IN ('accepted', 'revoked', 'expired')
+    THEN RAISE(ABORT, 'INSTANCE_INVITATION_INVALID_TRANSITION') END);
+  SELECT (CASE WHEN NEW.status = 'accepted'
+    AND julianday(OLD.expires_at) <= julianday('now')
+    THEN RAISE(ABORT, 'INSTANCE_INVITATION_EXPIRED') END);
+  SELECT (CASE WHEN NEW.status = 'accepted' AND NOT EXISTS (
+    SELECT 1 FROM users AS accepted_user
+    JOIN instance_memberships AS membership
+      ON membership.instance_id = NEW.instance_id
+     AND membership.user_id = accepted_user.id
+    WHERE accepted_user.id = NEW.accepted_by_user_id
+      AND accepted_user.email = NEW.email COLLATE NOCASE
+      AND membership.role = NEW.role
+      AND membership.status = 'active'
+      AND membership.joined_by_invitation_id = NEW.id
+      AND NEW.accepted_at IS NOT NULL
+      AND NEW.revoked_at IS NULL
+  ) THEN RAISE(ABORT, 'INSTANCE_INVITATION_ACCEPTANCE_INVALID') END);
+  SELECT (CASE WHEN NEW.status = 'revoked'
+    AND (NEW.accepted_by_user_id IS NOT NULL
+      OR NEW.accepted_at IS NOT NULL
+      OR NEW.revoked_at IS NULL)
+    THEN RAISE(ABORT, 'INSTANCE_INVITATION_REVOCATION_INVALID') END);
+  SELECT (CASE WHEN NEW.status = 'expired'
+    AND (julianday(OLD.expires_at) > julianday('now')
+      OR NEW.accepted_by_user_id IS NOT NULL
+      OR NEW.accepted_at IS NOT NULL
+      OR NEW.revoked_at IS NOT NULL)
+    THEN RAISE(ABORT, 'INSTANCE_INVITATION_EXPIRATION_INVALID') END);
+END;
+--> statement-breakpoint
+CREATE TRIGGER trg_customer_login_challenges_terminal_guard
+BEFORE UPDATE OF consumed_at, revoked_at ON customer_login_challenges
+WHEN OLD.consumed_at IS NOT NULL
+  OR OLD.revoked_at IS NOT NULL
+  OR (NEW.consumed_at IS NOT NULL AND julianday(OLD.expires_at) <= julianday('now'))
+  OR ((NEW.consumed_at IS NULL) = (NEW.revoked_at IS NULL))
+BEGIN
+  SELECT RAISE(ABORT, 'CUSTOMER_LOGIN_CHALLENGE_NOT_CONSUMABLE');
 END;

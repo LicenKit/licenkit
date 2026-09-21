@@ -25,7 +25,7 @@ function input(
     replyTo: "support@example.com",
     templateRef: "license-issued-v1",
     variables: {
-      account_name: "Example Team",
+      instance_name: "Example Team",
       license_key: "LIC-SECRET-VALUE",
       key_version: 2,
     },
@@ -133,7 +133,7 @@ describe("Resend email Provider adapter", () => {
       template: {
         id: "license-issued-v1",
         variables: {
-          account_name: "Example Team",
+          instance_name: "Example Team",
           license_key: "LIC-SECRET-VALUE",
           key_version: 2,
         },
@@ -445,7 +445,7 @@ describe("Resend email Provider adapter", () => {
     const adapter = createResendEmailProviderAdapter({ fetchImpl });
     const request = input({
       variables: {
-        account_name: "Example Team",
+        instance_name: "Example Team",
         recipient_email: "buyer@example.net",
         license_key: licenseKey,
         access_url: `https://site.example.test/auth#token=${magicToken}`,

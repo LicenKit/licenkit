@@ -18,7 +18,7 @@ import { EmailDeliveryPanel } from "./EmailDeliveryPanel";
 
 type Tab = "issues" | "email" | "events";
 
-export function OperationsView({ canManage }: { canManage: boolean }) {
+export function OperationsView({ canManage, onIssuesChanged }: { canManage: boolean; onIssuesChanged?: () => void }) {
   const [tab, setTab] = useState<Tab>("issues");
   const [issues, setIssues] = useState<SystemIssue[]>([]);
   const [events, setEvents] = useState<InboundEvent[]>([]);
@@ -68,6 +68,7 @@ export function OperationsView({ canManage }: { canManage: boolean }) {
     try {
       await api.admin.system.issues.process(item.id);
       await load();
+      onIssuesChanged?.();
     } catch (caught) {
       setError(caught);
     } finally {

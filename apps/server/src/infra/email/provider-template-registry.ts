@@ -149,7 +149,7 @@ const RESEND_TEMPLATE_EXAMPLES = Object.freeze([
   <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
     <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
       <h1 style="margin-top:0;">Your {{{product_name}}} license</h1>
-      <p>{{{account_name}}} has issued a license for {{{product_name}}}.</p>
+      <p>{{{instance_name}}} has issued a license for {{{product_name}}}.</p>
       <p>Your license key:</p>
       <p style="padding:16px;background:#f3f4f6;border-radius:8px;font-family:monospace;font-size:16px;word-break:break-all;">
         {{{license_key}}}
@@ -160,7 +160,7 @@ const RESEND_TEMPLATE_EXAMPLES = Object.freeze([
 </html>`,
     text: `Your {{{product_name}}} license
 
-{{{account_name}}} has issued a license for {{{product_name}}}.
+{{{instance_name}}} has issued a license for {{{product_name}}}.
 
 License key: {{{license_key}}}
 License model: {{{license_model}}}
@@ -178,7 +178,7 @@ License model: {{{license_model}}}
   <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
     <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
       <h1 style="margin-top:0;">Your recovered {{{product_name}}} license</h1>
-      <p>{{{account_name}}} has generated a new license key. The previous key is no longer valid.</p>
+      <p>{{{instance_name}}} has generated a new license key. The previous key is no longer valid.</p>
       <p>Your new license key:</p>
       <p style="padding:16px;background:#f3f4f6;border-radius:8px;font-family:monospace;font-size:16px;word-break:break-all;">
         {{{license_key}}}
@@ -189,7 +189,7 @@ License model: {{{license_model}}}
 </html>`,
     text: `Your recovered {{{product_name}}} license
 
-{{{account_name}}} has generated a new license key. The previous key is no longer valid.
+{{{instance_name}}} has generated a new license key. The previous key is no longer valid.
 
 New license key: {{{license_key}}}
 Key version: {{{key_version}}}
@@ -207,7 +207,7 @@ Key version: {{{key_version}}}
   <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
     <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
       <h1 style="margin-top:0;">Your {{{product_name}}} license was reset</h1>
-      <p>{{{account_name}}} completed a security reset for this license.</p>
+      <p>{{{instance_name}}} completed a security reset for this license.</p>
       <p>The previous license key and existing device activations are no longer valid.</p>
       <p>Your new license key:</p>
       <p style="padding:16px;background:#f3f4f6;border-radius:8px;font-family:monospace;font-size:16px;word-break:break-all;">
@@ -219,7 +219,7 @@ Key version: {{{key_version}}}
 </html>`,
     text: `Your {{{product_name}}} license was reset
 
-{{{account_name}}} completed a security reset for this license.
+{{{instance_name}}} completed a security reset for this license.
 The previous license key and existing device activations are no longer valid.
 
 New license key: {{{license_key}}}
@@ -232,12 +232,12 @@ Key version: {{{key_version}}}
     notificationType: "customer.portal_access_requested",
     contractVersion: 1,
     fileName: "customer-portal-access-requested-v1.resend.html",
-    subject: "Sign in to {{{account_name}}}",
+    subject: "Sign in to {{{instance_name}}}",
     html: `<!doctype html>
 <html lang="en">
   <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
     <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
-      <h1 style="margin-top:0;">Sign in to {{{account_name}}}</h1>
+      <h1 style="margin-top:0;">Sign in to {{{instance_name}}}</h1>
       <p>Use the button below to open your customer portal.</p>
       <p style="margin:24px 0;">
         <a href="{{{access_url}}}" style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;">
@@ -249,13 +249,43 @@ Key version: {{{key_version}}}
     </main>
   </body>
 </html>`,
-    text: `Sign in to {{{account_name}}}
+    text: `Sign in to {{{instance_name}}}
 
 Open your customer portal:
 {{{access_url}}}
 
 This link expires at {{{expires_at}}} and can only be used once.
 If you did not request this email, you can ignore it.`,
+  }),
+  example({
+    provider: "resend",
+    notificationType: "instance.member_invited",
+    contractVersion: 1,
+    fileName: "instance-member-invited-v1.resend.html",
+    subject: "You are invited to {{{instance_name}}}",
+    html: `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
+    <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
+      <h1 style="margin-top:0;">Join {{{instance_name}}}</h1>
+      <p>You have been invited to join this LicenKit Instance.</p>
+      <p style="margin:24px 0;">
+        <a href="{{{invitation_url}}}" style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;">
+          Review invitation
+        </a>
+      </p>
+      <p>This link expires at {{{expires_at}}} and can only be used once.</p>
+      <p>If you did not expect this invitation, you can ignore it.</p>
+    </main>
+  </body>
+</html>`,
+    text: `Join {{{instance_name}}}
+
+Review your invitation:
+{{{invitation_url}}}
+
+This link expires at {{{expires_at}}} and can only be used once.
+If you did not expect this invitation, you can ignore it.`,
   }),
 ] satisfies readonly EmailProviderTemplateExample[]);
 

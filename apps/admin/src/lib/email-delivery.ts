@@ -28,6 +28,13 @@ export function templateDownload(input: { fileName: string; html: string }): {
   return { fileName: input.fileName, mimeType: "text/html;charset=utf-8", content: input.html };
 }
 
+export function deliveryRecipientLabel(
+  delivery: Pick<EmailDelivery, "recipientType" | "customerId">,
+): string {
+  if (delivery.recipientType === "instance_invitation") return "Instance 邀请";
+  return delivery.customerId ?? "Customer 信息缺失";
+}
+
 export function mayDuplicateOnResend(delivery: EmailDelivery): boolean {
   return delivery.lastError?.possible_duplicate_on_resend === true;
 }

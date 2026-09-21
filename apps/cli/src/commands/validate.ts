@@ -12,7 +12,7 @@ export async function validateCommand(): Promise<void> {
     const fingerprint = await getMachineFingerprint();
     const response = await apiValidate({
       serverUrl: stored.serverUrl,
-      accountId: stored.accountId,
+      instanceId: stored.instanceId,
       productId: stored.productId,
       activationId: stored.activationId,
       machineToken: stored.machineToken,
@@ -25,7 +25,7 @@ export async function validateCommand(): Promise<void> {
       throw new Error("Server validation response changed the activation identity");
     }
     await verifyCredentialResponse(response, stored.trustedSigningKeys ?? {}, {
-      accountId: stored.accountId,
+      instanceId: stored.instanceId,
       productId: stored.productId,
       activationId: stored.activationId,
       fingerprint,
