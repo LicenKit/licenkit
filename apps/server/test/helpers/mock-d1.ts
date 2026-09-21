@@ -134,6 +134,7 @@ export function createTestEnv(overrides?: Partial<Env>): TestEnvContext {
     STORAGE_ENCRYPTION_KEY: defaultMasterKey,
     STORAGE_ENCRYPTION_KEY_ID: "test-primary",
     INITIAL_SETUP_TOKEN: "test-setup-token-super-secure-32chars",
+    CUSTOMER_SITE_ORIGIN: "https://license.example.test",
     ENVIRONMENT: "test",
     APP_VERSION: "1.0.0",
     ...overrides,

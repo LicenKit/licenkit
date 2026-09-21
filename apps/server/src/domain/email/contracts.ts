@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AppError } from "../../middleware/error";
+import { isTrustedUrlProtocolAllowed } from "../../config/trusted-url";
 
 export type EmailVariableValue = string | number;
 export type EmailVariableFormat = "email" | "uri" | "date-time";
@@ -36,6 +37,12 @@ export interface EmailVariableValidationContext {
    * accepted merely because they are valid HTTPS URLs.
    */
   readonly trustedSiteUrl?: string;
+  /** The current trusted Admin/API Origin for Instance invitation links. */
+  readonly trustedAdminOrigin?: string;
+  /** Dispatch-only: variables came from an authenticated, prevalidated Delivery envelope. */
+  readonly authenticatedPreparedDelivery?: boolean;
+  /** Runtime environment used by the narrow local-loopback HTTP exception. */
+  readonly environment?: string;
   /** The current Instance slug expected in a customer portal access URL. */
   readonly expectedInstanceSlug?: string;
 }
@@ -44,6 +51,7 @@ export interface CustomerPortalAccessUrlInput {
   readonly trustedSiteUrl: string;
   readonly instanceSlug: string;
   readonly oneTimeToken: string;
+  readonly environment?: string;
 }
 
 const EMAIL_SCHEMA = z.string().email().max(320);
@@ -207,7 +215,7 @@ const INSTANCE_INVITATION_VARIABLES = Object.freeze([
     format: "uri",
     minLength: 1,
     maxLength: 2048,
-    description: "由当前 Instance 的可信 Site URL Origin 生成的一次性管理员邀请地址",
+    description: "由当前可信 Admin Origin 生成的一次性管理员邀请地址",
     example:
       "https://license.example.com/admin/invitations/accept#token=ivk_0000000000000000000000000000000000000000000000000000000000000000",
   }),
@@ -329,7 +337,7 @@ export function getEmailNotificationContract(
   return found;
 }
 
-function parseTrustedSiteUrl(value: string): URL {
+function parseTrustedSiteUrl(value: string, environment?: string): URL {
   let url: URL;
   try {
     url = new URL(value);
@@ -342,7 +350,7 @@ function parseTrustedSiteUrl(value: string): URL {
     );
   }
   if (
-    url.protocol !== "https:" ||
+    !isTrustedUrlProtocolAllowed(url, environment) ||
     url.username ||
     url.password ||
     url.search ||
@@ -350,7 +358,7 @@ function parseTrustedSiteUrl(value: string): URL {
   ) {
     throw contractError(
       "EMAIL_TRUSTED_SITE_URL_INVALID",
-      "The trusted Site URL must be an HTTPS URL without credentials, query parameters, or a fragment.",
+      "The trusted Site URL must use HTTPS, except for non-production localhost or 127.0.0.1 HTTP, and cannot contain credentials, query parameters, or a fragment.",
       undefined,
       500,
     );
@@ -362,7 +370,7 @@ function parseTrustedSiteUrl(value: string): URL {
 export function buildCustomerPortalAccessUrl(
   input: CustomerPortalAccessUrlInput,
 ): string {
-  const siteUrl = parseTrustedSiteUrl(input.trustedSiteUrl);
+  const siteUrl = parseTrustedSiteUrl(input.trustedSiteUrl, input.environment);
   if (
     !INSTANCE_SLUG_PATTERN.test(input.instanceSlug) ||
     input.instanceSlug.length > 63
@@ -442,7 +450,7 @@ function assertTrustedPortalAccessUrl(
       { variable: "access_url" },
     );
   }
-  const siteUrl = parseTrustedSiteUrl(context.trustedSiteUrl);
+  const siteUrl = parseTrustedSiteUrl(context.trustedSiteUrl, context.environment);
   let accessUrl: URL;
   try {
     accessUrl = new URL(value);
@@ -463,7 +471,7 @@ function assertTrustedPortalAccessUrl(
     : "";
   const expectedPath = `/customer/${context.expectedInstanceSlug}/auth`;
   if (
-    accessUrl.protocol !== "https:" ||
+    !isTrustedUrlProtocolAllowed(accessUrl, context.environment) ||
     accessUrl.origin !== siteUrl.origin ||
     accessUrl.username ||
     accessUrl.password ||
@@ -483,14 +491,42 @@ function assertTrustedInstanceInvitationUrl(
   value: string,
   context: EmailVariableValidationContext,
 ): void {
-  if (!context.trustedSiteUrl) {
+  if (!context.trustedAdminOrigin && !context.authenticatedPreparedDelivery) {
     throw contractError(
-      "EMAIL_TRUSTED_SITE_URL_REQUIRED",
-      "The trusted Site URL is required to validate invitation_url.",
+      "EMAIL_TRUSTED_ADMIN_ORIGIN_REQUIRED",
+      "The trusted Admin Origin is required to validate invitation_url.",
       { variable: "invitation_url" },
     );
   }
-  const siteUrl = parseTrustedSiteUrl(context.trustedSiteUrl);
+  let adminOrigin: URL | undefined;
+  if (context.trustedAdminOrigin) {
+    try {
+      adminOrigin = new URL(context.trustedAdminOrigin);
+    } catch {
+      throw contractError(
+        "EMAIL_TRUSTED_ADMIN_ORIGIN_INVALID",
+        "The trusted Admin Origin is invalid.",
+        undefined,
+        500,
+      );
+    }
+    if (
+      !isTrustedUrlProtocolAllowed(adminOrigin, context.environment) ||
+      adminOrigin.origin !== context.trustedAdminOrigin ||
+      adminOrigin.username ||
+      adminOrigin.password ||
+      adminOrigin.pathname !== "/" ||
+      adminOrigin.search ||
+      adminOrigin.hash
+    ) {
+      throw contractError(
+        "EMAIL_TRUSTED_ADMIN_ORIGIN_INVALID",
+        "The trusted Admin Origin must be an exact HTTPS Origin, except for non-production localhost or 127.0.0.1 HTTP.",
+        undefined,
+        500,
+      );
+    }
+  }
   let invitationUrl: URL;
   try {
     invitationUrl = new URL(value);
@@ -505,8 +541,8 @@ function assertTrustedInstanceInvitationUrl(
     ? invitationUrl.hash.slice("#token=".length)
     : "";
   if (
-    invitationUrl.protocol !== "https:" ||
-    invitationUrl.origin !== siteUrl.origin ||
+    !isTrustedUrlProtocolAllowed(invitationUrl, context.environment) ||
+    (adminOrigin && invitationUrl.origin !== adminOrigin.origin) ||
     invitationUrl.username ||
     invitationUrl.password ||
     invitationUrl.search ||
@@ -515,7 +551,7 @@ function assertTrustedInstanceInvitationUrl(
   ) {
     throw contractError(
       "EMAIL_INVITATION_URL_UNTRUSTED",
-      "Email variable invitation_url was not generated from the trusted Instance invitation boundary.",
+      "Email variable invitation_url was not generated from the trusted Admin Origin boundary.",
       { variable: "invitation_url" },
     );
   }

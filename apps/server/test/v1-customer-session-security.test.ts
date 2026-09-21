@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { AppContext } from "../src/types";
 import { sha256Hex } from "../src/infra/crypto";
 import { errorHandler } from "../src/middleware/error";
+import { customerSessionAuth } from "../src/middleware/auth";
 import { customerRouter } from "../src/routes/customer.routes";
 import {
   CUSTOMER_CSRF_COOKIE,
@@ -13,6 +14,7 @@ import {
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const ORIGIN = "https://license.example.test";
+const CUSTOMER_SITE_ORIGIN = "https://site.example.test";
 const INSTANCE_A = "ins_customer_security_a";
 const INSTANCE_B = "ins_customer_security_b";
 const CUSTOMER_A = "cus_customer_security_a";
@@ -54,7 +56,10 @@ describe("V1 Customer Session security boundaries", () => {
   let sessionA: SeededSession;
 
   beforeEach(async () => {
-    testEnv = createTestEnv({ CUSTOMER_RECENT_AUTH_SECONDS: 900 });
+    testEnv = createTestEnv({
+      CUSTOMER_RECENT_AUTH_SECONDS: 900,
+      CUSTOMER_SITE_ORIGIN,
+    });
     const now = new Date();
     const nowIso = now.toISOString();
 
@@ -66,7 +71,7 @@ describe("V1 Customer Session security boundaries", () => {
         instanceId,
         `Customer Security ${suffix.toUpperCase()}`,
         `customer-security-${suffix}`,
-        `${ORIGIN}/customer/${suffix}`,
+        `${CUSTOMER_SITE_ORIGIN}/customer/${suffix}`,
         nowIso,
         nowIso,
       );
@@ -278,7 +283,7 @@ describe("V1 Customer Session security boundaries", () => {
     });
     const response = await customerApp().request(
       `${ORIGIN}/api/v1/customer/me`,
-      { headers: { Cookie: crossInstanceCookie } },
+      { headers: { Cookie: crossInstanceCookie, Origin: CUSTOMER_SITE_ORIGIN } },
       testEnv.env,
     );
 
@@ -286,24 +291,136 @@ describe("V1 Customer Session security boundaries", () => {
     expect((await response.json() as any).error.code).toBe("UNAUTHORIZED");
   });
 
+  it("updates last_seen_at only after a trusted Customer request succeeds", async () => {
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT last_seen_at FROM customer_sessions WHERE instance_id = ? AND id = ?",
+    ).get(INSTANCE_A, "cse_customer_security_a")).toEqual({ last_seen_at: null });
+
+    const response = await customerApp().request(
+      `${ORIGIN}/api/v1/customer/me`,
+      { headers: { Cookie: sessionA.cookie, Origin: CUSTOMER_SITE_ORIGIN } },
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT last_seen_at FROM customer_sessions WHERE instance_id = ? AND id = ?",
+    ).get(INSTANCE_A, "cse_customer_security_a")).toMatchObject({
+      last_seen_at: expect.stringMatching(/Z$/),
+    });
+  });
+
+  it("does not count a redirect as a successful Customer Session use", async () => {
+    const app = new Hono<AppContext>();
+    app.onError(errorHandler);
+    app.use("*", customerSessionAuth);
+    app.get("/redirect", (c) => c.redirect("https://site.example.test/customer", 302));
+
+    const response = await app.request(
+      `${ORIGIN}/redirect`,
+      { headers: { Cookie: sessionA.cookie } },
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(302);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT last_seen_at FROM customer_sessions WHERE instance_id = ? AND id = ?",
+    ).get(INSTANCE_A, "cse_customer_security_a")).toEqual({ last_seen_at: null });
+  });
+
+  it("does not count a downstream business error as a successful Customer Session use", async () => {
+    const app = new Hono<AppContext>();
+    app.onError(errorHandler);
+    app.use("*", customerSessionAuth);
+    app.get("/business-error", (c) => c.json({ success: false }, 400));
+
+    const response = await app.request(
+      `${ORIGIN}/business-error`,
+      { headers: { Cookie: sessionA.cookie } },
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT last_seen_at FROM customer_sessions WHERE instance_id = ? AND id = ?",
+    ).get(INSTANCE_A, "cse_customer_security_a")).toEqual({ last_seen_at: null });
+  });
+
+  it("keeps a successful business response when the best-effort last_seen update fails", async () => {
+    const originalPrepare = testEnv.d1.prepare.bind(testEnv.d1);
+    testEnv.d1.prepare = (query: string) => {
+      if (query.includes("UPDATE customer_sessions SET last_seen_at")) {
+        return {
+          bind() {
+            return {
+              async run() {
+                throw Object.assign(
+                  new TypeError("forced last_seen write failure"),
+                  { code: "D1_WRITE_FAILED" },
+                );
+              },
+            };
+          },
+        };
+      }
+      return originalPrepare(query);
+    };
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await customerApp().request(
+      `${ORIGIN}/api/v1/customer/me`,
+      {
+        headers: {
+          Cookie: sessionA.cookie,
+          Origin: CUSTOMER_SITE_ORIGIN,
+          "X-Request-Id": "req_last_seen_touch_failure",
+        },
+      },
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true });
+    expect(errorLog).toHaveBeenCalledWith(
+      "Customer Session last_seen update failed",
+      {
+        code: "CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED",
+        requestId: "req_last_seen_touch_failure",
+        instanceId: INSTANCE_A,
+        sessionId: "cse_customer_security_a",
+        errorType: "TypeError",
+        errorCode: "D1_WRITE_FAILED",
+        errorMessage: "forced last_seen write failure",
+      },
+    );
+    const serializedLog = JSON.stringify(errorLog.mock.calls);
+    expect(serializedLog).not.toContain(sessionA.sessionToken);
+    expect(serializedLog).not.toContain(sessionA.csrfToken);
+    expect(serializedLog).not.toContain(sessionA.cookie);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT last_seen_at FROM customer_sessions WHERE instance_id = ? AND id = ?",
+    ).get(INSTANCE_A, "cse_customer_security_a")).toEqual({ last_seen_at: null });
+    errorLog.mockRestore();
+  });
+
   it("does not let Customer A read or modify Customer B resources", async () => {
     const ownLicense = await customerApp().request(
       `${ORIGIN}/api/v1/customer/licenses/${LICENSE_A}`,
-      { headers: { Cookie: sessionA.cookie } },
+      { headers: { Cookie: sessionA.cookie, Origin: CUSTOMER_SITE_ORIGIN } },
       testEnv.env,
     );
     expect(ownLicense.status).toBe(200);
 
     const otherLicense = await customerApp().request(
       `${ORIGIN}/api/v1/customer/licenses/${LICENSE_B}`,
-      { headers: { Cookie: sessionA.cookie } },
+      { headers: { Cookie: sessionA.cookie, Origin: CUSTOMER_SITE_ORIGIN } },
       testEnv.env,
     );
     expect(otherLicense.status).toBe(404);
 
     const mutation = await deactivate({
       cookie: sessionA.cookie,
-      origin: ORIGIN,
+      origin: CUSTOMER_SITE_ORIGIN,
       csrfHeader: sessionA.csrfToken,
       licenseId: LICENSE_B,
       activationId: ACTIVATION_B,
@@ -316,20 +433,35 @@ describe("V1 Customer Session security boundaries", () => {
     {
       name: "missing Origin",
       headers: () => ({ cookie: sessionA.cookie, csrfHeader: sessionA.csrfToken }),
+      code: "CUSTOMER_ORIGIN_REQUIRED",
     },
     {
       name: "missing CSRF Header",
-      headers: () => ({ cookie: sessionA.cookie, origin: ORIGIN }),
+      headers: () => ({ cookie: sessionA.cookie, origin: CUSTOMER_SITE_ORIGIN }),
+      code: "CUSTOMER_CSRF_HEADER_MISSING",
     },
     {
       name: "mismatched CSRF Header and Cookie",
-      headers: () => ({ cookie: sessionA.cookie, origin: ORIGIN, csrfHeader: "ccf_mismatch" }),
+      headers: () => ({ cookie: sessionA.cookie, origin: CUSTOMER_SITE_ORIGIN, csrfHeader: "ccf_mismatch" }),
+      code: "CUSTOMER_CSRF_TOKEN_MISMATCH",
     },
-  ])("rejects a Customer write with $name and preserves the resource", async ({ headers }) => {
+    {
+      name: "a similar but untrusted Origin",
+      headers: () => ({
+        cookie: sessionA.cookie,
+        origin: "https://site.example.test.evil.example",
+        csrfHeader: sessionA.csrfToken,
+      }),
+      code: "CUSTOMER_ORIGIN_NOT_ALLOWED",
+    },
+  ])("rejects a Customer write with $name and preserves every side effect", async ({ headers, code }) => {
     const response = await deactivate(headers());
     expect(response.status).toBe(403);
-    expect((await response.json() as any).error.code).toBe("FORBIDDEN");
+    expect((await response.json() as any).error.code).toBe(code);
     expectActivationUntouched();
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT last_seen_at FROM customer_sessions WHERE instance_id = ? AND id = ?",
+    ).get(INSTANCE_A, "cse_customer_security_a")).toEqual({ last_seen_at: null });
   });
 
   it("rejects a matching forged CSRF Header/Cookie pair that is not bound to the Session", async () => {
@@ -341,16 +473,19 @@ describe("V1 Customer Session security boundaries", () => {
     });
     const response = await deactivate({
       cookie: forgedCookie,
-      origin: ORIGIN,
+      origin: CUSTOMER_SITE_ORIGIN,
       csrfHeader: forgedCsrf,
     });
 
     expect(response.status).toBe(403);
     expect((await response.json() as any).error).toMatchObject({
-      code: "FORBIDDEN",
-      message: "CSRF token is not bound to the current session",
+      code: "CUSTOMER_CSRF_SESSION_MISMATCH",
+      message: "Customer CSRF token is not bound to the current session",
     });
     expectActivationUntouched();
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT last_seen_at FROM customer_sessions WHERE instance_id = ? AND id = ?",
+    ).get(INSTANCE_A, "cse_customer_security_a")).toEqual({ last_seen_at: null });
   });
 
   it("rejects an expired Customer Session before a write and preserves the resource", async () => {
@@ -364,7 +499,7 @@ describe("V1 Customer Session security boundaries", () => {
     });
     const response = await deactivate({
       cookie: expiredSession.cookie,
-      origin: ORIGIN,
+      origin: CUSTOMER_SITE_ORIGIN,
       csrfHeader: expiredSession.csrfToken,
     });
 
@@ -384,7 +519,7 @@ describe("V1 Customer Session security boundaries", () => {
     });
     const response = await deactivate({
       cookie: staleSession.cookie,
-      origin: ORIGIN,
+      origin: CUSTOMER_SITE_ORIGIN,
       csrfHeader: staleSession.csrfToken,
     });
 

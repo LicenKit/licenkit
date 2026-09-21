@@ -53,7 +53,7 @@ export function setCustomerCookies(
 ): void {
   setCookie(c, CUSTOMER_SESSION_COOKIE, input.sessionToken, cookieOptions(input.maxAge, true));
   setCookie(c, CUSTOMER_INSTANCE_COOKIE, input.instanceId, cookieOptions(input.maxAge, true));
-  setCookie(c, CUSTOMER_CSRF_COOKIE, input.csrfToken, cookieOptions(input.maxAge, false));
+  setCookie(c, CUSTOMER_CSRF_COOKIE, input.csrfToken, cookieOptions(input.maxAge, true));
 }
 
 export function clearAdminCookies(c: Context): void {

@@ -49,6 +49,10 @@ Provider Webhook Secret、API Secret 和 Email API Key 通过 Admin 加密进入
 
 非敏感变量由根 `wrangler.jsonc` 管理。测试和正式环境使用相同模块、API 与流程，差异只来自部署配置和 Provider 环境。
 
+`CUSTOMER_SITE_ORIGIN` 必须是唯一可信 Customer 页面 Origin，不含 credentials、路径、Query 或 Fragment，并与 Setup 所使用的 LicenKit API Origin 保持同协议、同可注册站点；正式环境及普通域名必须为 HTTPS。仅显式非正式环境的 `localhost` 与 `127.0.0.1` 允许 HTTP，IPv6 loopback 不支持；该策略同时用于一次性链接构造、邮件 prepare/dispatch 合同。远程验收要用真实页面 Origin 验证 Customer 预检、带 Cookie 请求和错误响应，并验证同 Origin GET 在浏览器不携带 Origin 时仍可读取，同时确认 Admin、Client、Webhook 路径没有 Customer CORS Header。
+
+Customer Session 的 `last_seen_at` 是非关键遥测：仅最终 2xx best-effort 更新。失败日志使用 `CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED`，包含 `requestId`、`instanceId`、`sessionId`、底层错误类型、受限长度的错误码与脱敏消息；不得记录 Cookie、Token、SQL bind 或请求包体，且不得覆盖业务响应。
+
 ### 3.3 客户端与站点变量
 
 公开命名统一为：
@@ -67,7 +71,7 @@ JSON 使用 `instance_id/instance_slug`，TypeScript 使用 `instanceId/instance
 根配置至少声明：
 
 - D1 binding `DB`；
-- Admin/Customer Site 静态 Assets；
+- Admin 静态 Assets；Customer Site 由使用方独立部署；
 - 每分钟 Scheduled Trigger；
 - Workers Observability `enabled: true`。
 

@@ -5,6 +5,14 @@ import { errorHandler } from "../src/middleware/error";
 import { customerAuthRouter } from "../src/routes/customer-auth.routes";
 import { decryptEnvelopeV1, encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
+import {
+  CUSTOMER_CSRF_COOKIE,
+  CUSTOMER_INSTANCE_COOKIE,
+  CUSTOMER_SESSION_COOKIE,
+} from "../src/services/identity/session";
+
+const API_ORIGIN = "https://license.example.test";
+const CUSTOMER_SITE_ORIGIN = "https://site.example.test";
 
 function customerAuthApp() {
   const app = new Hono<AppContext>();
@@ -24,11 +32,12 @@ describe("V1 Customer Magic Link request contract", () => {
       STORAGE_ENCRYPTION_KEY_ID: "test-primary",
       TURNSTILE_SECRET_KEY: "turnstile-secret",
       TURNSTILE_SITE_KEY: "turnstile-site-key",
+      CUSTOMER_SITE_ORIGIN,
     } as any);
     const now = new Date().toISOString();
     testEnv.sqliteDb.prepare(
       `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?, 'Magic Link', 'magic', 'https://license.example.test/site', 'active', ?, ?)`
+       VALUES (?, 'Magic Link', 'magic', 'https://site.example.test/site', 'active', ?, ?)`
     ).run(instanceId, now, now);
     testEnv.sqliteDb.prepare(
       `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
@@ -37,7 +46,7 @@ describe("V1 Customer Magic Link request contract", () => {
     siteverify = vi.fn(async () => new Response(JSON.stringify({
       success: true,
       action: "customer_magic_link",
-      hostname: "license.example.test",
+      hostname: "site.example.test",
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -53,11 +62,11 @@ describe("V1 Customer Magic Link request contract", () => {
     executionContext?: ExecutionContext,
   ): Promise<Response> {
     return customerAuthApp().request(
-      "https://license.example.test/api/v1/customer/auth/magic-link",
+      `${API_ORIGIN}/api/v1/customer/auth/magic-link`,
       {
         method: "POST",
         headers: {
-          Origin: "https://license.example.test",
+          Origin: CUSTOMER_SITE_ORIGIN,
           "Content-Type": "application/json",
           "CF-Connecting-IP": "203.0.113.10",
         },
@@ -135,21 +144,34 @@ describe("V1 Customer Magic Link request contract", () => {
 
   async function consumeMagicLink(token: string): Promise<Response> {
     return customerAuthApp().request(
-      "https://license.example.test/api/v1/customer/auth/magic-link/consume",
+      `${API_ORIGIN}/api/v1/customer/auth/magic-link/consume`,
       {
         method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({ instance_slug: "magic", token }),
       },
       testEnv.env,
     );
   }
 
+  function responseCookies(response: Response): string[] {
+    return (response.headers.get("set-cookie") ?? "")
+      .split(/,(?=\s*__Host-)/)
+      .map((value) => value.trim());
+  }
+
+  function cookieValue(cookies: string[], name: string): string {
+    const serialized = cookies.find((value) => value.startsWith(`${name}=`));
+    const value = serialized?.match(new RegExp(`^${name}=([^;]+)`))?.[1];
+    if (!value) throw new Error(`Cookie ${name} was not set`);
+    return value;
+  }
+
   it("returns the runtime Turnstile Sitekey without caching it", async () => {
     const app = customerAuthApp();
     const response = await app.request(
-      "https://license.example.test/api/v1/customer/auth/config",
-      {},
+      `${API_ORIGIN}/api/v1/customer/auth/config`,
+      { headers: { Origin: CUSTOMER_SITE_ORIGIN } },
       testEnv.env,
     );
     expect(response.status).toBe(200);
@@ -161,8 +183,8 @@ describe("V1 Customer Magic Link request contract", () => {
 
     delete (testEnv.env as any).TURNSTILE_SITE_KEY;
     const missing = await app.request(
-      "https://license.example.test/api/v1/customer/auth/config",
-      {},
+      `${API_ORIGIN}/api/v1/customer/auth/config`,
+      { headers: { Origin: CUSTOMER_SITE_ORIGIN } },
       testEnv.env,
     );
     expect(missing.status).toBe(503);
@@ -172,10 +194,10 @@ describe("V1 Customer Magic Link request contract", () => {
 
   it("accepts only the public instance_slug selector", async () => {
     const response = await customerAuthApp().request(
-      "https://license.example.test/api/v1/customer/auth/magic-link",
+      `${API_ORIGIN}/api/v1/customer/auth/magic-link`,
       {
         method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({
           instanceSlug: "magic",
           email: "buyer@example.test",
@@ -191,10 +213,10 @@ describe("V1 Customer Magic Link request contract", () => {
 
   it("rejects the legacy camelCase Turnstile field", async () => {
     const response = await customerAuthApp().request(
-      "https://license.example.test/api/v1/customer/auth/magic-link",
+      `${API_ORIGIN}/api/v1/customer/auth/magic-link`,
       {
         method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({
           instance_slug: "magic",
           email: "buyer@example.test",
@@ -215,7 +237,7 @@ describe("V1 Customer Magic Link request contract", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({
         success: true,
         action: "customer_magic_link",
-        hostname: "license.example.test",
+        hostname: "site.example.test",
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
 
     const response = await requestMagicLink("buyer@example.test", token);
@@ -242,8 +264,8 @@ describe("V1 Customer Magic Link request contract", () => {
   });
 
   it.each([
-    ["unsuccessful", { success: false, action: "customer_magic_link", hostname: "license.example.test" }],
-    ["wrong action", { success: true, action: "other_action", hostname: "license.example.test" }],
+    ["unsuccessful", { success: false, action: "customer_magic_link", hostname: "site.example.test" }],
+    ["wrong action", { success: true, action: "other_action", hostname: "site.example.test" }],
     ["wrong hostname", { success: true, action: "customer_magic_link", hostname: "attacker.example.test" }],
   ])("fails closed for a %s Siteverify result", async (_case, result) => {
     siteverify.mockResolvedValueOnce(new Response(JSON.stringify(result), {
@@ -262,6 +284,102 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ success: true, data: { accepted: true } });
+    expect(challengeRows()).toEqual([]);
+    expect(deliveryRows()).toEqual([]);
+  });
+
+  it("runs the complete Magic Link prepare and dispatch flow on non-production localhost HTTP", async () => {
+    const localOrigin = "http://localhost:4321";
+    testEnv.env.CUSTOMER_SITE_ORIGIN = localOrigin;
+    testEnv.env.ENVIRONMENT = "development";
+    testEnv.sqliteDb.prepare(
+      "UPDATE instances SET site_url = ? WHERE id = ?",
+    ).run(`${localOrigin}/site`, instanceId);
+    await configureReadyEmail();
+    const providerRequests: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("challenges.cloudflare.com")) {
+        return new Response(JSON.stringify({
+          success: true,
+          action: "customer_magic_link",
+          hostname: "localhost",
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      providerRequests.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ id: "email_localhost_magic" }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    }));
+    const pending: Promise<unknown>[] = [];
+    const executionContext = {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
+      },
+      passThroughOnException() {},
+      props: {},
+    } as unknown as ExecutionContext;
+
+    const response = await customerAuthApp().request(
+      `http://localhost:8787/api/v1/customer/auth/magic-link`,
+      {
+        method: "POST",
+        headers: {
+          Origin: localOrigin,
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "127.0.0.1",
+        },
+        body: JSON.stringify({
+          instance_slug: "magic",
+          email: "buyer@example.test",
+          turnstile_token: "turnstile-localhost-http",
+        }),
+      },
+      testEnv.env,
+      executionContext,
+    );
+    await Promise.all(pending);
+
+    expect(response.status).toBe(200);
+    expect(providerRequests).toHaveLength(1);
+    expect(providerRequests[0].template.variables.access_url).toMatch(
+      /^http:\/\/localhost:4321\/site\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
+    );
+    expect(deliveryRows()).toHaveLength(1);
+    expect(deliveryRows()[0].status).toBe("accepted");
+  });
+
+  it.each([
+    ["a non-loopback development host", "http://site.example.test", "development"],
+    ["an IPv6 loopback development host", "http://[::1]:4321", "development"],
+    ["production localhost", "http://localhost:4321", "production"],
+  ])("rejects Magic Link requests configured with %s HTTP", async (
+    _case,
+    configuredOrigin,
+    environment,
+  ) => {
+    testEnv.env.CUSTOMER_SITE_ORIGIN = configuredOrigin;
+    testEnv.env.ENVIRONMENT = environment;
+    testEnv.sqliteDb.prepare(
+      "UPDATE instances SET site_url = ? WHERE id = ?",
+    ).run(`${configuredOrigin}/site`, instanceId);
+
+    const response = await customerAuthApp().request(
+      `${API_ORIGIN}/api/v1/customer/auth/magic-link`,
+      {
+        method: "POST",
+        headers: { Origin: configuredOrigin, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instance_slug: "magic",
+          email: "buyer@example.test",
+          turnstile_token: "turnstile-rejected-http",
+        }),
+      },
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(500);
+    expect((await response.json() as any).error.code).toBe("CUSTOMER_SITE_ORIGIN_INVALID");
     expect(challengeRows()).toEqual([]);
     expect(deliveryRows()).toEqual([]);
   });
@@ -350,7 +468,7 @@ describe("V1 Customer Magic Link request contract", () => {
         return new Response(JSON.stringify({
           success: true,
           action: "customer_magic_link",
-          hostname: "license.example.test",
+          hostname: "site.example.test",
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       providerCalls.push({
@@ -389,7 +507,7 @@ describe("V1 Customer Magic Link request contract", () => {
         instance_name: "Magic Link",
         expires_at: expect.stringMatching(/Z$/),
         access_url: expect.stringMatching(
-          /^https:\/\/license\.example\.test\/site\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
+          /^https:\/\/site\.example\.test\/site\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
         ),
       },
     });
@@ -406,6 +524,60 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(acceptedDelivery.status).toBe("accepted");
     expect(acceptedDelivery.variables_ciphertext).toBeTruthy();
     expect(acceptedDelivery.variables_expires_at).toBeTruthy();
+  });
+
+  it("returns the bound CSRF token after consumption and can bootstrap the same token after refresh", async () => {
+    expect((await requestMagicLink()).status).toBe(200);
+    const challenge = challengeRows()[0];
+    const response = await consumeMagicLink(await magicToken(challenge.delivery_id));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const payload = await response.json() as any;
+    expect(payload.data).toMatchObject({
+      authenticated: true,
+      expires_at: expect.stringMatching(/Z$/),
+      csrf_token: expect.stringMatching(/^ccf_[0-9a-f]{64}$/),
+    });
+
+    const cookies = responseCookies(response);
+    for (const name of [CUSTOMER_SESSION_COOKIE, CUSTOMER_INSTANCE_COOKIE, CUSTOMER_CSRF_COOKIE]) {
+      const serialized = cookies.find((value) => value.startsWith(`${name}=`));
+      expect(serialized).toContain("; Path=/");
+      expect(serialized).toContain("; HttpOnly");
+      expect(serialized).toContain("; Secure");
+      expect(serialized).toContain("; SameSite=Lax");
+      expect(serialized).not.toContain("Domain=");
+    }
+
+    const cookieHeader = [
+      `${CUSTOMER_SESSION_COOKIE}=${cookieValue(cookies, CUSTOMER_SESSION_COOKIE)}`,
+      `${CUSTOMER_INSTANCE_COOKIE}=${cookieValue(cookies, CUSTOMER_INSTANCE_COOKIE)}`,
+      `${CUSTOMER_CSRF_COOKIE}=${cookieValue(cookies, CUSTOMER_CSRF_COOKIE)}`,
+    ].join("; ");
+    const bootstrap = await customerAuthApp().request(
+      `${API_ORIGIN}/api/v1/customer/auth/csrf-token`,
+      { headers: { Origin: CUSTOMER_SITE_ORIGIN, Cookie: cookieHeader } },
+      testEnv.env,
+    );
+    expect(bootstrap.status).toBe(200);
+    expect(bootstrap.headers.get("cache-control")).toBe("no-store");
+    expect(await bootstrap.json()).toEqual({
+      success: true,
+      data: { csrf_token: payload.data.csrf_token },
+    });
+
+    const forgedCookie = cookieHeader.replace(
+      `${CUSTOMER_CSRF_COOKIE}=${payload.data.csrf_token}`,
+      `${CUSTOMER_CSRF_COOKIE}=ccf_forged`,
+    );
+    const rejected = await customerAuthApp().request(
+      `${API_ORIGIN}/api/v1/customer/auth/csrf-token`,
+      { headers: { Origin: CUSTOMER_SITE_ORIGIN, Cookie: forgedCookie } },
+      testEnv.env,
+    );
+    expect(rejected.status).toBe(403);
+    expect((await rejected.json() as any).error.code).toBe("CUSTOMER_CSRF_SESSION_MISMATCH");
   });
 
   it("keeps the current link and Delivery unchanged during the D1 cooldown", async () => {
@@ -448,10 +620,10 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(deliveries.filter((row) => row.status === "waiting_configuration")).toHaveLength(1);
 
     const consumeOld = await customerAuthApp().request(
-      "https://license.example.test/api/v1/customer/auth/magic-link/consume",
+      `${API_ORIGIN}/api/v1/customer/auth/magic-link/consume`,
       {
         method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({ instance_slug: "magic", token: originalToken }),
       },
       testEnv.env,
@@ -489,10 +661,10 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("turnstile-failed-replacement");
 
     const consumeOld = await customerAuthApp().request(
-      "https://license.example.test/api/v1/customer/auth/magic-link/consume",
+      `${API_ORIGIN}/api/v1/customer/auth/magic-link/consume`,
       {
         method: "POST",
-        headers: { Origin: "https://license.example.test", "Content-Type": "application/json" },
+        headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({ instance_slug: "magic", token: originalToken }),
       },
       testEnv.env,

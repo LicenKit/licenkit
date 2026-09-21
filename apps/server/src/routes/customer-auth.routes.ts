@@ -7,7 +7,8 @@ import { AppError } from "../middleware/error";
 import {
   customerCsrf,
   customerSessionAuth,
-  requireExactOrigin,
+  readBoundCustomerCsrfToken,
+  requireCustomerSiteOrigin,
 } from "../middleware/auth";
 import {
   prepareEmailNotificationDelivery,
@@ -29,6 +30,7 @@ import {
 } from "../services/identity/session";
 
 export const customerAuthRouter = new Hono<AppContext>();
+customerAuthRouter.use("*", requireCustomerSiteOrigin);
 
 const MagicLinkRequestSchema = z.object({
   instance_slug: z.string().trim().toLowerCase().min(1).max(63),
@@ -76,7 +78,6 @@ customerAuthRouter.get("/config", (c) => {
 
 customerAuthRouter.post(
   "/magic-link",
-  requireExactOrigin,
   async (c) => {
     const startedAt = Date.now();
     const input = MagicLinkRequestSchema.parse(await c.req.json());
@@ -158,6 +159,7 @@ customerAuthRouter.post(
         trustedUrl: siteUrl,
         path: `/customer/${encodeURIComponent(instance.slug)}/auth`,
         pathBase: "trusted_path",
+        environment: c.env.ENVIRONMENT,
       });
       const delivery = await prepareEmailNotificationDelivery({
         db: c.env.DB,
@@ -309,7 +311,6 @@ customerAuthRouter.post(
 
 customerAuthRouter.post(
   "/magic-link/consume",
-  requireExactOrigin,
   async (c) => {
     const input = ConsumeSchema.parse(await c.req.json());
     const tokenHash = await hashOneTimeLinkToken(input.token);
@@ -455,14 +456,30 @@ customerAuthRouter.post(
       maxAge: ttlSeconds,
     });
     c.header("Cache-Control", "no-store");
-    return c.json({ success: true, data: { authenticated: true, expires_at: expiresAt } });
+    return c.json({
+      success: true,
+      data: {
+        authenticated: true,
+        expires_at: expiresAt,
+        csrf_token: secrets.csrfToken,
+      },
+    });
   }
+);
+
+customerAuthRouter.get(
+  "/csrf-token",
+  customerSessionAuth,
+  async (c) => {
+    const csrfToken = await readBoundCustomerCsrfToken(c);
+    c.header("Cache-Control", "no-store");
+    return c.json({ success: true, data: { csrf_token: csrfToken } });
+  },
 );
 
 customerAuthRouter.post(
   "/logout",
   customerSessionAuth,
-  requireExactOrigin,
   customerCsrf,
   async (c) => {
     const instanceId = c.get("instanceId")!;

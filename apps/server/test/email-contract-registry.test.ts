@@ -79,6 +79,7 @@ describe("email contract registry", () => {
           contract.notificationType === "instance.member_invited"
           ? {
               trustedSiteUrl: "https://license.example.com",
+              trustedAdminOrigin: "https://license.example.com",
               expectedInstanceSlug: "example-team",
             }
           : {},
@@ -255,6 +256,149 @@ describe("email contract registry", () => {
           oneTimeToken: `mlk_${"A".repeat(64)}`,
         }),
       "EMAIL_PORTAL_TOKEN_INVALID",
+    );
+  });
+
+  it("allows HTTP portal links only for explicit non-production IPv4 loopback hosts", () => {
+    const token = `mlk_${"0".repeat(64)}`;
+    const accessUrl = buildCustomerPortalAccessUrl({
+      trustedSiteUrl: "http://localhost:4321/site",
+      instanceSlug: "example-team",
+      oneTimeToken: token,
+      environment: "development",
+    });
+    expect(accessUrl).toBe(
+      `http://localhost:4321/site/customer/example-team/auth#token=${token}`,
+    );
+    expect(validateEmailNotificationVariables(
+      "customer.portal_access_requested",
+      1,
+      {
+        instance_name: "Example Team",
+        access_url: accessUrl,
+        expires_at: "2026-10-19T10:15:00.000Z",
+      },
+      {
+        trustedSiteUrl: "http://localhost:4321/site",
+        expectedInstanceSlug: "example-team",
+        environment: "development",
+      },
+    )).toMatchObject({ access_url: accessUrl });
+
+    for (const input of [
+      { trustedSiteUrl: "http://site.example.com", environment: "development" },
+      { trustedSiteUrl: "http://localhost:4321", environment: "production" },
+      { trustedSiteUrl: "http://[::1]:4321", environment: "development" },
+      { trustedSiteUrl: "http://127.0.0.2:4321", environment: "test" },
+    ]) {
+      expectCode(
+        () => buildCustomerPortalAccessUrl({
+          ...input,
+          instanceSlug: "example-team",
+          oneTimeToken: token,
+        }),
+        "EMAIL_TRUSTED_SITE_URL_INVALID",
+      );
+    }
+  });
+
+  it("validates Instance invitation URLs against Admin Origin instead of Customer Site URL", () => {
+    const invitationUrl = `https://license.example.com/admin/invitations/accept#token=ivk_${"0".repeat(64)}`;
+    const variables = {
+      instance_name: "Example Team",
+      invitation_url: invitationUrl,
+      expires_at: "2026-10-19T10:15:00.000Z",
+    };
+    expect(
+      validateEmailNotificationVariables(
+        "instance.member_invited",
+        1,
+        variables,
+        {
+          trustedSiteUrl: "https://site.example.com/customer",
+          trustedAdminOrigin: "https://license.example.com",
+        },
+      ),
+    ).toMatchObject({ invitation_url: invitationUrl });
+    expect(
+      validateEmailNotificationVariables(
+        "instance.member_invited",
+        1,
+        variables,
+        { authenticatedPreparedDelivery: true },
+      ),
+    ).toMatchObject({ invitation_url: invitationUrl });
+    expectCode(
+      () => validateEmailNotificationVariables(
+        "instance.member_invited",
+        1,
+        variables,
+        { trustedSiteUrl: "https://site.example.com/customer" },
+      ),
+      "EMAIL_TRUSTED_ADMIN_ORIGIN_REQUIRED",
+    );
+    expectCode(
+      () => validateEmailNotificationVariables(
+        "instance.member_invited",
+        1,
+        {
+          ...variables,
+          invitation_url: `https://site.example.com/admin/invitations/accept#token=ivk_${"0".repeat(64)}`,
+        },
+        { trustedAdminOrigin: "https://license.example.com" },
+      ),
+      "EMAIL_INVITATION_URL_UNTRUSTED",
+    );
+  });
+
+  it("allows HTTP invitation links only for explicit non-production IPv4 loopback hosts", () => {
+    const invitationUrl = `http://127.0.0.1:8787/admin/invitations/accept#token=ivk_${"0".repeat(64)}`;
+    const variables = {
+      instance_name: "Example Team",
+      invitation_url: invitationUrl,
+      expires_at: "2026-10-19T10:15:00.000Z",
+    };
+    expect(validateEmailNotificationVariables(
+      "instance.member_invited",
+      1,
+      variables,
+      {
+        trustedAdminOrigin: "http://127.0.0.1:8787",
+        environment: "test",
+      },
+    )).toMatchObject({ invitation_url: invitationUrl });
+    expect(validateEmailNotificationVariables(
+      "instance.member_invited",
+      1,
+      variables,
+      { authenticatedPreparedDelivery: true, environment: "test" },
+    )).toMatchObject({ invitation_url: invitationUrl });
+    expectCode(
+      () => validateEmailNotificationVariables(
+        "instance.member_invited",
+        1,
+        variables,
+        {
+          trustedAdminOrigin: "http://127.0.0.1:8787",
+          environment: "production",
+        },
+      ),
+      "EMAIL_TRUSTED_ADMIN_ORIGIN_INVALID",
+    );
+    expectCode(
+      () => validateEmailNotificationVariables(
+        "instance.member_invited",
+        1,
+        {
+          ...variables,
+          invitation_url: `http://license.example.test/admin/invitations/accept#token=ivk_${"0".repeat(64)}`,
+        },
+        {
+          trustedAdminOrigin: "http://license.example.test",
+          environment: "development",
+        },
+      ),
+      "EMAIL_TRUSTED_ADMIN_ORIGIN_INVALID",
     );
   });
 });

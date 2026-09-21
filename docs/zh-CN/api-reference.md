@@ -103,7 +103,7 @@ Setup 使用三个独立页面：第一步只验证部署 Token；第二步收�
 
 `setup_token` 与部署 Secret `INITIAL_SETUP_TOKEN` 常量时间比较，不进入 URL、日志、审计详情或错误回显。验证接口与最终提交都检查精确 Origin、Secret、`deployment_bootstrap` 未完成，以及 User、Instance、Membership 仍为空，并返回 `Cache-Control: no-store`。管理员密码执行与正常登录一致的长度校验和密码 KDF，只保存 Hash。
 
-`site_url` 由部署者显式填写，供邮件 Magic Link 和 Turnstile hostname 使用；当前必须与 Setup 请求 Origin 同源，且不能包含 credentials、query 或 fragment。Admin 地址固定由 Origin 加 `/admin/` 派生，API 地址固定由 Origin 加 `/api/v1` 派生，均不接受独立配置。
+`site_url` 由部署者显式填写，供邮件 Magic Link 和 Turnstile hostname 使用；其 Origin 必须与部署变量 `CUSTOMER_SITE_ORIGIN` 精确一致，且不能包含 credentials、query 或 fragment。`CUSTOMER_SITE_ORIGIN` 自身只能是规范 Origin，并且必须与 Setup 请求的 LicenKit API Origin 保持同协议、同可注册站点；Setup 在写入前拒绝跨站组合。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP，IPv6 loopback 当前不支持。Admin 地址固定由 Setup 请求 Origin 加 `/admin/` 派生，API 地址固定由该 Origin 加 `/api/v1` 派生，均不接受独立配置。
 
 最终提交再次验证 Token 和全部输入，并在一个 D1 原子批次中创建 User、Instance、Owner Membership、Admin Session、`instance.setup_completed` 审计和固定 `deployment_bootstrap(singleton_key='deployment')` 完成记录。任一步失败全部回滚，并发请求只能有一个成功；失败批次只有重新读取到完成记录时才转换为 `SETUP_ALREADY_COMPLETED`，否则保留原始错误。批次提交后才设置 Session Cookie；响应中断不回滚已经完成的 Setup，管理员可正常登录重建 Session。
 
@@ -145,7 +145,7 @@ Profile 只操作当前 User：显示名称可修改，邮箱只读，不存在�
 
 Members 与 Invitation 只允许 active Owner 管理。Owner 可以邀请邮箱、调整 Membership 角色、暂停、恢复或软移除 Membership，但不能修改其他 User 的显示名称、邮箱、密码或全局 Session。Membership 状态为 `active/disabled/removed`；`removed` 重新加入必须接受新邀请。最后一个 active Owner 的降级、暂停或移除由数据库不变量拒绝并返回 `LAST_ACTIVE_OWNER_REQUIRED`。
 
-邀请接受页固定为 `/admin/invitations/accept#token=...`。Token 只在页面内存保管，页面立即清理 Fragment，GET 和邮件扫描器不能消费；用户明确操作后才 POST。接受前不创建占位 User 或 Membership。新邮箱由受邀者设置密码；已有 User 必须先通过有效 Admin Session 或等价邮箱密码认证。接受或撤销的并发终态由 D1 Trigger 在原子批次内抛错，失败方不能留下 User、Membership、Session、Delivery 或审计副作用。
+邀请接受页固定为 LicenKit Admin Origin 下的 `/admin/invitations/accept#token=...`，不能使用 Customer `site_url`。Token 只在页面内存保管，页面立即清理 Fragment，GET 和邮件扫描器不能消费；用户明确操作后才 POST。接受前不创建占位 User 或 Membership。新邮箱由受邀者设置密码；已有 User 必须先通过有效 Admin Session 或等价邮箱密码认证。接受或撤销的并发终态由 D1 Trigger 在原子批次内抛错，失败方不能留下 User、Membership、Session、Delivery 或审计副作用。
 
 登录、Session 查询、Setup 成功与 Invitation 接受都返回同一上下文形状：
 
@@ -614,7 +614,7 @@ Turnstile 验证与共享邮件凭证预检通过后才查询 Customer。有效 
 
 Turnstile 已通过、Customer 不存在、Customer 存在但命中冷却、成功创建新链接四个分支的公开响应保持相同，不包含 Customer ID、Challenge ID、冷却剩余时间或是否已发送邮件，并使用相同的缓存头、最短响应时间策略和小幅随机抖动。Magic Link 请求页可以加载 Turnstile 官方资源；携带 Magic Link Token 的 `/auth#token=...` 落地页仍不得加载任何第三方资源。
 
-通知中的 URL 使用 Instance 路径与 Fragment 携带 Token，例如 `https://license.example.com/customer/example-studio/auth#token=...`。落地页不得加载第三方资源，设置 `Referrer-Policy: no-referrer`、`Cache-Control: no-store`，并使用只允许同源脚本、样式、连接和表单的严格 Content Security Policy。页面读取 Token 后立即用 `history.replaceState` 清除 Fragment。GET 或页面加载不得消费 Challenge；用户显式点击“继续登录”后才发起消费 POST，避免邮件扫描器提前消费。
+通知中的 URL 使用 Instance 路径与 Fragment 携带 Token，例如 `https://site.example.com/customer/example-studio/auth#token=...`。落地页不得加载第三方资源，设置 `Referrer-Policy: no-referrer`、`Cache-Control: no-store`，并使用只允许站点资源且 `connect-src` 精确包含 LicenKit API Origin 的严格 Content Security Policy。页面读取 Token 后立即用 `history.replaceState` 清除 Fragment。GET 或页面加载不得消费 Challenge；用户显式点击“继续登录”后才发起消费 POST，避免邮件扫描器提前消费。
 
 ### 5.2 消费 Magic Link
 
@@ -631,13 +631,14 @@ POST /api/v1/customer/auth/magic-link/consume
 
 服务端对 Token 计算哈希，并在同一 D1 原子批次中写入 `consumed_at` 和与该 Challenge 唯一绑定的 Customer Session。Challenge 的一次性终态必须由数据库约束或 Trigger 在争用失败时直接抛错并回滚整个批次，不能在批次提交后检查条件更新的 `0` 行结果。并发消费最多一个请求成功；失败方不得留下 Session、审计、Delivery 更新或其他副作用。
 
-服务端先以 `instance_slug` 找到 Instance，再用 `instance_id + token_hash` 查询 Challenge。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie、Instance Cookie，以及独立可读的 Secure、SameSite=Lax、host-only CSRF Cookie；服务端只保存 Session 与 CSRF Token 的 Hash。后续会话按 `instance_id + session_token_hash` 查询，状态写入同时要求精确 Origin、`X-CSRF-Token` Header、CSRF Cookie 和当前 Session Hash 四者一致。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
+服务端先以 `instance_slug` 找到 Instance，再用 `instance_id + token_hash` 查询 Challenge。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie、Instance Cookie 和 CSRF Cookie；三者都不设置 `Domain`。响应正文同时返回 `csrf_token`，服务端只保存 Session 与 CSRF Token 的 Hash。后续会话按 `instance_id + session_token_hash` 查询：跨 Origin 请求要求 Origin 精确等于 `CUSTOMER_SITE_ORIGIN`；浏览器普通同 Origin GET 允许缺少 Origin，但请求 URL Origin 必须与该配置相同。状态写入始终要求精确 Origin、`X-CSRF-Token` Header、CSRF Cookie 和当前 Session Hash 四者一致。只有最终 2xx 会 best-effort 更新 `last_seen_at`；更新失败记录 `CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED`，但保留已完成的业务响应，3xx/4xx 不更新。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
 
 ```text
+GET  /api/v1/customer/auth/csrf-token
 POST /api/v1/customer/auth/logout
 ```
 
-退出时吊销服务端 Customer Session 并清除 Cookie。所有 Customer 写接口必须验证同源请求。
+页面刷新后通过 `GET /customer/auth/csrf-token` 取回当前 Session 已绑定的同一个 CSRF Token；跨 Origin 时该接口验证精确 Customer Site Origin，同 Origin 时验证请求 URL Origin，并继续验证 Session Cookie、CSRF Cookie 与 Session Hash；响应返回 `Cache-Control: no-store`，不会旋转 Token。退出时吊销服务端 Customer Session 并清除 Cookie。所有跨 Origin Customer Auth、读取和写入接口都要求精确 Customer Site Origin；只有 Customer API 返回该 Origin 的 credentialed CORS 响应，Admin、Client 和 Webhook 不扩权。
 
 ### 5.3 当前 Customer 与 License
 

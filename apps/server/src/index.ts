@@ -1,14 +1,14 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import type { AppContext, Env } from "./types";
 import { errorHandler, AppError } from "./middleware/error";
 import {
   adminCsrf,
   adminSessionAuth,
   requireDeclaredAdminPermission,
-  requireExactOrigin,
+  requireAdminAppOrigin,
 } from "./middleware/auth";
 import { requestContext } from "./middleware/request-context";
+import { customerCors } from "./middleware/customer-cors";
 import { systemRouter } from "./routes/system.routes";
 import { setupRouter } from "./routes/setup.routes";
 import { adminAuthRouter } from "./routes/auth.routes";
@@ -48,32 +48,7 @@ const app = new Hono<AppContext>();
 app.onError(errorHandler);
 app.use("*", requestContext);
 
-app.use("*", async (c, next) => {
-  const middleware = cors({
-    origin: (origin) => {
-      if (!origin) return "";
-      if (
-        c.env.ENVIRONMENT !== "production" &&
-        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-      ) {
-        return origin;
-      }
-      return "";
-    },
-    allowHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-CSRF-Token",
-      "X-Request-Id",
-      "Paddle-Signature",
-    ],
-    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    exposeHeaders: ["X-Request-Id"],
-    maxAge: 600,
-    credentials: true,
-  });
-  await middleware(c, next);
-});
+app.use("/api/v1/customer/*", customerCors);
 
 const api = new Hono<AppContext>();
 
@@ -110,7 +85,7 @@ admin.use("*", async (c, next) => {
     await next();
     return;
   }
-  await requireExactOrigin(c, async () => {
+  await requireAdminAppOrigin(c, async () => {
     await adminCsrf(c, async () => {
       await next();
     });

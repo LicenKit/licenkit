@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../types";
 import { requireRole } from "../../middleware/auth";
-import { adminCsrf, requireExactOrigin } from "../../middleware/auth";
+import { adminCsrf, requireAdminAppOrigin } from "../../middleware/auth";
 import { AppError, NotFoundError } from "../../middleware/error";
 import { listSystemIssues } from "../../services/operations/system-issues";
 import { prepareAuditInsert } from "../../services/identity/audit";
@@ -37,7 +37,7 @@ adminSystemIssuesRouter.get(
 
 adminSystemIssuesRouter.post(
   "/issues/:issueId/process",
-  requireExactOrigin,
+  requireAdminAppOrigin,
   adminCsrf,
   requireRole(["owner", "admin"]),
   async (c) => {

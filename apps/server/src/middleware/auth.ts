@@ -5,6 +5,7 @@ import { AppError, ForbiddenError, UnauthorizedError } from "./error";
 import { sha256Hex, timingSafeEqual } from "../infra/crypto";
 import { readAdminCookies, readCustomerCookies } from "../services/identity/session";
 import { readDeploymentSetupState } from "../services/identity/deployment-provisioning";
+import { customerSiteOrigin } from "../config/customer-site";
 
 interface AdminSessionRow {
   session_id: string;
@@ -37,21 +38,100 @@ function setContext(c: any, values: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(values)) c.set(key, value);
 }
 
-export const requireExactOrigin: MiddlewareHandler<AppContext> = async (c, next) => {
+function customerSessionTouchError(error: unknown): {
+  errorType: string;
+  errorCode?: string;
+  errorMessage: string;
+} {
+  const record = error && typeof error === "object"
+    ? error as { code?: unknown; message?: unknown }
+    : undefined;
+  const errorCode = typeof record?.code === "string" || typeof record?.code === "number"
+    ? String(record.code).slice(0, 128)
+    : undefined;
+  const rawMessage = typeof record?.message === "string"
+    ? record.message.slice(0, 512)
+    : String(error).slice(0, 512);
+  const errorMessage = rawMessage
+    .replace(/\b(?:ast|cst|acf|ccf|mlk|ivk)_[A-Za-z0-9]+\b/g, "[REDACTED_TOKEN]")
+    .replace(/(cookie|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]");
+  return {
+    errorType: error instanceof Error ? error.name : typeof error,
+    ...(errorCode ? { errorCode } : {}),
+    errorMessage,
+  };
+}
+
+function parseExactSerializedOrigin(requestOrigin: string): boolean {
+  try {
+    const parsedOrigin = new URL(requestOrigin);
+    return parsedOrigin.origin === requestOrigin;
+  } catch {
+    return false;
+  }
+}
+
+export const requireAdminAppOrigin: MiddlewareHandler<AppContext> = async (c, next) => {
   const requestOrigin = c.req.header("origin");
   if (!requestOrigin) throw new ForbiddenError("Origin header is required for this request");
   const expectedOrigin = new URL(c.req.url).origin;
-  try {
-    const parsedOrigin = new URL(requestOrigin);
-    if (parsedOrigin.origin !== requestOrigin) {
-      throw new Error("Origin header is not an exact serialized Origin");
-    }
-  } catch {
+  if (!parseExactSerializedOrigin(requestOrigin)) {
     throw new ForbiddenError("Origin header is invalid");
   }
   if (!timingSafeEqual(requestOrigin, expectedOrigin)) {
     throw new ForbiddenError("Cross-origin state change is not allowed");
   }
+  await next();
+};
+
+export function validateCustomerSiteOrigin(
+  requestOrigin: string | undefined,
+  expectedOrigin: string,
+): void {
+  if (!requestOrigin) {
+    throw new AppError(
+      "CUSTOMER_ORIGIN_REQUIRED",
+      "Origin header is required for Customer API requests",
+      403,
+      { allowedOrigin: expectedOrigin },
+    );
+  }
+  if (!parseExactSerializedOrigin(requestOrigin)) {
+    throw new AppError(
+      "CUSTOMER_ORIGIN_INVALID",
+      "Origin header is not an exact serialized Origin",
+      403,
+      { requestOrigin, allowedOrigin: expectedOrigin },
+    );
+  }
+  if (!timingSafeEqual(requestOrigin, expectedOrigin)) {
+    throw new AppError(
+      "CUSTOMER_ORIGIN_NOT_ALLOWED",
+      "Origin is not allowed to access the Customer API",
+      403,
+      { requestOrigin, allowedOrigin: expectedOrigin },
+    );
+  }
+}
+
+export const requireCustomerSiteOrigin: MiddlewareHandler<AppContext> = async (c, next) => {
+  const expectedOrigin = customerSiteOrigin(c.env);
+  const requestOrigin = c.req.header("origin");
+  const requestUrlOrigin = new URL(c.req.url).origin;
+
+  // Browsers do not attach Origin to ordinary same-origin GET requests. This
+  // branch is safe only when the configured Customer Site and the API request
+  // are the same Origin; cross-Origin requests must still prove their Origin.
+  if (
+    !requestOrigin &&
+    c.req.method === "GET" &&
+    timingSafeEqual(requestUrlOrigin, expectedOrigin)
+  ) {
+    await next();
+    return;
+  }
+
+  validateCustomerSiteOrigin(requestOrigin, expectedOrigin);
   await next();
 };
 
@@ -143,14 +223,26 @@ export const customerSessionAuth: MiddlewareHandler<AppContext> = async (c, next
     sessionCsrfTokenHash: row.csrf_token_hash,
     sessionNamespace: "customer",
   });
-  await c.env.DB
-    .prepare(
-      `UPDATE customer_sessions SET last_seen_at = ?1
-       WHERE instance_id = ?2 AND id = ?3 AND revoked_at IS NULL`
-    )
-    .bind(now, row.instance_id, row.session_id)
-    .run();
   await next();
+  if (c.res.status >= 200 && c.res.status < 300) {
+    try {
+      await c.env.DB
+        .prepare(
+          `UPDATE customer_sessions SET last_seen_at = ?1
+           WHERE instance_id = ?2 AND id = ?3 AND revoked_at IS NULL`
+        )
+        .bind(now, row.instance_id, row.session_id)
+        .run();
+    } catch (error) {
+      console.error("Customer Session last_seen update failed", {
+        code: "CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED",
+        requestId: c.get("requestId") || c.req.header("x-request-id") || "unknown",
+        instanceId: row.instance_id,
+        sessionId: row.session_id,
+        ...customerSessionTouchError(error),
+      });
+    }
+  }
 };
 
 function csrfGuard(namespace: "admin" | "customer"): MiddlewareHandler<AppContext> {
@@ -161,12 +253,40 @@ function csrfGuard(namespace: "admin" | "customer"): MiddlewareHandler<AppContex
     const cookies = namespace === "admin" ? readAdminCookies(c) : readCustomerCookies(c);
     const cookieToken = cookies.csrfToken;
     const headerToken = c.req.header("x-csrf-token");
+    if (namespace === "customer" && !cookieToken) {
+      throw new AppError(
+        "CUSTOMER_CSRF_COOKIE_MISSING",
+        "Customer CSRF cookie is missing",
+        403,
+      );
+    }
+    if (namespace === "customer" && !headerToken) {
+      throw new AppError(
+        "CUSTOMER_CSRF_HEADER_MISSING",
+        "X-CSRF-Token header is missing",
+        403,
+      );
+    }
     if (!cookieToken || !headerToken || !timingSafeEqual(cookieToken, headerToken)) {
+      if (namespace === "customer") {
+        throw new AppError(
+          "CUSTOMER_CSRF_TOKEN_MISMATCH",
+          "X-CSRF-Token header does not match the Customer CSRF cookie",
+          403,
+        );
+      }
       throw new ForbiddenError("CSRF token is missing or does not match the session cookie");
     }
     const expectedHash = (c as any).get("sessionCsrfTokenHash") as string | undefined;
     const actualHash = await sha256Hex(headerToken);
     if (!expectedHash || !timingSafeEqual(actualHash, expectedHash)) {
+      if (namespace === "customer") {
+        throw new AppError(
+          "CUSTOMER_CSRF_SESSION_MISMATCH",
+          "Customer CSRF token is not bound to the current session",
+          403,
+        );
+      }
       throw new ForbiddenError("CSRF token is not bound to the current session");
     }
     await next();
@@ -175,6 +295,30 @@ function csrfGuard(namespace: "admin" | "customer"): MiddlewareHandler<AppContex
 
 export const adminCsrf = csrfGuard("admin");
 export const customerCsrf = csrfGuard("customer");
+
+export async function readBoundCustomerCsrfToken(c: Parameters<MiddlewareHandler<AppContext>>[0]): Promise<string> {
+  if ((c as any).get("sessionNamespace") !== "customer") {
+    throw new ForbiddenError("Session namespace does not match this route");
+  }
+  const cookieToken = readCustomerCookies(c).csrfToken;
+  if (!cookieToken) {
+    throw new AppError(
+      "CUSTOMER_CSRF_COOKIE_MISSING",
+      "Customer CSRF cookie is missing",
+      403,
+    );
+  }
+  const expectedHash = (c as any).get("sessionCsrfTokenHash") as string | undefined;
+  const actualHash = await sha256Hex(cookieToken);
+  if (!expectedHash || !timingSafeEqual(actualHash, expectedHash)) {
+    throw new AppError(
+      "CUSTOMER_CSRF_SESSION_MISMATCH",
+      "Customer CSRF token is not bound to the current session",
+      403,
+    );
+  }
+  return cookieToken;
+}
 
 const ADMIN_PERMISSION_DECLARATION = Symbol("admin-permission-declaration");
 type DeclaredAdminPermissionHandler = MiddlewareHandler<AppContext> & {

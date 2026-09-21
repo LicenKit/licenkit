@@ -11,6 +11,7 @@ import {
 } from "../src/services/identity/session";
 
 const ORIGIN = "https://license.example.test";
+const CUSTOMER_SITE_ORIGIN = "https://site.example.test";
 const SETUP_TOKEN = "initial-setup-token-with-enough-entropy";
 
 function cookieValue(response: Response, name: string): string {
@@ -51,7 +52,7 @@ function setupBody(suffix = "primary") {
     instance: {
       name: `Example ${suffix}`,
       slug: `example-${suffix}`,
-      site_url: `${ORIGIN}/site/`,
+      site_url: `${CUSTOMER_SITE_ORIGIN}/site/`,
     },
   };
 }
@@ -62,12 +63,13 @@ async function postJson(
   body: unknown,
   env: TestEnvContext["env"],
   headers: Record<string, string> = {},
+  requestOrigin = ORIGIN,
 ) {
   return app.request(
-    `${ORIGIN}${path}`,
+    `${requestOrigin}${path}`,
     {
       method: "POST",
-      headers: { Origin: ORIGIN, "Content-Type": "application/json", ...headers },
+      headers: { Origin: requestOrigin, "Content-Type": "application/json", ...headers },
       body: JSON.stringify(body),
     },
     env,
@@ -80,6 +82,7 @@ describe("V1 deployment setup and administrator identity", () => {
   beforeEach(() => {
     testEnv = createTestEnv({
       INITIAL_SETUP_TOKEN: SETUP_TOKEN,
+      CUSTOMER_SITE_ORIGIN,
       ENVIRONMENT: "test",
     });
   });
@@ -155,7 +158,7 @@ describe("V1 deployment setup and administrator identity", () => {
       instance: {
         name: "Example primary",
         slug: "example-primary",
-        site_url: `${ORIGIN}/site`,
+        site_url: `${CUSTOMER_SITE_ORIGIN}/site`,
         status: "active",
       },
       membership: { role: "owner", status: "active" },
@@ -188,7 +191,7 @@ describe("V1 deployment setup and administrator identity", () => {
     expectOnlySnakeCaseJsonKeys(statusPayload);
   });
 
-  it("rejects legacy Setup fields and cross-Origin Site URLs before writing", async () => {
+  it("accepts the configured cross-Origin Site URL and rejects every other Origin before writing", async () => {
     const app = identityApp();
     const invalidTokenBody = setupBody();
     invalidTokenBody.setup_token = "wrong-token";
@@ -213,11 +216,104 @@ describe("V1 deployment setup and administrator identity", () => {
     expect(wrongOriginPayload.error.code).toBe("SETUP_SITE_URL_ORIGIN_MISMATCH");
     expect(wrongOriginPayload.error.details).toEqual({
       app_origin: ORIGIN,
+      customer_site_origin: CUSTOMER_SITE_ORIGIN,
       site_origin: "https://other.example.test",
     });
     expectOnlySnakeCaseJsonKeys(wrongOriginPayload);
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 0 });
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM deployment_bootstrap").get()).toEqual({ count: 0 });
+  });
+
+  it("rejects a cross-site Customer Origin before Setup writes any state", async () => {
+    const crossSiteOrigin = "https://portal.other.test";
+    testEnv.env.CUSTOMER_SITE_ORIGIN = crossSiteOrigin;
+    const body = setupBody();
+    body.instance.site_url = `${crossSiteOrigin}/customer`;
+
+    const verify = await postJson(
+      identityApp(),
+      "/api/v1/setup/verify-token",
+      { setup_token: SETUP_TOKEN },
+      testEnv.env,
+    );
+    expect(verify.status).toBe(400);
+    expect((await verify.json() as any).error).toMatchObject({
+      code: "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED",
+      details: {
+        app_origin: ORIGIN,
+        customer_site_origin: crossSiteOrigin,
+        app_site: "https://example.test",
+        customer_site: "https://other.test",
+      },
+    });
+
+    const response = await postJson(identityApp(), "/api/v1/setup", body, testEnv.env);
+    expect(response.status).toBe(400);
+    expect((await response.json() as any).error.code).toBe(
+      "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED",
+    );
+    for (const table of ["users", "instances", "deployment_bootstrap", "audit_logs"]) {
+      expect(testEnv.sqliteDb.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+    }
+  });
+
+  it.each([
+    ["missing", undefined, "test", "CUSTOMER_SITE_ORIGIN_MISSING"],
+    ["path", "https://site.example.test/customer", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["query", "https://site.example.test?source=test", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["fragment", "https://site.example.test#customer", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["credentials", "https://user:password@site.example.test", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["non-canonical", "https://site.example.test/", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["non-loopback development HTTP", "http://site.example.test", "development", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["IPv6 loopback development HTTP", "http://[::1]:4321", "development", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["production HTTP", "http://site.example.test", "production", "CUSTOMER_SITE_ORIGIN_INVALID"],
+    ["production localhost HTTP", "http://localhost:4321", "production", "CUSTOMER_SITE_ORIGIN_INVALID"],
+  ])("rejects an invalid %s Customer Site Origin configuration without writing", async (
+    _case,
+    configuredOrigin,
+    environment,
+    expectedCode,
+  ) => {
+    testEnv.env.CUSTOMER_SITE_ORIGIN = configuredOrigin;
+    testEnv.env.ENVIRONMENT = environment;
+    const response = await postJson(identityApp(), "/api/v1/setup", setupBody(), testEnv.env);
+    expect(response.status).toBe(500);
+    const payload = await response.json() as any;
+    expect(payload.error.code).toBe(expectedCode);
+    if (expectedCode === "CUSTOMER_SITE_ORIGIN_INVALID") {
+      expect(payload.error.details.violation).toEqual(expect.any(String));
+    }
+    if (_case === "credentials") {
+      expect(JSON.stringify(payload)).not.toContain("user:password");
+    }
+    for (const table of ["users", "instances", "deployment_bootstrap", "audit_logs"]) {
+      expect(testEnv.sqliteDb.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+    }
+  });
+
+  it.each([
+    "http://localhost:4321",
+    "http://127.0.0.1:4321",
+  ])("accepts the explicit non-production loopback Customer Site Origin %s", async (origin) => {
+    testEnv.env.CUSTOMER_SITE_ORIGIN = origin;
+    testEnv.env.ENVIRONMENT = "development";
+    const body = setupBody();
+    body.instance.site_url = `${origin}/site`;
+
+    const apiOrigin = `${new URL(origin).protocol}//${new URL(origin).hostname}:8787`;
+    const response = await postJson(
+      identityApp(),
+      "/api/v1/setup",
+      body,
+      testEnv.env,
+      {},
+      apiOrigin,
+    );
+
+    expect(response.status).toBe(201);
+    expect(testEnv.sqliteDb.prepare("SELECT site_url FROM instances").get()).toEqual({
+      site_url: `${origin}/site`,
+    });
   });
 
   it("allows exactly one concurrent final Setup submission", async () => {

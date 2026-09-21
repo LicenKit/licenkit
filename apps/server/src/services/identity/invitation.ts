@@ -265,8 +265,9 @@ function finishDeliveryStatement(input: {
 
 async function prepareInvitationRecord(input: {
   db: D1Database;
-  env: { STORAGE_ENCRYPTION_KEY?: string };
+  env: { STORAGE_ENCRYPTION_KEY?: string; ENVIRONMENT?: string };
   instance: InstanceRow;
+  adminOrigin: string;
   email: string;
   role: InstanceRole;
   invitedByUserId: string;
@@ -278,8 +279,9 @@ async function prepareInvitationRecord(input: {
   ).toISOString();
   const link = await prepareOneTimeLink({
     tokenPrefix: "ivk",
-    trustedUrl: input.instance.site_url,
+    trustedUrl: input.adminOrigin,
     path: "/admin/invitations/accept",
+    environment: input.env.ENVIRONMENT,
   });
   const delivery = await prepareEmailNotificationDelivery({
     db: input.db,
@@ -289,6 +291,7 @@ async function prepareInvitationRecord(input: {
     notificationType: INVITATION_NOTIFICATION_TYPE,
     contractVersion: INVITATION_CONTRACT_VERSION,
     recipientEmail: input.email,
+    trustedAdminOrigin: input.adminOrigin,
     variables: {
       invitation_url: link.url,
       expires_at: expiresAt,
@@ -372,9 +375,10 @@ export async function listInstanceInvitations(input: {
 
 export async function createInstanceInvitation(input: {
   db: D1Database;
-  env: { STORAGE_ENCRYPTION_KEY?: string };
+  env: { STORAGE_ENCRYPTION_KEY?: string; ENVIRONMENT?: string };
   instanceId: string;
   actorUserId: string;
+  adminOrigin: string;
   email: string;
   role: InstanceRole;
   request: InvitationRequestContext;
@@ -404,6 +408,7 @@ export async function createInstanceInvitation(input: {
     db: input.db,
     env: input.env,
     instance,
+    adminOrigin: input.adminOrigin,
     email,
     role: input.role,
     invitedByUserId: input.actorUserId,
@@ -519,10 +524,11 @@ export async function revokeInstanceInvitation(input: {
 
 export async function resendInstanceInvitation(input: {
   db: D1Database;
-  env: { STORAGE_ENCRYPTION_KEY?: string };
+  env: { STORAGE_ENCRYPTION_KEY?: string; ENVIRONMENT?: string };
   instanceId: string;
   invitationId: string;
   actorUserId: string;
+  adminOrigin: string;
   request: InvitationRequestContext;
 }): Promise<InvitationResponse> {
   const current = await readInvitation(input.db, input.instanceId, input.invitationId);
@@ -534,6 +540,7 @@ export async function resendInstanceInvitation(input: {
     db: input.db,
     env: input.env,
     instance,
+    adminOrigin: input.adminOrigin,
     email: current.email,
     role: current.role,
     invitedByUserId: input.actorUserId,

@@ -4,7 +4,7 @@ import type { AppContext, InstanceRole } from "../types";
 import { sha256Hex } from "../infra/crypto";
 import {
   adminCsrf,
-  requireExactOrigin,
+  requireAdminAppOrigin,
   requireRole,
 } from "../middleware/auth";
 import { UnauthorizedError } from "../middleware/error";
@@ -132,6 +132,7 @@ adminInvitationsRouter.post(
       env: c.env,
       instanceId: c.get("instanceId")!,
       actorUserId: c.get("userId")!,
+      adminOrigin: new URL(c.req.url).origin,
       email: input.email,
       role: input.role,
       request: requestContext(c),
@@ -167,6 +168,7 @@ adminInvitationsRouter.post(
       instanceId: c.get("instanceId")!,
       invitationId,
       actorUserId: c.get("userId")!,
+      adminOrigin: new URL(c.req.url).origin,
       request: requestContext(c),
     });
     return c.json({ success: true, data: invitation }, 201);
@@ -182,7 +184,7 @@ invitationRouter.use("*", async (c, next) => {
 
 invitationRouter.post(
   "/accept",
-  requireExactOrigin,
+  requireAdminAppOrigin,
   async (c) => {
     const input = AcceptInvitationSchema.parse(await c.req.json());
     let mode:

@@ -37,8 +37,10 @@ pnpm exec wrangler d1 create licenkit-db
 - D1 `database_name` 与 `database_id`；
 - Scheduled Trigger；
 - `observability.enabled=true`；
-- `ENVIRONMENT`、`APP_VERSION` 和公开的 `TURNSTILE_SITE_KEY`；
+- `ENVIRONMENT`、`APP_VERSION`、`CUSTOMER_SITE_ORIGIN` 和公开的 `TURNSTILE_SITE_KEY`；
 - Admin 静态资产目录仍为 `./dist`。
+
+`CUSTOMER_SITE_ORIGIN` 是唯一允许携带 Customer Cookie 调用 Customer API 的页面 Origin，必须使用规范的 Origin 字符串，不得包含 credentials、路径、Query 或 Fragment，并与 Setup 所使用的 LicenKit API Origin 保持同协议、同可注册站点。正式环境及普通域名必须使用 HTTPS，例如 `https://tidest.app`。仅当 `ENVIRONMENT` 明确不是 `production`，且 hostname 精确为 `localhost` 或 `127.0.0.1` 时，才允许 HTTP 本地开发，例如 `http://localhost:4321`；`127.0.0.2`、普通域名和 IPv6 loopback 不在例外内。Magic Link 与 Admin Invitation 的构造、邮件合同校验和调度重放使用同一规则。
 
 `wrangler.jsonc` 不保存 Secret。测试和正式环境需要独立的 D1 与 Secret，但不应使用不同业务流程。
 
@@ -112,7 +114,7 @@ https://你的域名/admin/
 - `appUrl` 从 Setup 请求的 Origin 自动确定；
 - Admin 固定为 `appUrl + /admin/`；
 - API 固定为 `appUrl + /api/v1`；
-- `siteUrl` 用于生成邮件中的 Magic Link，当前必须与 `appUrl` 同源。
+- `siteUrl` 用于生成邮件中的 Magic Link，其 Origin 必须与部署变量 `CUSTOMER_SITE_ORIGIN` 精确一致，但允许与 `appUrl` 不同。
 
 Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮箱和密码登录，不提交 Instance 标识。确认 Owner 可以登录后，从部署环境移除 `INITIAL_SETUP_TOKEN`。
 
@@ -138,16 +140,15 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 
 ## 8. Customer Site 路由
 
-当前 Customer Session 不支持跨 Origin。使用方可以把站点和 LicenKit 放在不同仓库或不同部署中，但必须由同一个公开 Origin 完成路由，例如：
+Customer Site 与 LicenKit API 可以使用同站但不同 Origin，例如：
 
 ```text
-/                       使用方站点
-/customer/*             使用方 Customer 页面
-/api/v1/*               LicenKit Worker
-/admin/*                LicenKit Admin
+https://tidest.app/customer/*                 使用方 Customer 页面
+https://license.tidest.app/api/v1/customer/*  LicenKit Customer API
+https://license.tidest.app/admin/*             LicenKit Admin
 ```
 
-只部署 LicenKit 不会得到 `/customer/*` 页面。Magic Link 的固定落地路径和 Customer API 见 [Customer Site API 与页面清单](./customer-site-integration.md)。
+站点调用 Customer API 时必须使用绝对 API 地址、`credentials: "include"` 和服务端返回的 CSRF Token。只部署 LicenKit 不会得到 `/customer/*` 页面。Magic Link 的固定落地路径和 Customer API 见 [Customer Site API 与页面清单](./customer-site-integration.md)。如果站点与 API 属于不同协议或不同可注册站点，Setup 会以 `SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED` 拒绝，不能只修改 CORS。
 
 ## 9. 升级
 

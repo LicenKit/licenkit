@@ -5,7 +5,7 @@ import { AppError, NotFoundError } from "../middleware/error";
 import {
   customerCsrf,
   customerSessionAuth,
-  requireExactOrigin,
+  requireCustomerSiteOrigin,
 } from "../middleware/auth";
 import { dispatchDelivery } from "../infra/delivery/dispatcher";
 import { rotateLicenseKey } from "../services/license/key-rotation";
@@ -14,6 +14,7 @@ import { positiveIntegerSetting, requestIp } from "../services/identity/session"
 import { createCustomerPortalSession } from "../services/billing/customer-portal";
 
 export const customerRouter = new Hono<AppContext>();
+customerRouter.use("*", requireCustomerSiteOrigin);
 customerRouter.use("*", customerSessionAuth);
 
 function customerId(c: any): string {
@@ -38,7 +39,7 @@ const requireRecentCustomerAuth: MiddlewareHandler<AppContext> = async (c, next)
 };
 
 function writeGuards() {
-  return [requireExactOrigin, customerCsrf, requireRecentCustomerAuth] as const;
+  return [customerCsrf, requireRecentCustomerAuth] as const;
 }
 
 function triggerCustomerDeliveryInBackground(c: any, input: {

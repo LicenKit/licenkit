@@ -24,6 +24,7 @@ import {
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const ORIGIN = "https://license.example.test";
+const CUSTOMER_SITE_URL = "https://site.example.test/customer";
 const INSTANCE_ID = "ins_membership_test";
 const OWNER_ID = "usr_owner";
 const OWNER_EMAIL = "owner@example.test";
@@ -100,7 +101,7 @@ function cookieValue(response: Response, name: string): string {
   return match[1];
 }
 
-async function tokenForInvitation(testEnv: TestEnvContext, invitationId: string): Promise<string> {
+async function invitationUrlFor(testEnv: TestEnvContext, invitationId: string): Promise<string> {
   const row = testEnv.sqliteDb.prepare(
     `SELECT invitation.delivery_id, delivery.variables_ciphertext
      FROM instance_invitations AS invitation
@@ -119,7 +120,11 @@ async function tokenForInvitation(testEnv: TestEnvContext, invitationId: string)
       field: "variables_ciphertext",
     },
   ));
-  return new URL(variables.invitation_url).hash.slice("#token=".length);
+  return variables.invitation_url;
+}
+
+async function tokenForInvitation(testEnv: TestEnvContext, invitationId: string): Promise<string> {
+  return new URL(await invitationUrlFor(testEnv, invitationId)).hash.slice("#token=".length);
 }
 
 async function createInvitation(
@@ -147,7 +152,7 @@ describe("Instance, Membership, Profile and Invitation API", () => {
     testEnv.sqliteDb.prepare(
       `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
        VALUES (?, 'Membership Test', 'membership-test', ?, 'active', ?, ?)`,
-    ).run(INSTANCE_ID, ORIGIN, NOW, NOW);
+    ).run(INSTANCE_ID, CUSTOMER_SITE_URL, NOW, NOW);
     testEnv.sqliteDb.prepare(
       `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
        VALUES (?, ?, ?, 'Owner', ?, ?)`,
@@ -189,7 +194,7 @@ describe("Instance, Membership, Profile and Invitation API", () => {
       id: INSTANCE_ID,
       name: "Membership Test",
       slug: "membership-test",
-      site_url: ORIGIN,
+      site_url: CUSTOMER_SITE_URL,
       status: "active",
     });
     const members = await app.request(`${ORIGIN}/members`, requestInit(), testEnv.env);
@@ -228,8 +233,63 @@ describe("Instance, Membership, Profile and Invitation API", () => {
     expect(row.status).toBe("waiting_configuration");
     expect(row.variables_ciphertext).not.toContain("ivk_");
     expect(row.action).toBe("instance.invitation.created");
+    expect(await invitationUrlFor(testEnv, invitation.id)).toMatch(
+      /^https:\/\/license\.example\.test\/admin\/invitations\/accept#token=ivk_[0-9a-f]{64}$/,
+    );
     const token = await tokenForInvitation(testEnv, invitation.id);
     expect(await sha256Hex(token)).toBe(row.token_hash);
+  });
+
+  it("creates an Admin invitation link on non-production localhost HTTP", async () => {
+    const localAdminOrigin = "http://localhost:8787";
+    testEnv.env.ENVIRONMENT = "development";
+
+    const response = await adminApp().request(
+      `${localAdminOrigin}/invitations`,
+      requestInit(
+        "POST",
+        { email: "localhost-invitee@example.test", role: "member" },
+        { Origin: localAdminOrigin },
+      ),
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(201);
+    const invitation = (await json(response)).data;
+    expect(await invitationUrlFor(testEnv, invitation.id)).toMatch(
+      /^http:\/\/localhost:8787\/admin\/invitations\/accept#token=ivk_[0-9a-f]{64}$/,
+    );
+  });
+
+  it.each([
+    ["a non-loopback development host", "http://license.example.test", "development"],
+    ["an IPv6 loopback development host", "http://[::1]:8787", "development"],
+    ["production localhost", "http://localhost:8787", "production"],
+  ])("rejects Admin invitation links configured with %s HTTP", async (
+    _case,
+    adminOrigin,
+    environment,
+  ) => {
+    testEnv.env.ENVIRONMENT = environment;
+
+    const response = await adminApp().request(
+      `${adminOrigin}/invitations`,
+      requestInit(
+        "POST",
+        { email: "rejected-http@example.test", role: "member" },
+        { Origin: adminOrigin },
+      ),
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(500);
+    expect((await json(response)).error.code).toBe("ONE_TIME_LINK_TRUSTED_URL_INVALID");
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT COUNT(*) AS count FROM instance_invitations",
+    ).get()).toEqual({ count: 0 });
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT COUNT(*) AS count FROM email_deliveries",
+    ).get()).toEqual({ count: 0 });
   });
 
   it("accepts a new User once and rolls back every losing concurrent batch", async () => {

@@ -11,6 +11,7 @@ export type EmailDeliveryStatus = "pending" | "waiting_configuration";
 
 interface EmailDeliveryEnv {
   STORAGE_ENCRYPTION_KEY?: string;
+  ENVIRONMENT?: string;
 }
 
 interface PrepareEmailNotificationDeliveryBaseInput {
@@ -22,6 +23,8 @@ interface PrepareEmailNotificationDeliveryBaseInput {
   recipientEmail: string;
   /** 业务事件发生时产生的变量；公共变量由本服务补齐。 */
   variables: Readonly<Record<string, unknown>>;
+  /** Required by the Instance invitation contract; derived from the verified Admin request Origin. */
+  trustedAdminOrigin?: string;
   /** 业务内容自身的最晚发送时间，例如 Magic Link 的失效时间。 */
   sendExpiresAt?: string;
   now?: Date;
@@ -158,7 +161,9 @@ export async function prepareEmailNotificationDelivery(
     },
     {
       trustedSiteUrl: instance.site_url,
+      trustedAdminOrigin: input.trustedAdminOrigin,
       expectedInstanceSlug: instance.slug,
+      environment: input.env.ENVIRONMENT,
     },
   );
   const configuration = await findActiveEmailConfiguration(

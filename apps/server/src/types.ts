@@ -7,6 +7,7 @@ export interface Env {
   INITIAL_SETUP_TOKEN?: string;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
+  CUSTOMER_SITE_ORIGIN?: string;
   ENVIRONMENT?: string;
   APP_VERSION?: string;
   ADMIN_SESSION_TTL_SECONDS?: string;

@@ -75,7 +75,7 @@ User 不保存 Instance 外键、角色或全局状态。当前自部署版不�
 | `status` | `active/suspended/archived` |
 | `created_at` / `updated_at` | 非空时间 |
 
-当前自部署不提供状态修改入口。`site_url` 拒绝 credentials、query 和 fragment；自部署 Setup 要求它与当前受信 Origin 同源。
+当前自部署不提供状态修改入口。`site_url` 拒绝 credentials、query 和 fragment；自部署 Setup 要求它的 Origin 与部署变量 `CUSTOMER_SITE_ORIGIN` 精确一致，可以与 LicenKit API Origin 不同，但必须保持同协议、同可注册站点。正式环境和普通域名必须使用 HTTPS；仅显式非正式环境的 `localhost` 或 `127.0.0.1` 可使用 HTTP。
 
 ### 3.4 `admin_sessions`
 
@@ -128,7 +128,7 @@ Customer 使用 `instance_id + email` 大小写不敏感唯一。状态为 `acti
 
 ### 4.3 `customer_sessions`
 
-Customer Session 保存 `instance_id + customer_id`、Token Hash、过期、最后使用和撤销时间。所有查询先确定 Instance，再匹配 Hash，并重新检查 Instance 与 Customer 状态。
+Customer Session 保存 `instance_id + customer_id`、Session/CSRF Token Hash、过期、最后使用和撤销时间。所有查询先确定 Instance，再匹配 Hash，并重新检查 Instance 与 Customer 状态。只有通过 Customer Origin、Session 及对应业务守卫并返回 2xx 的请求才更新最后使用时间；重定向与错误响应不算业务成功。
 
 ### 4.4 `products`
 

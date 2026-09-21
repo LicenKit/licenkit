@@ -118,7 +118,7 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
           <div className="form-section-title"><Building2 className="size-5" /><div><h2>Instance 信息</h2><p>最终提交会原子创建 User、Instance、Owner Membership 与管理员 Session。</p></div></div>
           <Field label="实例名称"><Input value={instanceName} onChange={(event) => setInstanceName(event.target.value)} placeholder="Example Studio Licensing" required autoFocus /></Field>
           <Field label="实例标识" hint="用于 Customer Portal、Magic Link 和支付 Webhook 等地址。只能包含小写英文字母、数字和短横线，例如 tidest。"><Input value={instanceSlug} onChange={(event) => setInstanceSlug(event.target.value.toLowerCase())} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="example-studio" required /></Field>
-          <Field label="Site URL" hint="Customer Site 地址；当前自部署必须与本页面同源。"><Input type="url" value={siteUrl} onChange={(event) => setSiteUrl(event.target.value)} placeholder="https://licenses.example.com" required /></Field>
+          <Field label="Site URL" hint="Customer Site 地址；Origin 必须与部署的 CUSTOMER_SITE_ORIGIN 精确一致，并与当前 LicenKit API 保持同协议、同可注册站点。"><Input type="url" value={siteUrl} onChange={(event) => setSiteUrl(event.target.value)} placeholder="https://site.example.com" required /></Field>
         </div>
         <div className="form-actions split-actions"><Button variant="secondary" type="button" onClick={() => { setError(null); setStep(previousSetupStep(step)) }}><ArrowLeft className="size-4" />返回</Button><Button type="submit" loading={loading}>完成初始化 <ArrowRight className="size-4" /></Button></div>
       </form>

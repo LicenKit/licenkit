@@ -1,5 +1,6 @@
 import { bufferToHex, sha256Hex } from "../../infra/crypto";
 import { AppError } from "../../middleware/error";
+import { isTrustedUrlProtocolAllowed } from "../../config/trusted-url";
 
 const TOKEN_PREFIX_PATTERN = /^[a-z][a-z0-9]{1,15}$/;
 
@@ -36,16 +37,18 @@ export async function hashOneTimeLinkToken(token: string): Promise<string> {
 }
 
 /**
- * Builds an HTTPS URL from a trusted configured URL's Origin. The configured
- * path, query and fragment never influence the Admin landing path, and the
- * bearer token is placed only in the fragment so it is absent from HTTP and
- * Referer data.
+ * Builds a URL from a trusted configured URL's Origin. HTTPS is mandatory
+ * except for the narrow non-production loopback policy shared with the email
+ * contract. The configured path, query and fragment never influence the Admin
+ * landing path, and the bearer token is placed only in the fragment so it is
+ * absent from HTTP and Referer data.
  */
 export function buildTrustedFragmentUrl(input: {
   trustedUrl: string;
   path: `/${string}`;
   token: string;
   pathBase?: "origin" | "trusted_path";
+  environment?: string;
 }): string {
   let trusted: URL;
   try {
@@ -58,7 +61,7 @@ export function buildTrustedFragmentUrl(input: {
     );
   }
   if (
-    trusted.protocol !== "https:" ||
+    !isTrustedUrlProtocolAllowed(trusted, input.environment) ||
     trusted.username ||
     trusted.password ||
     trusted.search ||
@@ -66,7 +69,7 @@ export function buildTrustedFragmentUrl(input: {
   ) {
     throw new AppError(
       "ONE_TIME_LINK_TRUSTED_URL_INVALID",
-      "The trusted one-time link URL must be HTTPS and cannot contain credentials, query, or fragment data",
+      "The trusted one-time link URL must use HTTPS, except for non-production localhost or 127.0.0.1 HTTP, and cannot contain credentials, query, or fragment data",
       500,
     );
   }
@@ -91,6 +94,7 @@ export async function prepareOneTimeLink(input: {
   trustedUrl: string;
   path: `/${string}`;
   pathBase?: "origin" | "trusted_path";
+  environment?: string;
 }): Promise<PreparedOneTimeLink> {
   const secret = await createOneTimeLinkSecret(input.tokenPrefix);
   return {
@@ -100,6 +104,7 @@ export async function prepareOneTimeLink(input: {
       path: input.path,
       token: secret.token,
       pathBase: input.pathBase,
+      environment: input.environment,
     }),
   };
 }

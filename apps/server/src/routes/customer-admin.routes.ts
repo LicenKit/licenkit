@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppContext } from "../types";
-import { adminCsrf, requireExactOrigin, requireRole } from "../middleware/auth";
+import { adminCsrf, requireAdminAppOrigin, requireRole } from "../middleware/auth";
 import { ConflictError, NotFoundError } from "../middleware/error";
 import { prepareAuditInsert } from "../services/identity/audit";
 import { requestIp } from "../services/identity/session";
@@ -14,7 +14,7 @@ const UpdateCustomerSchema = z.object({
 }).strict().refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
 function mutationGuards() {
-  return [requireExactOrigin, adminCsrf, requireRole(["owner", "admin"])] as const;
+  return [requireAdminAppOrigin, adminCsrf, requireRole(["owner", "admin"])] as const;
 }
 
 adminCustomersRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {

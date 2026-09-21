@@ -13,7 +13,7 @@ import {
 } from "../../infra/delivery/dispatcher";
 import { getEmailProviderAdapter } from "../../infra/email/provider";
 import { getEmailProviderTemplateExample } from "../../infra/email/provider-template-registry";
-import { adminCsrf, requireExactOrigin, requireRole } from "../../middleware/auth";
+import { adminCsrf, requireAdminAppOrigin, requireRole } from "../../middleware/auth";
 import { AppError, ConflictError, NotFoundError } from "../../middleware/error";
 import { prepareAuditInsert } from "../../services/identity/audit";
 import { requestIp } from "../../services/identity/session";
@@ -121,7 +121,7 @@ interface EmailDeliveryRow {
 }
 
 function mutationGuards() {
-  return [requireExactOrigin, adminCsrf, requireRole(["owner", "admin"])] as const;
+  return [requireAdminAppOrigin, adminCsrf, requireRole(["owner", "admin"])] as const;
 }
 
 async function one<T>(statement: D1PreparedStatement): Promise<T | undefined> {
@@ -721,6 +721,7 @@ adminEmailIntegrationsRouter.post(
       notificationType,
       contractVersion: binding.contract_version,
       recipientEmail: input.recipientEmail,
+      adminOrigin: new URL(c.req.url).origin,
     });
     c.header("Cache-Control", "no-store");
     return c.json({ success: true, data: toSnakeCaseJson(result) });

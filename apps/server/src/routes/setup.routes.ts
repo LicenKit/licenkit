@@ -4,7 +4,9 @@ import { ulid } from "ulid";
 import type { AppContext } from "../types";
 import { hashPassword, timingSafeEqual } from "../infra/crypto";
 import { AppError, UnauthorizedError } from "../middleware/error";
-import { requireExactOrigin, setupGuard } from "../middleware/auth";
+import { requireAdminAppOrigin, setupGuard } from "../middleware/auth";
+import { customerSiteOrigin } from "../config/customer-site";
+import { isSchemefulSameSite, schemefulSite } from "../config/trusted-url";
 import {
   prepareInitialDeployment,
   readDeploymentSetupState,
@@ -37,14 +39,23 @@ const SetupSchema = z.object({
   }).strict(),
 }).strict();
 
-function normalizeSameOriginSiteUrl(value: string, appOrigin: string): string {
+function normalizeCustomerSiteUrl(
+  value: string,
+  configuredCustomerSiteOrigin: string,
+  appOrigin: string,
+): string {
   const url = new URL(value);
-  if (url.origin !== appOrigin) {
+  assertCustomerSiteSameSite(configuredCustomerSiteOrigin, appOrigin);
+  if (url.origin !== configuredCustomerSiteOrigin) {
     throw new AppError(
       "SETUP_SITE_URL_ORIGIN_MISMATCH",
-      "Site URL must use the same Origin as the LicenKit app URL",
+      "Site URL must use the configured Customer Site Origin",
       400,
-      { appOrigin, siteOrigin: url.origin },
+      {
+        appOrigin,
+        customerSiteOrigin: configuredCustomerSiteOrigin,
+        siteOrigin: url.origin,
+      },
     );
   }
   if (url.username || url.password || url.search || url.hash) {
@@ -56,6 +67,27 @@ function normalizeSameOriginSiteUrl(value: string, appOrigin: string): string {
   }
   const path = url.pathname.replace(/\/+$/, "");
   return `${url.origin}${path === "" || path === "/" ? "" : path}`;
+}
+
+function assertCustomerSiteSameSite(
+  configuredCustomerSiteOrigin: string,
+  appOrigin: string,
+): void {
+  const customerOrigin = new URL(configuredCustomerSiteOrigin);
+  const apiOrigin = new URL(appOrigin);
+  if (isSchemefulSameSite(customerOrigin, apiOrigin)) return;
+
+  throw new AppError(
+    "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED",
+    "Customer Site and LicenKit API must use the same schemeful site for SameSite=Lax Customer cookies",
+    400,
+    {
+      appOrigin,
+      customerSiteOrigin: configuredCustomerSiteOrigin,
+      appSite: schemefulSite(apiOrigin),
+      customerSite: schemefulSite(customerOrigin),
+    },
+  );
 }
 
 function requireValidSetupToken(configuredValue: string | undefined, submittedValue: string): void {
@@ -83,18 +115,22 @@ setupRouter.get("/status", async (c) => {
 
 setupRouter.post(
   "/verify-token",
-  requireExactOrigin,
+  requireAdminAppOrigin,
   setupGuard,
   async (c) => {
     const input = VerifyTokenSchema.parse(await c.req.json());
     requireValidSetupToken(c.env.INITIAL_SETUP_TOKEN, input.setup_token);
+    assertCustomerSiteSameSite(
+      customerSiteOrigin(c.env),
+      new URL(c.req.url).origin,
+    );
     return c.json({ success: true, data: { valid: true } });
   },
 );
 
 setupRouter.post(
   "/",
-  requireExactOrigin,
+  requireAdminAppOrigin,
   setupGuard,
   async (c) => {
     const input = SetupSchema.parse(await c.req.json());
@@ -103,7 +139,11 @@ setupRouter.post(
     const now = new Date();
     const nowIso = now.toISOString();
     const origin = new URL(c.req.url).origin;
-    const siteUrl = normalizeSameOriginSiteUrl(input.instance.site_url, origin);
+    const siteUrl = normalizeCustomerSiteUrl(
+      input.instance.site_url,
+      customerSiteOrigin(c.env),
+      origin,
+    );
     const instanceId = `ins_${ulid().toLowerCase()}`;
     const userId = `usr_${ulid().toLowerCase()}`;
     const sessionId = `ase_${ulid().toLowerCase()}`;

@@ -7,7 +7,7 @@ import { UnauthorizedError } from "../middleware/error";
 import {
   adminCsrf,
   adminSessionAuth,
-  requireExactOrigin,
+  requireAdminAppOrigin,
 } from "../middleware/auth";
 import {
   clearAdminCookies,
@@ -74,7 +74,7 @@ authRouter.use("*", async (c, next) => {
 
 authRouter.post(
   "/login",
-  requireExactOrigin,
+  requireAdminAppOrigin,
   async (c) => {
     const input = LoginSchema.parse(await c.req.json());
     const result = await c.env.DB
@@ -191,7 +191,7 @@ authRouter.get("/session", adminSessionAuth, async (c) => {
 authRouter.post(
   "/logout",
   adminSessionAuth,
-  requireExactOrigin,
+  requireAdminAppOrigin,
   adminCsrf,
   async (c) => {
     const now = new Date().toISOString();

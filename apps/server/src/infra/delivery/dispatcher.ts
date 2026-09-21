@@ -72,7 +72,7 @@ interface TestConfigurationRow {
 
 export interface DispatchDeliveryInput {
   db: D1Database;
-  env: DeliveryCryptoEnv & SensitiveDeliveryRetentionEnv;
+  env: DeliveryCryptoEnv & SensitiveDeliveryRetentionEnv & { ENVIRONMENT?: string };
   instanceId: string;
   deliveryId: string;
   workerId?: string;
@@ -92,12 +92,13 @@ export interface DispatchDeliveryResult {
 
 export interface TestEmailConfigurationInput {
   db: D1Database;
-  env: DeliveryCryptoEnv;
+  env: DeliveryCryptoEnv & { ENVIRONMENT?: string };
   instanceId: string;
   emailIntegrationId: string;
   notificationType: string;
   contractVersion: number;
   recipientEmail: string;
+  adminOrigin?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -364,6 +365,8 @@ async function materializeDelivery(
     {
       trustedSiteUrl: row.site_url,
       expectedInstanceSlug: row.instance_slug,
+      authenticatedPreparedDelivery: true,
+      environment: input.env.ENVIRONMENT,
     },
   );
   const adapter = adapterFor(row.provider, input.fetchImpl);
@@ -425,6 +428,8 @@ function testVariables(
   configuration: TestConfigurationRow,
   notificationType: string,
   contractVersion: number,
+  adminOrigin?: string,
+  environment?: string,
 ): Readonly<Record<string, EmailVariableValue>> {
   const contract = getEmailNotificationContract(notificationType, contractVersion);
   const values: Record<string, EmailVariableValue> = Object.fromEntries(
@@ -445,7 +450,21 @@ function testVariables(
       trustedSiteUrl: configuration.site_url,
       instanceSlug: configuration.instance_slug,
       oneTimeToken: `mlk_${"0".repeat(64)}`,
+      environment,
     });
+  }
+  if (Object.prototype.hasOwnProperty.call(values, "invitation_url")) {
+    if (!adminOrigin) {
+      throw new AppError(
+        "EMAIL_TRUSTED_ADMIN_ORIGIN_REQUIRED",
+        "The trusted Admin Origin is required to test this email template.",
+        409,
+      );
+    }
+    const invitationUrl = new URL(adminOrigin);
+    invitationUrl.pathname = "/admin/invitations/accept";
+    invitationUrl.hash = `token=ivk_${"0".repeat(64)}`;
+    values.invitation_url = invitationUrl.toString();
   }
   return validateEmailNotificationVariables(
     notificationType,
@@ -453,7 +472,9 @@ function testVariables(
     values,
     {
       trustedSiteUrl: configuration.site_url,
+      trustedAdminOrigin: adminOrigin,
       expectedInstanceSlug: configuration.instance_slug,
+      environment,
     },
   );
 }
@@ -507,6 +528,8 @@ export async function testEmailConfiguration(
       configuration,
       input.notificationType,
       input.contractVersion,
+      input.adminOrigin,
+      input.env.ENVIRONMENT,
     );
     const credentialSerialized = await decryptEnvelopeV1(
       configuration.credential_ciphertext,
