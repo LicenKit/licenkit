@@ -145,17 +145,6 @@ adminLicensePlansRouter.post("/", requireRole(["owner", "admin"]), async (c) => 
     throw new AppError("PRODUCT_ARCHIVED", "A License Plan cannot be created for an archived Product.", 409);
   }
 
-  if (input.credentialMode === "signed") {
-    const activeKey = await db.select({ id: signingKeys.id }).from(signingKeys).where(and(
-      eq(signingKeys.instanceId, instanceId),
-      eq(signingKeys.productId, input.productId),
-      eq(signingKeys.status, "active"),
-    )).get();
-    if (!activeKey) {
-      throw new AppError("SIGNING_KEY_NOT_CONFIGURED", "Signed License Plans require an active Product signing key.", 409);
-    }
-  }
-
   let paymentGraceSeconds = input.paymentGraceSeconds;
   if (input.licenseModel === "subscription" && paymentGraceSeconds === undefined) {
     paymentGraceSeconds = product.paymentGraceSeconds;
@@ -170,6 +159,17 @@ adminLicensePlansRouter.post("/", requireRole(["owner", "admin"]), async (c) => 
     paymentGraceSeconds,
   };
   validatePlanShape(values);
+
+  if (input.credentialMode === "signed") {
+    const activeKey = await db.select({ id: signingKeys.id }).from(signingKeys).where(and(
+      eq(signingKeys.instanceId, instanceId),
+      eq(signingKeys.productId, input.productId),
+      eq(signingKeys.status, "active"),
+    )).get();
+    if (!activeKey) {
+      throw new AppError("SIGNING_KEY_NOT_CONFIGURED", "Signed License Plans require an active Product signing key.", 409);
+    }
+  }
 
   const planId = `lpl_${ulid().toLowerCase()}`;
   const now = new Date().toISOString();

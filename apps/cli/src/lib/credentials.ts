@@ -1,6 +1,8 @@
 import {
   ClientContractError,
-  type ClientCredentialResponse,
+  type ActivationResponse,
+  type ActiveLicenseState,
+  type CredentialUpdate,
   type LicenseTerms,
 } from "./client-api";
 import {
@@ -33,14 +35,41 @@ function assertTerms(value: unknown): asserts value is LicenseTerms {
     terms.max_activations < 1 ||
     !Array.isArray(terms.features) ||
     terms.features.some((feature) => typeof feature !== "string") ||
-    !(["string", "number"].includes(typeof terms.updates_until) || terms.updates_until === null)
+    !(typeof terms.updates_until === "string" || terms.updates_until === null)
   ) {
     throw new ClientContractError("Server returned invalid License Terms");
   }
 }
 
-export async function verifyCredentialResponse(
-  response: ClientCredentialResponse,
+function timestampSeconds(value: string | null): number | null {
+  return value === null ? null : Math.floor(Date.parse(value) / 1000);
+}
+
+function sameFeatures(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((feature, index) => feature === right[index]);
+}
+
+function verifyClaimsMatchResponse(
+  claims: SignedLicenseClaims,
+  credential: CredentialUpdate,
+  state: ActiveLicenseState
+): void {
+  if (timestampSeconds(credential.signed_license_token_expires_at) !== claims.exp) {
+    throw new SignedTokenError("TOKEN_EXPIRY_MISMATCH", "Token exp does not match signed_license_token_expires_at");
+  }
+  if (claims.lexp !== timestampSeconds(state.expires_at)) {
+    throw new SignedTokenError("TOKEN_LICENSE_EXPIRY_MISMATCH", "Token lexp does not match the active License state");
+  }
+  if (claims.upd !== timestampSeconds(state.terms.updates_until)) {
+    throw new SignedTokenError("TOKEN_UPDATE_ENTITLEMENT_MISMATCH", "Token upd does not match the active License state");
+  }
+  if (!sameFeatures(claims.fea, state.terms.features)) {
+    throw new SignedTokenError("TOKEN_FEATURES_MISMATCH", "Token features do not match the active License state");
+  }
+}
+
+export async function verifyActivationResponse(
+  response: ActivationResponse,
   trustedSigningKeys: Record<string, string>,
   context: ClaimsContext
 ): Promise<SignedLicenseClaims | undefined> {
@@ -49,6 +78,9 @@ export async function verifyCredentialResponse(
     throw new ClientContractError("Credential response is missing activation_id or machine_token");
   }
   assertTerms(response.terms);
+  if (response.state.kind !== "license" || response.state.status !== "active") {
+    throw new ClientContractError("Successful activation must contain an active License state");
+  }
 
   if (response.credential_mode === "opaque") {
     if (response.signed_license_token) {
@@ -69,5 +101,38 @@ export async function verifyCredentialResponse(
   const { claims } = await verifySignedLicenseToken(response.signed_license_token, trustedKey);
   const evaluation = evaluateSignedLicenseClaims(claims, { ...context, activationId: response.activation_id });
   if (!evaluation.valid) throw new SignedTokenError(evaluation.code ?? "TOKEN_CLAIMS_INVALID", evaluation.reason ?? "Signed License Token claims are invalid");
+  verifyClaimsMatchResponse(claims, response, response.state);
+  return claims;
+}
+
+export async function verifyValidationCredentialUpdate(
+  credential: CredentialUpdate,
+  trustedSigningKeys: Record<string, string>,
+  context: ClaimsContext,
+  state: ActiveLicenseState
+): Promise<SignedLicenseClaims | undefined> {
+  if (credential.credential_mode === "opaque") {
+    if (credential.signed_license_token || credential.signed_license_token_expires_at || credential.signing_key_id) {
+      throw new ClientContractError("Opaque credential update unexpectedly contains Signed License Token fields");
+    }
+    return undefined;
+  }
+  if (!credential.signed_license_token || !credential.signing_key_id || !credential.signed_license_token_expires_at) {
+    throw new ClientContractError("Signed credential update is incomplete");
+  }
+  const header = decodeSignedLicenseHeader(credential.signed_license_token);
+  if (credential.signing_key_id !== header.kid) {
+    throw new SignedTokenError("TOKEN_KEY_ID_MISMATCH", "Credential update signing_key_id does not match the protected kid");
+  }
+  const trustedKey = trustedSigningKeys[header.kid];
+  if (!trustedKey) {
+    throw new SignedTokenError("TRUSTED_SIGNING_KEY_MISSING", "No trusted signing key is configured for the credential update");
+  }
+  const { claims } = await verifySignedLicenseToken(credential.signed_license_token, trustedKey);
+  const evaluation = evaluateSignedLicenseClaims(claims, context);
+  if (!evaluation.valid) {
+    throw new SignedTokenError(evaluation.code ?? "TOKEN_CLAIMS_INVALID", evaluation.reason ?? "Signed License Token claims are invalid");
+  }
+  verifyClaimsMatchResponse(claims, credential, state);
   return claims;
 }

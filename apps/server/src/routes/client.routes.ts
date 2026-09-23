@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppContext } from "../types";
-import { activateLicense, deactivateActivation, validateActivation } from "../services/license/activation";
-import { claimTrial, validateTrial } from "../services/license/trial";
+import { activateLicense, deactivateActivation } from "../services/license/activation";
+import { validateClient } from "../services/license/client-validation";
+import { claimTrial } from "../services/license/trial";
 
 export const clientRouter = new Hono<AppContext>();
 
@@ -37,34 +38,66 @@ clientRouter.post("/activate", async (c) => {
     firstIp: c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for")?.split(",")[0]?.trim(),
   });
   c.header("Cache-Control", "no-store");
-  return c.json({ success: true, data });
+  return c.json({
+    success: true,
+    data: { ...data, meta: { request_id: c.get("requestId") } },
+  });
 });
+
+const CredentialSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("license"),
+    activation_id: z.string().min(1),
+    machine_token: z.string().min(16),
+  }).strict(),
+  z.object({
+    kind: z.literal("trial"),
+    trial_id: z.string().min(1),
+    trial_token: z.string().min(16),
+  }).strict(),
+  z.object({
+    kind: z.literal("none"),
+  }).strict(),
+]);
 
 const ValidateSchema = z.object({
   instance_id: z.string().min(1),
   product_id: z.string().min(1),
-  activation_id: z.string().min(1),
-  machine_token: z.string().min(16),
   fingerprint: z.string().trim().min(8).max(512),
-  device_platform: z.string().trim().min(1).max(100).optional(),
   ...ReleaseFields,
+  credential: CredentialSchema,
 }).strict();
 
 clientRouter.post("/validate", async (c) => {
   const input = ValidateSchema.parse(await c.req.json());
-  const data = await validateActivation({
+  const credential = input.credential.kind === "license"
+    ? {
+      kind: "license" as const,
+      activationId: input.credential.activation_id,
+      machineToken: input.credential.machine_token,
+    }
+    : input.credential.kind === "trial"
+      ? {
+        kind: "trial" as const,
+        trialId: input.credential.trial_id,
+        trialToken: input.credential.trial_token,
+      }
+      : { kind: "none" as const };
+  const data = await validateClient({
     db: c.env.DB,
     env: c.env,
     instanceId: input.instance_id,
     productId: input.product_id,
-    activationId: input.activation_id,
-    machineToken: input.machine_token,
     fingerprint: input.fingerprint,
     releaseVersion: input.release_version,
     releasePlatform: input.release_platform,
+    credential,
   });
   c.header("Cache-Control", "no-store");
-  return c.json({ success: true, data: { valid: true, ...data } });
+  return c.json({
+    success: true,
+    data: { ...data, meta: { request_id: c.get("requestId") } },
+  });
 });
 
 const TrialClaimSchema = z.object({
@@ -86,32 +119,10 @@ clientRouter.post("/trials/claim", async (c) => {
     releasePlatform: input.release_platform,
   });
   c.header("Cache-Control", "no-store");
-  return c.json({ success: true, data }, 201);
-});
-
-const TrialValidateSchema = z.object({
-  instance_id: z.string().min(1),
-  product_id: z.string().min(1),
-  trial_id: z.string().min(1),
-  trial_token: z.string().min(16),
-  fingerprint: z.string().trim().min(8).max(512),
-  ...ReleaseFields,
-}).strict();
-
-clientRouter.post("/trials/validate", async (c) => {
-  const input = TrialValidateSchema.parse(await c.req.json());
-  const data = await validateTrial({
-    db: c.env.DB,
-    instanceId: input.instance_id,
-    productId: input.product_id,
-    trialId: input.trial_id,
-    trialToken: input.trial_token,
-    fingerprint: input.fingerprint,
-    releaseVersion: input.release_version,
-    releasePlatform: input.release_platform,
-  });
-  c.header("Cache-Control", "no-store");
-  return c.json({ success: true, data });
+  return c.json({
+    success: true,
+    data: { ...data, meta: { request_id: c.get("requestId") } },
+  }, 201);
 });
 
 const DeactivateSchema = z.object({
@@ -132,7 +143,10 @@ clientRouter.post("/deactivate", async (c) => {
     machineToken: input.machine_token,
     fingerprint: input.fingerprint,
   });
-  return c.json({ success: true, data });
+  return c.json({
+    success: true,
+    data: { ...data, meta: { request_id: c.get("requestId") } },
+  });
 });
 
 clientRouter.get("/products/:productId/signing-keys", async (c) => {

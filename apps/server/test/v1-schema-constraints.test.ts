@@ -237,6 +237,37 @@ describe("User and Instance initial database schema", () => {
       .toEqual({ payment_grace_seconds: 60 });
   });
 
+  it("requires a positive signed credential TTL independently of the validation interval", () => {
+    const db = createDb();
+    seedOwner(db);
+    db.prepare(
+      `INSERT INTO products
+         (id, instance_id, slug, name, billing_environment, status, created_at, updated_at)
+       VALUES ('prd_signed', 'ins_a', 'signed-app', 'Signed App', 'sandbox', 'active', ?, ?)`,
+    ).run(now, now);
+    const insertPlan = db.prepare(
+      `INSERT INTO license_plans (
+         id, instance_id, product_id, name, license_model, credential_mode,
+         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         features_json, status, created_at, updated_at
+       ) VALUES (?, 'ins_a', 'prd_signed', ?, 'perpetual', 'signed',
+         ?, 0, 1, '[]', 'active', ?, ?)`,
+    );
+    expect(() => insertPlan.run("pln_zero", "Zero", 0, now, now))
+      .toThrow(/ck_license_plans_credential_ttl/);
+    insertPlan.run("pln_positive", "Positive", 1, now, now);
+    expect(db.prepare(
+      "SELECT signed_token_ttl_seconds FROM license_plans WHERE id = 'pln_positive'",
+    ).get()).toEqual({ signed_token_ttl_seconds: 1 });
+
+    const licenseSchema = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'licenses'",
+    ).get() as { sql: string };
+    expect(licenseSchema.sql).toContain(
+      `"licenses"."credential_mode" = 'signed' and "licenses"."signed_token_ttl_seconds" > 0`,
+    );
+  });
+
   it("preserves existing and new custom Triggers", () => {
     const db = createDb();
     const triggers = (db.prepare(

@@ -1,9 +1,15 @@
 import pc from "picocolors";
 import { getMachineFingerprint } from "../lib/machine";
-import { apiValidate } from "../lib/client-api";
-import { verifyCredentialResponse } from "../lib/credentials";
+import {
+  apiValidate,
+  ClientContractError,
+  effectiveValidationIntervalSeconds,
+} from "../lib/client-api";
+import { verifyValidationCredentialUpdate } from "../lib/credentials";
+import { SignedTokenError } from "../lib/crypto";
+import { describeEntitlementState, entitlementStateIsUsable } from "../lib/entitlement";
 import { describeClientError } from "../lib/errors";
-import { loadStoredLicense, saveStoredLicense } from "../lib/storage";
+import { clearStoredLicense, loadStoredLicense, saveStoredLicense } from "../lib/storage";
 
 export async function validateCommand(): Promise<void> {
   try {
@@ -14,38 +20,107 @@ export async function validateCommand(): Promise<void> {
       serverUrl: stored.serverUrl,
       instanceId: stored.instanceId,
       productId: stored.productId,
-      activationId: stored.activationId,
-      machineToken: stored.machineToken,
-      fingerprint,
-      devicePlatform: stored.devicePlatform,
-      releaseVersion: stored.releaseVersion,
-      releasePlatform: stored.releasePlatform,
-    });
-    if (response.activation_id !== stored.activationId) {
-      throw new Error("Server validation response changed the activation identity");
-    }
-    await verifyCredentialResponse(response, stored.trustedSigningKeys ?? {}, {
-      instanceId: stored.instanceId,
-      productId: stored.productId,
-      activationId: stored.activationId,
       fingerprint,
       releaseVersion: stored.releaseVersion,
       releasePlatform: stored.releasePlatform,
+      credential: {
+        kind: "license",
+        activation_id: stored.activationId,
+        machine_token: stored.machineToken,
+      },
     });
-
-    saveStoredLicense({
+    const effectiveInterval = effectiveValidationIntervalSeconds(
+      response.validation.validation_interval_seconds
+    );
+    let nextStored = {
       ...stored,
-      machineToken: response.machine_token,
-      credentialMode: response.credential_mode,
-      signedLicenseToken: response.signed_license_token || undefined,
-      signingKeyId: response.signing_key_id || undefined,
-      lastValidatedAt: new Date().toISOString(),
-      licenseExpiresAt: response.license_expires_at,
-      terms: response.terms,
-    });
-    console.log(pc.bold(pc.green("✔ License validated online")));
-    console.log(`  ${pc.gray("Activation ID:")} ${response.activation_id}`);
-    console.log(`  ${pc.gray("Credential mode:")} ${response.credential_mode}`);
+      lastValidatedAt: response.validation.validated_at,
+      receivedValidationIntervalSeconds: response.validation.validation_interval_seconds,
+      effectiveValidationIntervalSeconds: effectiveInterval,
+      lastValidationRequestId: response.meta.request_id,
+      lastEntitlementState: response.state,
+    };
+
+    if (response.state.kind === "license" && response.state.status === "active") {
+      if (stored.credentialMode === "signed" && !response.credential_update) {
+        throw new ClientContractError(
+          "Signed License validation did not return a credential update",
+          200,
+          response.meta.request_id
+        );
+      }
+      if (response.credential_update) {
+        if (response.credential_update.credential_mode !== stored.credentialMode) {
+          throw new ClientContractError(
+            "Validation response changed the credential mode",
+            200,
+            response.meta.request_id
+          );
+        }
+        try {
+          await verifyValidationCredentialUpdate(
+            response.credential_update,
+            stored.trustedSigningKeys ?? {},
+            {
+              instanceId: stored.instanceId,
+              productId: stored.productId,
+              activationId: stored.activationId,
+              fingerprint,
+              releaseVersion: stored.releaseVersion,
+              releasePlatform: stored.releasePlatform,
+            },
+            response.state
+          );
+        } catch (error) {
+          if (error instanceof SignedTokenError) {
+            throw new ClientContractError(
+              "Signed credential update failed verification: " + error.message,
+              200,
+              response.meta.request_id,
+              { signed_error_code: error.code }
+            );
+          }
+          if (error instanceof ClientContractError) {
+            throw new ClientContractError(error.message, 200, response.meta.request_id, error.details);
+          }
+          throw error;
+        }
+        nextStored = {
+          ...nextStored,
+          credentialMode: response.credential_update.credential_mode,
+          signedLicenseToken: response.credential_update.signed_license_token || undefined,
+          signedLicenseTokenExpiresAt:
+            response.credential_update.signed_license_token_expires_at || undefined,
+          signingKeyId: response.credential_update.signing_key_id || undefined,
+        };
+      }
+      nextStored = {
+        ...nextStored,
+        licenseExpiresAt: response.state.expires_at,
+        terms: response.state.terms,
+      };
+    }
+
+    saveStoredLicense(nextStored);
+    const usable = entitlementStateIsUsable(response.state);
+    console.log(
+      usable
+        ? pc.bold(pc.green("✔ Authorization validated online"))
+        : pc.bold(pc.yellow("Authorization is not usable"))
+    );
+    for (const line of describeEntitlementState(response.state)) console.log("  " + line);
+    console.log("  " + pc.gray("Validated at:") + " " + response.validation.validated_at);
+    console.log(
+      "  " + pc.gray("Validation interval:") + " " + effectiveInterval
+      + "s (server: " + (response.validation.validation_interval_seconds ?? "default") + ")"
+    );
+    console.log("  " + pc.gray("Request ID:") + " " + response.meta.request_id);
+
+    if (response.state.kind === "license" && response.state.status === "activation_deactivated") {
+      clearStoredLicense();
+      console.log(pc.yellow("  Local credentials cleared because the Activation is deactivated."));
+    }
+    if (!usable) process.exitCode = 2;
   } catch (error) {
     for (const line of describeClientError(error)) console.error(pc.red(line));
     process.exitCode = 1;

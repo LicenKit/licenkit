@@ -9,6 +9,8 @@ const emptyForm = {
   signedTokenTtlSeconds: "2592000", paymentGraceSeconds: "",
 };
 
+export const MIN_SIGNED_TOKEN_TTL_SECONDS = 1;
+
 export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
   const [plans, setPlans] = useState<LicensePlan[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -87,7 +89,7 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
           {form.licenseModel === "perpetual" ? <Field label="版本更新窗口（秒）" hint="留空表示永久使用所有未来版本"><Input type="number" min="1" value={form.updateWindowSeconds} onChange={(event) => setForm({ ...form, updateWindowSeconds: event.target.value })} /></Field> : null}
           {form.licenseModel === "fixed_term" ? <Field label="默认固定期限（秒）"><Input type="number" min="1" value={form.defaultTermSeconds} onChange={(event) => setForm({ ...form, defaultTermSeconds: event.target.value })} required /></Field> : null}
           {form.licenseModel === "subscription" ? <Field label="支付宽限期（秒）" hint="每个 Product 自己设置默认值；创建授权方案时服务端会保存最终解析值。"><Input type="number" min="0" value={form.paymentGraceSeconds} onChange={(event) => setForm({ ...form, paymentGraceSeconds: event.target.value })} /></Field> : null}
-          {form.credentialMode === "signed" ? <Field label="Signed License Token TTL（秒）"><Input type="number" min="1" value={form.signedTokenTtlSeconds} onChange={(event) => setForm({ ...form, signedTokenTtlSeconds: event.target.value })} required /></Field> : null}
+          {form.credentialMode === "signed" ? <Field label="Signed License Token TTL（秒）"><Input type="number" min={MIN_SIGNED_TOKEN_TTL_SECONDS} value={form.signedTokenTtlSeconds} onChange={(event) => setForm({ ...form, signedTokenTtlSeconds: event.target.value })} required /></Field> : null}
           <div className="form-actions"><Button variant="secondary" type="button" onClick={() => setModalOpen(false)}>取消</Button><Button loading={saving} type="submit">创建授权方案</Button></div>
         </form>
       </Modal>

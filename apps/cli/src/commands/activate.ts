@@ -1,8 +1,9 @@
 import pc from "picocolors";
 import os from "node:os";
 import { getMachineFingerprint } from "../lib/machine";
-import { apiActivate } from "../lib/client-api";
-import { parseTrustedSigningKeys, verifyCredentialResponse } from "../lib/credentials";
+import { apiActivate, ClientContractError, effectiveValidationIntervalSeconds } from "../lib/client-api";
+import { parseTrustedSigningKeys, verifyActivationResponse } from "../lib/credentials";
+import { SignedTokenError } from "../lib/crypto";
 import { describeClientError } from "../lib/errors";
 import { saveStoredLicense } from "../lib/storage";
 
@@ -52,16 +53,30 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       releasePlatform,
       name: options.name || os.hostname(),
     });
-    await verifyCredentialResponse(response, trustedSigningKeys, {
-      instanceId,
-      productId,
-      activationId: response.activation_id,
-      fingerprint,
-      releaseVersion,
-      releasePlatform,
-    });
+    try {
+      await verifyActivationResponse(response, trustedSigningKeys, {
+        instanceId,
+        productId,
+        activationId: response.activation_id,
+        fingerprint,
+        releaseVersion,
+        releasePlatform,
+      });
+    } catch (error) {
+      if (error instanceof SignedTokenError) {
+        throw new ClientContractError(
+          "Signed activation credential failed verification: " + error.message,
+          200,
+          response.meta.request_id,
+          { signed_error_code: error.code }
+        );
+      }
+      if (error instanceof ClientContractError) {
+        throw new ClientContractError(error.message, 200, response.meta.request_id, error.details);
+      }
+      throw error;
+    }
 
-    const now = new Date().toISOString();
     saveStoredLicense({
       serverUrl,
       instanceId,
@@ -73,10 +88,17 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       machineToken: response.machine_token,
       credentialMode: response.credential_mode,
       signedLicenseToken: response.signed_license_token || undefined,
+      signedLicenseTokenExpiresAt: response.signed_license_token_expires_at || undefined,
       signingKeyId: response.signing_key_id || undefined,
       trustedSigningKeys: response.credential_mode === "signed" ? trustedSigningKeys : undefined,
-      activatedAt: now,
-      lastValidatedAt: now,
+      activatedAt: response.validation.validated_at,
+      lastValidatedAt: response.validation.validated_at,
+      receivedValidationIntervalSeconds: response.validation.validation_interval_seconds,
+      effectiveValidationIntervalSeconds: effectiveValidationIntervalSeconds(
+        response.validation.validation_interval_seconds
+      ),
+      lastValidationRequestId: response.meta.request_id,
+      lastEntitlementState: response.state,
       licenseExpiresAt: response.license_expires_at,
       terms: response.terms,
     });
@@ -85,6 +107,8 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     console.log(`  ${pc.gray("Activation ID:")} ${response.activation_id}`);
     console.log(`  ${pc.gray("Credential mode:")} ${response.credential_mode}`);
     console.log(`  ${pc.gray("Release:")} ${releaseVersion} (${releasePlatform})`);
+    console.log("  " + pc.gray("Validated at:") + " " + response.validation.validated_at);
+    console.log("  " + pc.gray("Request ID:") + " " + response.meta.request_id);
   } catch (error) {
     for (const line of describeClientError(error)) console.error(pc.red(line));
     process.exitCode = 1;

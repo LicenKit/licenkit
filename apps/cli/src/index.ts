@@ -29,16 +29,16 @@ cli
     await activateCommand(key, options);
   });
 
-// 3. Validate Command (Heartbeat)
+// 3. Validate Command
 cli
-  .command("validate", "Validate the current activation online")
+  .command("validate", "Validate the current authorization online and print its exact Server state")
   .action(async () => {
     await validateCommand();
   });
 
 // 4. Verify Command (Offline Mathematical Verification)
 cli
-  .command("verify-token [token]", "Verify a signed-mode credential locally (opaque mode requires online validation)")
+  .command("verify-token [token]", "Verify a signed credential within its current periodic online-validation window")
   .alias("verify")
   .option("-f, --feature <feature>", "Check if a specific feature entitlement is granted")
   .option("--fingerprint <fp>", "Override current host fingerprint (for testing)")

@@ -9,6 +9,7 @@
 
 ## 产品与客户端接入
 
+- [统一客户端校验开发指南](./zh-CN/unified-client-validation-guide.md)：从应用启动、激活与 Trial 到缓存窗口、失败处理和联调验收的完整接入路径。
 - [Swift SDK 集成](./zh-CN/swift-sdk.md)：macOS App 的激活、验证、凭据保存和错误处理。
 - [静态产品页与 Paddle Checkout](./zh-CN/static-product-page.md)：产品页如何直接使用 Paddle.js，并由已验签 Webhook 完成履约。
 - [Customer Site API 与页面清单](./zh-CN/customer-site-integration.md)：使用方需要实现的页面、Customer API、Magic Link、Cookie 和 CSRF 合同。

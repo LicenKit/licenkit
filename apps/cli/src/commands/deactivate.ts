@@ -26,6 +26,7 @@ export async function deactivateCommand(): Promise<void> {
     }
     clearStoredLicense();
     console.log(pc.bold(pc.green("✔ Remote activation deactivated and local credentials cleared")));
+    console.log("  " + pc.gray("Request ID:") + " " + response.meta.request_id);
   } catch (error) {
     console.error(pc.yellow("Local credentials were preserved because remote deactivation did not complete."));
     for (const line of describeClientError(error)) console.error(pc.red(line));

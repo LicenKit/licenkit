@@ -3,8 +3,13 @@ import { AppError, NotFoundError } from "../../middleware/error";
 import { decryptEnvelopeV1 } from "../../infra/delivery/crypto";
 import { hashLicenseKey, sha256Hex, timingSafeEqual } from "../../infra/crypto";
 import { generateOpaqueMachineToken, hashDeviceFingerprint } from "../../domain/license/credentials";
-import { createSignedLicenseToken, signedTokenExpiration } from "../../domain/license/signed-token";
-import { parseFeatures } from "../../domain/license/terms";
+import {
+  createSignedLicenseToken,
+  signedClaimInstant,
+  signedTokenExpiration,
+} from "../../domain/license/signed-token";
+import { effectiveLicenseExpiresAt, parseFeatures } from "../../domain/license/terms";
+import { createServerValidationMetadata } from "../../domain/license/validation-policy";
 import { firstD1 } from "./d1";
 
 interface ProductReleaseRow {
@@ -91,24 +96,37 @@ function assertLicenseUsable(license: LicenseRow, now: Date) {
       status_reason: license.status_reason,
     });
   }
-  if (license.expires_at) {
-    const graceSeconds = license.renewal_mode === "billing" ? license.payment_grace_seconds : 0;
-    const effectiveExpiry = Date.parse(license.expires_at) + graceSeconds * 1000;
-    if (now.getTime() > effectiveExpiry) {
+  const calculatedExpiresAt = effectiveLicenseExpiresAt({
+    renewalMode: license.renewal_mode,
+    expiresAt: license.expires_at,
+    paymentGraceSeconds: license.payment_grace_seconds,
+  });
+  const effectiveExpiresAt = calculatedExpiresAt && license.credential_mode === "signed"
+    ? signedClaimInstant(calculatedExpiresAt).toISOString()
+    : calculatedExpiresAt;
+  if (effectiveExpiresAt) {
+    if (now.getTime() >= Date.parse(effectiveExpiresAt)) {
       throw new AppError("LICENSE_EXPIRED", "The License term has expired.", 403, {
         license_id: license.id,
-        expires_at: license.expires_at,
-        payment_grace_seconds: graceSeconds,
+        expires_at: effectiveExpiresAt,
+        billing_period_expires_at: license.expires_at,
+        payment_grace_seconds: license.renewal_mode === "billing" ? license.payment_grace_seconds : 0,
       });
     }
   }
 }
 
 function assertReleaseEntitlement(license: LicenseRow, release: ProductReleaseRow) {
+  const updatesUntil = license.updates_until && license.credential_mode === "signed"
+    ? signedClaimInstant(license.updates_until).toISOString()
+    : license.updates_until;
+  const releasedAt = license.credential_mode === "signed"
+    ? signedClaimInstant(release.released_at).toISOString()
+    : release.released_at;
   if (
     license.license_model === "perpetual" &&
-    license.updates_until &&
-    Date.parse(release.released_at) > Date.parse(license.updates_until)
+    updatesUntil &&
+    Date.parse(releasedAt) > Date.parse(updatesUntil)
   ) {
     throw new AppError(
       "UPDATE_ENTITLEMENT_REQUIRED",
@@ -116,9 +134,10 @@ function assertReleaseEntitlement(license: LicenseRow, release: ProductReleaseRo
       403,
       {
         license_id: license.id,
-        updates_until: license.updates_until,
+        updates_until: updatesUntil,
         release_version: release.version,
-        released_at: release.released_at,
+        release_platform: release.platform,
+        released_at: releasedAt,
       },
     );
   }
@@ -135,6 +154,17 @@ async function createCredentialResponse(input: {
   now: Date;
 }) {
   const features = parseFeatures(input.license.features_json);
+  const calculatedExpiresAt = effectiveLicenseExpiresAt({
+    renewalMode: input.license.renewal_mode,
+    expiresAt: input.license.expires_at,
+    paymentGraceSeconds: input.license.payment_grace_seconds,
+  });
+  const effectiveExpiresAt = calculatedExpiresAt && input.license.credential_mode === "signed"
+    ? signedClaimInstant(calculatedExpiresAt).toISOString()
+    : calculatedExpiresAt;
+  const updatesUntil = input.license.updates_until && input.license.credential_mode === "signed"
+    ? signedClaimInstant(input.license.updates_until).toISOString()
+    : input.license.updates_until;
   const base = {
     activation_id: input.activationId,
     machine_token: input.machineToken,
@@ -142,13 +172,13 @@ async function createCredentialResponse(input: {
     signed_license_token: null as string | null,
     signed_license_token_expires_at: null as string | null,
     signing_key_id: null as string | null,
-    license_expires_at: input.license.expires_at,
+    license_expires_at: effectiveExpiresAt,
     terms: {
       license_model: input.license.license_model,
       renewal_mode: input.license.renewal_mode,
       max_activations: input.license.max_activations,
       features,
-      updates_until: input.license.updates_until,
+      updates_until: updatesUntil,
     },
   };
   if (input.license.credential_mode === "opaque") return base;
@@ -172,7 +202,7 @@ async function createCredentialResponse(input: {
   const tokenExpiry = signedTokenExpiration({
     issuedAt: input.now,
     ttlSeconds: input.license.signed_token_ttl_seconds,
-    licenseExpiresAt: input.license.expires_at,
+    licenseExpiresAt: effectiveExpiresAt,
   });
   base.signed_license_token = await createSignedLicenseToken({
     keyId: signingKey.id,
@@ -189,8 +219,8 @@ async function createCredentialResponse(input: {
       fp: input.fingerprint,
       iat: Math.floor(input.now.getTime() / 1000),
       exp: Math.floor(tokenExpiry.getTime() / 1000),
-      lexp: input.license.expires_at ? Math.floor(Date.parse(input.license.expires_at) / 1000) : null,
-      upd: input.license.updates_until ? Math.floor(Date.parse(input.license.updates_until) / 1000) : null,
+      lexp: effectiveExpiresAt ? Math.floor(Date.parse(effectiveExpiresAt) / 1000) : null,
+      upd: updatesUntil ? Math.floor(Date.parse(updatesUntil) / 1000) : null,
       fea: features,
     },
   });
@@ -397,9 +427,37 @@ export async function activateLicense(input: {
           });
           const refreshed = await input.db.prepare(
             `UPDATE activations SET machine_token_hash = ?1, last_validated_at = ?2, updated_at = ?2
-             WHERE instance_id = ?3 AND license_id = ?4 AND id = ?5 AND status = 'active'`
-          ).bind(machineTokenHash, now.toISOString(), input.instanceId, license.id, activation.id).run();
+             WHERE instance_id = ?3 AND license_id = ?4 AND id = ?5 AND status = 'active'
+               AND EXISTS (
+                 SELECT 1 FROM licenses l
+                 WHERE l.instance_id = ?3 AND l.id = ?4 AND l.product_id = ?6
+                   AND l.updated_at = ?7
+                   AND l.is_checkout_verification = 0 AND l.status = 'active'
+                   AND (
+                     l.expires_at IS NULL
+                     OR datetime(l.expires_at, '+' || CASE WHEN l.renewal_mode = 'billing'
+                          THEN l.payment_grace_seconds ELSE 0 END || ' seconds') > datetime(?2)
+                   )
+               )`
+          ).bind(
+            machineTokenHash,
+            now.toISOString(),
+            input.instanceId,
+            license.id,
+            activation.id,
+            input.productId,
+            license.updated_at,
+          ).run();
           if ((refreshed.meta?.changes ?? 0) !== 1) {
+            const current = await firstD1<LicenseRow>(input.db.prepare(
+              `SELECT id, instance_id, product_id, license_model, renewal_mode,
+                      credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
+                      max_activations, features_json, is_checkout_verification, status,
+                      status_reason, expires_at, updates_until, updated_at
+               FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+            ).bind(input.instanceId, license.id));
+            if (!current) throw new NotFoundError("License not found");
+            assertLicenseUsable(current, now);
             throw new AppError("ACTIVATION_CONFLICT", "The Activation changed concurrently.", 409);
           }
         } else {
@@ -411,7 +469,16 @@ export async function activateLicense(input: {
     }
   }
 
-  return credentialResponse;
+  return {
+    ...credentialResponse,
+    state: {
+      kind: "license" as const,
+      status: "active" as const,
+      expires_at: credentialResponse.license_expires_at,
+      terms: credentialResponse.terms,
+    },
+    validation: createServerValidationMetadata(now),
+  };
 }
 
 export async function validateActivation(input: {
@@ -441,14 +508,22 @@ export async function validateActivation(input: {
      LIMIT 1`
   ).bind(input.instanceId, input.productId, input.activationId));
   if (!activation) throw new NotFoundError("Activation not found");
-  if (activation.status === "revoked") throw new AppError("ACTIVATION_REVOKED", "The Activation is revoked.", 403);
-  if (activation.status === "deactivated") throw new AppError("ACTIVATION_DEACTIVATED", "The Activation is deactivated.", 403);
   const providedTokenHash = await sha256Hex(input.machineToken);
   if (
     !timingSafeEqual(providedTokenHash, activation.machine_token_hash) ||
     !timingSafeEqual(fingerprintHash, activation.fingerprint_hash)
   ) {
     throw new AppError("ACTIVATION_CREDENTIALS_INVALID", "The Activation credentials are invalid.", 401);
+  }
+  if (activation.status === "revoked") {
+    throw new AppError("ACTIVATION_REVOKED", "The Activation is revoked.", 403, {
+      activation_id: activation.id,
+    });
+  }
+  if (activation.status === "deactivated") {
+    throw new AppError("ACTIVATION_DEACTIVATED", "The Activation is deactivated.", 403, {
+      activation_id: activation.id,
+    });
   }
   const license: LicenseRow = {
     id: activation.license_id,
@@ -515,8 +590,16 @@ export async function validateActivation(input: {
        FROM activations WHERE instance_id = ?1 AND license_id = ?2 AND id = ?3 LIMIT 1`
     ).bind(input.instanceId, license.id, input.activationId));
     if (!currentActivation) throw new NotFoundError("Activation not found");
-    if (currentActivation.status === "revoked") throw new AppError("ACTIVATION_REVOKED", "The Activation is revoked.", 403);
-    if (currentActivation.status === "deactivated") throw new AppError("ACTIVATION_DEACTIVATED", "The Activation is deactivated.", 403);
+    if (currentActivation.status === "revoked") {
+      throw new AppError("ACTIVATION_REVOKED", "The Activation is revoked.", 403, {
+        activation_id: currentActivation.id,
+      });
+    }
+    if (currentActivation.status === "deactivated") {
+      throw new AppError("ACTIVATION_DEACTIVATED", "The Activation is deactivated.", 403, {
+        activation_id: currentActivation.id,
+      });
+    }
     const currentLicense = await firstD1<LicenseRow>(input.db.prepare(
       `SELECT id, instance_id, product_id, license_model, renewal_mode,
               credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
@@ -528,7 +611,16 @@ export async function validateActivation(input: {
     assertLicenseUsable(currentLicense, now);
     throw new AppError("LICENSE_STATE_CHANGED", "The License changed during online validation.", 409);
   }
-  return credentialResponse;
+  return {
+    ...credentialResponse,
+    state: {
+      kind: "license" as const,
+      status: "active" as const,
+      expires_at: credentialResponse.license_expires_at,
+      terms: credentialResponse.terms,
+    },
+    validation: createServerValidationMetadata(now),
+  };
 }
 
 export async function deactivateActivation(input: {

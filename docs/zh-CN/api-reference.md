@@ -712,6 +712,28 @@ Paddle Client-side Token 与 Price ID 可以进入前端；Paddle API Key、Webh
 
 ## 7. Client API
 
+Client API 使用同一组授权状态，而不是让 License、Trial 和无凭据设备各自解释一套错误码。所有成功响应都采用 `{ "success": true, "data": ... }`；请求格式错误、凭据无效、内部配置错误或服务端故障仍采用错误 Envelope，并保留原始 `code`、`request_id` 与安全的 `details`。
+
+在线确认成功不等于授权可用。调用方必须读取 `data.state`：可用状态是 `license.active` 或 `trial.active`；到期、吊销、暂停、Activation 已失效、Release 不合格以及需要激活都是成功读取到的业务事实。
+
+`activate`、`validate` 和 `trials/claim` 的成功响应都包含：
+
+```json
+{
+  "validation": {
+    "validation_interval_seconds": null,
+    "validated_at": "2026-09-23T10:00:00.000Z"
+  },
+  "meta": {
+    "request_id": "req_01..."
+  }
+}
+```
+
+`validated_at` 由服务端生成，表示这份业务状态何时被确认。`validation_interval_seconds` 为 `null` 时，Swift SDK 使用 3600 秒默认值；非空值限制在 3600 至 86400 秒之间。它们不等同于 Swift SDK 的最近 `/validate` 响应时间：激活和领取 Trial 虽然返回已确认业务状态，但不会启动 `/validate` 冷却。
+
+Swift SDK 对 `/validate` 同时应用服务端建议间隔和硬编码 30 秒门槛；只有本地 Signed License Token 已过期或无效时可以绕过建议间隔，但仍不能绕过 30 秒门槛。两个门槛都从最近一次明确 `/validate` Server 结果开始计算：合法的成功业务响应，或已收到 HTTP 状态的失败响应。DNS、TLS、超时、断网等没有 HTTP 响应的失败，以及 HTTP 2xx 但正文不符合合同的响应，都不能推进这两个时间。HTTP 失败可以推进 `/validate` 响应冷却，但不得改写 `validated_at` 或伪造新的业务快照。LicenKit CLI 只共享这些网络字段和状态合同；当前每次显式执行 `licenkit validate` 都会联网，不使用 Swift SDK 的本地双门槛。
+
 ### 7.1 激活
 
 ```text
@@ -743,11 +765,34 @@ POST /api/v1/client/activate
     "machine_token": "mtk_...",
     "credential_mode": "opaque",
     "signed_license_token": null,
+    "signed_license_token_expires_at": null,
+    "signing_key_id": null,
     "license_expires_at": null,
     "terms": {
+      "license_model": "perpetual",
+      "renewal_mode": "manual",
       "max_activations": 3,
       "features": ["pro_export"],
       "updates_until": "2027-09-19T10:00:00Z"
+    },
+    "state": {
+      "kind": "license",
+      "status": "active",
+      "expires_at": null,
+      "terms": {
+        "license_model": "perpetual",
+        "renewal_mode": "manual",
+        "max_activations": 3,
+        "features": ["pro_export"],
+        "updates_until": "2027-09-19T10:00:00Z"
+      }
+    },
+    "validation": {
+      "validation_interval_seconds": null,
+      "validated_at": "2026-09-23T10:00:00.000Z"
+    },
+    "meta": {
+      "request_id": "req_01..."
     }
   }
 }
@@ -764,23 +809,104 @@ POST /api/v1/client/activate
 }
 ```
 
+`state.expires_at` 与兼容字段 `license_expires_at` 都表示最终授权截止时间。对 `renewal_mode=billing` 的订阅，它已经包含该 License 固化的支付宽限期；调用方不得再次叠加 `payment_grace_seconds`。
+
+`signed_token_ttl_seconds` 只用于服务端计算签发时的绝对到期时间，不要求大于或等于在线校验间隔，也不会作为原始 TTL 数值写入 Token。实际 `exp` 取“签发时间 + License 快照 TTL”与 License 最终有效截止时间（如有）中的较早值；对 billing 订阅，后者已包含支付宽限。Signed License Token Payload 写入绝对 `exp`；明文响应字段 `signed_license_token_expires_at` 是同一时刻的镜像，SDK 必须验证它与签名保护的 `exp` 完全一致。Token 提前到期时，客户端下一次主动调用 `validate()` 可以绕过建议间隔，但仍受硬编码 30 秒门槛约束。
+
 ### 7.2 在线验证
 
 ```text
 POST /api/v1/client/validate
 ```
 
-请求必须包含 `activation_id`、`machine_token`、`fingerprint`、`release_version` 和 `release_platform`。设备平台与发布工件平台分开；两种凭证模式都调用该在线接口，`signed` 模式验证成功时可以刷新 Signed License Token，`opaque` 模式不返回 Signed License Token。
+请求固定携带 Instance、Product、设备指纹和当前构建的 Release 身份；`credential.kind` 决定本次校验哪种凭据：
+
+```json
+{
+  "instance_id": "ins_01...",
+  "product_id": "prd_01...",
+  "fingerprint": "sha256:...",
+  "release_version": "2.4.0",
+  "release_platform": "macos-universal",
+  "credential": {
+    "kind": "license",
+    "activation_id": "act_01...",
+    "machine_token": "mtk_..."
+  }
+}
+```
+
+三种合法的 `credential` 形状是：
+
+| `kind` | 附加字段 | 用途 |
+| --- | --- | --- |
+| `license` | `activation_id`、`machine_token` | 校验已激活 License |
+| `trial` | `trial_id`、`trial_token` | 校验已经领取的设备 Trial |
+| `none` | 无 | 查询当前 Release 是否已登记，以及此设备是否还能领取 Trial |
+
+验证响应固定包含 `state`、`validation` 和 `meta`。仅 License 校验可以额外包含 `credential_update`；`signed` 模式借此原子刷新 Signed License Token，`opaque` 模式返回空的签名字段。Trial 和 `none` 响应不得包含 `credential_update`。
+
+```json
+{
+  "success": true,
+  "data": {
+    "state": {
+      "kind": "license",
+      "status": "active",
+      "expires_at": "2026-10-01T10:00:00.000Z",
+      "terms": {
+        "license_model": "subscription",
+        "renewal_mode": "billing",
+        "max_activations": 3,
+        "features": ["pro_export"],
+        "updates_until": null
+      }
+    },
+    "credential_update": {
+      "credential_mode": "signed",
+      "signed_license_token": "base64url.base64url.base64url",
+      "signed_license_token_expires_at": "2026-09-23T11:00:00.000Z",
+      "signing_key_id": "key_01..."
+    },
+    "validation": {
+      "validation_interval_seconds": null,
+      "validated_at": "2026-09-23T10:00:00.000Z"
+    },
+    "meta": {
+      "request_id": "req_01..."
+    }
+  }
+}
+```
 
 激活和在线校验都必须携带 App 内置的版本标识和平台。服务端在当前 Instance 与 Product 下查找受信 Product Release；查不到时返回 `PRODUCT_RELEASE_UNKNOWN`。对受版本期限约束的永久 License，受信 `released_at > updates_until` 返回 `UPDATE_ENTITLEMENT_REQUIRED`；该错误不改变 License 状态，也不能转换成 `LICENSE_EXPIRED`。
 
 激活和在线校验在其他 License 状态判断前拒绝 `is_checkout_verification=1`，返回 `LICENSE_CHECKOUT_VERIFICATION_ONLY`。管理员恢复、状态编辑和方案迁移也不得清除该标记；验证注册码只能证明邮件闭环，不能成为可用授权。
 
-### 7.3 无需支付方式的 Product/设备试用
+### 7.3 统一授权状态
+
+`state.kind` 与 `state.status` 是业务判断入口：
+
+| `kind` | `status` 或子状态 | 关键字段 | 是否可用 |
+| --- | --- | --- | --- |
+| `activation_required` | `trial.available` | `duration_seconds`、`features` | 否；用户可选择领取 Trial |
+| `activation_required` | `trial.unavailable` | `reason`、`code` | 否 |
+| `trial` | `active` | `expires_at`、`features` | 是，但仍受客户端新鲜度窗口约束 |
+| `trial` | `expired` / `revoked` | 原始 `code`，以及到期或撤销信息 | 否 |
+| `license` | `active` | `expires_at`、`terms` | 是，但仍受客户端新鲜度窗口和签名 Token 到期约束 |
+| `license` | `expired` / `suspended` / `revoked` | 原始 `code` 与可用诊断字段 | 否 |
+| `license` | `activation_revoked` / `activation_deactivated` | 原始 `code` | 否 |
+| `release_not_eligible` | `unknown_release` | `PRODUCT_RELEASE_UNKNOWN`、版本、平台 | 否 |
+| `release_not_eligible` | `update_required` | `UPDATE_ENTITLEMENT_REQUIRED`、`updates_until`、`released_at` | 否 |
+
+对 active Product，无凭据请求中的未知 Release 返回顶层 `release_not_eligible.unknown_release`，不会伪装成“Trial 不可用”。Trial 未启用或设备已经领取过分别返回 `activation_required + trial.unavailable(not_enabled)` 与 `activation_required + trial.unavailable(already_claimed)`。已归档 Product 仍是调用失败，返回 `PRODUCT_UNAVAILABLE`；Product 不存在返回资源不存在。无凭据响应不会返回历史 `trial_id` 或 Trial Token。
+
+到期、吊销等状态仍可携带 `code` 和安全的 `details`。客户端缓存业务快照时必须保留这些字段；脱敏应按字段处理 Token、Secret、密码、注册码和 Authorization，不能整包丢弃诊断信息。
+
+### 7.4 无需支付方式的 Product/设备试用
 
 ```text
 POST /api/v1/client/trials/claim
-POST /api/v1/client/trials/validate
 ```
 
 领取请求：
@@ -806,26 +932,39 @@ POST /api/v1/client/trials/validate
     "trial_token": "ttk_...",
     "status": "active",
     "expires_at": "2026-10-03T10:00:00Z",
-    "features": ["pro_export"]
+    "features": ["pro_export"],
+    "state": {
+      "kind": "trial",
+      "status": "active",
+      "expires_at": "2026-10-03T10:00:00Z",
+      "features": ["pro_export"]
+    },
+    "validation": {
+      "validation_interval_seconds": null,
+      "validated_at": "2026-09-23T10:00:00.000Z"
+    },
+    "meta": {
+      "request_id": "req_01..."
+    }
   }
 }
 ```
 
 服务端只保存 Token 哈希。重复或并发领取同一 `instance_id + product_id + fingerprint` 返回 `TRIAL_ALREADY_CLAIMED`，不得延长到期时间或再次返回 Token；这项业务唯一性由 D1 唯一约束承担。Trial Claim 与校验接口的流量保护由 Cloudflare Zone 级 WAF Rate Limiting Rules 按方法、路径和部署套餐支持的请求特征配置，不在应用内复制通用计数状态。
 
-校验请求携带 `trial_id`、`trial_token`、同一设备指纹、`release_version` 和 `release_platform`。服务端同时限定 Instance 与 Product，验证 Token 哈希、设备绑定、吊销状态、绝对到期时间和 Product Release；成功时更新 `last_validated_at`。未知 Release、到期和吊销分别返回 `PRODUCT_RELEASE_UNKNOWN`、`TRIAL_EXPIRED` 和 `TRIAL_REVOKED`，不得归一化成 License 错误。V1 Trial Claim 只在线有效，不返回 Signed License Token。
+后续 Trial 校验使用 7.2 的统一 `/validate`，提交 `credential.kind=trial`。服务端同时限定 Instance 与 Product，验证 Token 哈希、设备绑定、吊销状态、绝对到期时间和 Product Release；成功时更新 `last_validated_at`。未知 Release、到期和吊销分别得到 `release_not_eligible.unknown_release`、`trial.expired` 和 `trial.revoked`，不得归一化成 License 错误。V1 Trial Claim 不签发 Signed License Token。
 
 Paddle 免费订阅试用不调用这两个接口。它在已验签支付事件履约后得到普通 License Key，随后走 7.1 和 7.2 的正常 License 激活与校验合同。
 
-### 7.4 主动解绑
+### 7.5 主动解绑
 
 ```text
 POST /api/v1/client/deactivate
 ```
 
-服务端成功后 Activation 进入 `deactivated`。网络失败时 SDK 不能假装远端已经释放席位；本地是否清理凭证由 SDK 合同定义。
+请求携带 `instance_id`、`product_id`、`activation_id`、`machine_token` 和 `fingerprint`。服务端成功后 Activation 进入 `deactivated` 并返回 `meta.request_id`。网络失败时 SDK 不能假装远端已经释放席位，也不能清除仍可用于重试的本地 Machine Token。若本地原本没有 License 凭据，SDK 可以返回 `wasDeactivated=false` 的本地结果，但这不是一次服务端确认。
 
-### 7.5 公钥集合
+### 7.6 公钥集合
 
 ```text
 GET /api/v1/client/products/:productId/signing-keys?instance_id=ins_01...

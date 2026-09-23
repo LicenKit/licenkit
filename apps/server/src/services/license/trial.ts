@@ -7,6 +7,7 @@ import {
   hashTrialToken,
 } from "../../domain/license/credentials";
 import { parseFeatures } from "../../domain/license/terms";
+import { createServerValidationMetadata } from "../../domain/license/validation-policy";
 import { requireProductRelease } from "./activation";
 import { firstD1 } from "./d1";
 
@@ -63,11 +64,10 @@ export async function claimTrial(input: {
      WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
   ).bind(input.instanceId, input.productId, fingerprintHash));
   if (existing) {
-    throw new AppError("TRIAL_ALREADY_CLAIMED", "This device has already claimed the Product trial.", 409, {
-      trial_id: existing.id,
-    });
+    throw new AppError("TRIAL_ALREADY_CLAIMED", "This device has already claimed the Product trial.", 409);
   }
 
+  const features = parseFeatures(product.trial_features_json);
   const trialId = `trl_${ulid().toLowerCase()}`;
   const trialToken = generateTrialToken();
   const tokenHash = await hashTrialToken(trialToken);
@@ -78,7 +78,7 @@ export async function claimTrial(input: {
          id, instance_id, product_id, fingerprint_hash, trial_token_hash,
          features_json, claimed_at, expires_at, last_validated_at,
          revoked_at, revoke_reason, updated_at
-       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, NULL, ?7)`
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?7, NULL, NULL, ?7)`
     ).bind(
       trialId,
       input.instanceId,
@@ -96,10 +96,13 @@ export async function claimTrial(input: {
         `SELECT id FROM trial_claims
          WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
       ).bind(input.instanceId, input.productId, fingerprintHash));
-      throw new AppError("TRIAL_ALREADY_CLAIMED", "This device has already claimed the Product trial.", 409, {
-        trial_id: concurrent?.id,
-        database_error: raw,
-      }, { database_error: raw });
+      throw new AppError(
+        "TRIAL_ALREADY_CLAIMED",
+        "This device has already claimed the Product trial.",
+        409,
+        undefined,
+        { database_error: raw, concurrent_claim_found: Boolean(concurrent) },
+      );
     }
     throw error;
   }
@@ -108,7 +111,14 @@ export async function claimTrial(input: {
     trial_token: trialToken,
     status: "active" as const,
     expires_at: expiresAt,
-    features: parseFeatures(product.trial_features_json),
+    features,
+    state: {
+      kind: "trial" as const,
+      status: "active" as const,
+      expires_at: expiresAt,
+      features,
+    },
+    validation: createServerValidationMetadata(now),
   };
 }
 
@@ -141,12 +151,14 @@ export async function validateTrial(input: {
   }
   if (claim.revoked_at) {
     throw new AppError("TRIAL_REVOKED", "The Trial Claim has been revoked.", 403, {
+      trial_id: claim.id,
       revoked_at: claim.revoked_at,
       revoke_reason: claim.revoke_reason,
     });
   }
   if (now.getTime() > Date.parse(claim.expires_at)) {
     throw new AppError("TRIAL_EXPIRED", "The Trial Claim has expired.", 403, {
+      trial_id: claim.id,
       expires_at: claim.expires_at,
     });
   }
@@ -157,16 +169,47 @@ export async function validateTrial(input: {
     version: input.releaseVersion,
     platform: input.releasePlatform,
   });
-  await input.db.prepare(
+  const refreshed = await input.db.prepare(
     `UPDATE trial_claims SET last_validated_at = ?1, updated_at = ?1
      WHERE instance_id = ?2 AND product_id = ?3 AND id = ?4
        AND revoked_at IS NULL AND expires_at > ?1`
   ).bind(now.toISOString(), input.instanceId, input.productId, input.trialId).run();
+  if ((refreshed.meta?.changes ?? 0) !== 1) {
+    const current = await firstD1<TrialClaimRow>(input.db.prepare(
+      `SELECT id, fingerprint_hash, trial_token_hash, features_json, claimed_at,
+              expires_at, last_validated_at, revoked_at, revoke_reason
+       FROM trial_claims
+       WHERE instance_id = ?1 AND product_id = ?2 AND id = ?3 LIMIT 1`
+    ).bind(input.instanceId, input.productId, input.trialId));
+    if (!current) throw new NotFoundError("Trial Claim not found");
+    if (current.revoked_at) {
+      throw new AppError("TRIAL_REVOKED", "The Trial Claim has been revoked.", 403, {
+        trial_id: current.id,
+        revoked_at: current.revoked_at,
+        revoke_reason: current.revoke_reason,
+      });
+    }
+    if (now.getTime() >= Date.parse(current.expires_at)) {
+      throw new AppError("TRIAL_EXPIRED", "The Trial Claim has expired.", 403, {
+        trial_id: current.id,
+        expires_at: current.expires_at,
+      });
+    }
+    throw new AppError("TRIAL_STATE_CHANGED", "The Trial Claim changed during online validation.", 409);
+  }
+  const features = parseFeatures(claim.features_json);
   return {
     trial_id: claim.id,
     status: "active" as const,
     expires_at: claim.expires_at,
-    features: parseFeatures(claim.features_json),
+    features,
     validated_at: now.toISOString(),
+    state: {
+      kind: "trial" as const,
+      status: "active" as const,
+      expires_at: claim.expires_at,
+      features,
+    },
+    validation: createServerValidationMetadata(now),
   };
 }

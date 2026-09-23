@@ -31,6 +31,31 @@ export interface ResolvedManualTerms {
   updatesUntil: string | null;
 }
 
+export function effectiveLicenseExpiresAt(input: {
+  renewalMode: RenewalMode;
+  expiresAt: string | null;
+  paymentGraceSeconds: number;
+}): string | null {
+  if (!input.expiresAt) return null;
+  const expiresAtMs = Date.parse(input.expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    throw new AppError(
+      "LICENSE_EXPIRATION_CONFIGURATION_INVALID",
+      "The stored License expiration is not a valid ISO-8601 instant.",
+      500,
+    );
+  }
+  if (!Number.isInteger(input.paymentGraceSeconds) || input.paymentGraceSeconds < 0) {
+    throw new AppError(
+      "LICENSE_PAYMENT_GRACE_CONFIGURATION_INVALID",
+      "The stored License payment grace is invalid.",
+      500,
+    );
+  }
+  const graceSeconds = input.renewalMode === "billing" ? input.paymentGraceSeconds : 0;
+  return new Date(expiresAtMs + graceSeconds * 1000).toISOString();
+}
+
 export function parseIsoInstant(value: string, field: string): Date {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) {

@@ -6,6 +6,7 @@ import {
   verifySignedLicenseToken,
 } from "../lib/crypto";
 import { describeClientError } from "../lib/errors";
+import { describeEntitlementState } from "../lib/entitlement";
 import { loadStoredLicense } from "../lib/storage";
 
 export interface VerifyOptions {
@@ -38,6 +39,22 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
       releasePlatform: stored.releasePlatform,
     });
     if (!evaluation.valid) throw new Error(`${evaluation.code}: ${evaluation.reason}`);
+    if (stored.lastEntitlementState.kind !== "license" || stored.lastEntitlementState.status !== "active") {
+      console.log(pc.yellow("Online validation required: the last Server state is not an active License."));
+      for (const line of describeEntitlementState(stored.lastEntitlementState)) console.log("  " + line);
+      process.exitCode = 2;
+      return;
+    }
+    const validatedAt = Date.parse(stored.lastValidatedAt);
+    const now = Date.now();
+    const validationWindowEndsAt = validatedAt + stored.effectiveValidationIntervalSeconds * 1000;
+    if (!Number.isFinite(validatedAt) || now < validatedAt || now >= validationWindowEndsAt) {
+      console.log(pc.yellow("Online validation required: the periodic validation window has ended or the local clock moved backwards."));
+      console.log("  Last Server validation: " + stored.lastValidatedAt);
+      console.log("  Effective interval: " + stored.effectiveValidationIntervalSeconds + "s");
+      process.exitCode = 2;
+      return;
+    }
     if (options.feature && !claims.fea.includes(options.feature)) {
       throw new Error(`FEATURE_NOT_GRANTED: '${options.feature}' is not present in the signed claims`);
     }
@@ -46,6 +63,7 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
     console.log(`  ${pc.gray("Activation ID:")} ${claims.act}`);
     console.log(`  ${pc.gray("Release:")} ${claims.ver} (${claims.plt})`);
     console.log(`  ${pc.gray("Features:")} ${claims.fea.join(", ") || "(none)"}`);
+    console.log("  " + pc.gray("Online validation window ends:") + " " + new Date(validationWindowEndsAt).toISOString());
   } catch (error) {
     for (const line of describeClientError(error)) console.error(pc.red(line));
     process.exitCode = 1;

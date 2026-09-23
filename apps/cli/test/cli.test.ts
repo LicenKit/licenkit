@@ -5,10 +5,12 @@ import path from "node:path";
 import {
   apiActivate,
   apiDeactivate,
-  ClientApiError,
-  ClientTransportError,
+  apiValidate,
+  ClientContractError,
   requestClientApi,
-  type ClientCredentialResponse,
+  type ActivationResponse,
+  type ActiveLicenseState,
+  type CredentialUpdate,
 } from "../src/lib/client-api";
 import {
   bufferToBase64,
@@ -16,12 +18,16 @@ import {
   verifySignedLicenseToken,
   type SignedLicenseClaims,
 } from "../src/lib/crypto";
-import { verifyCredentialResponse } from "../src/lib/credentials";
-import { clearStoredLicense, loadStoredLicense, saveStoredLicense } from "../src/lib/storage";
+import {
+  verifyActivationResponse,
+  verifyValidationCredentialUpdate,
+} from "../src/lib/credentials";
+import { verifyCommand } from "../src/commands/verify";
+import { validateCommand } from "../src/commands/validate";
+import { clearStoredLicense, getLicenseFilePath, loadStoredLicense, saveStoredLicense } from "../src/lib/storage";
 
 function base64url(data: Uint8Array | string): string {
-  const bytes = typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
-  return bytes.toString("base64url");
+  return Buffer.from(data).toString("base64url");
 }
 
 async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
@@ -35,10 +41,10 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
     prd: "prd_1",
     rel: "rel_1",
     ver: "2.4.0",
-    plt: "macos-arm64",
+    plt: "macos-universal",
     rat: now - 100,
     fp: "device-fingerprint",
-    iat: now - 100,
+    iat: now,
     exp: now + 3600,
     lexp: null,
     upd: now + 1000,
@@ -47,188 +53,645 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
   };
   const headerPart = base64url(JSON.stringify(header));
   const claimsPart = base64url(JSON.stringify(claims));
-  const signature = await crypto.subtle.sign("Ed25519", keys.privateKey, Buffer.from(`${headerPart}.${claimsPart}`));
+  const signature = await crypto.subtle.sign("Ed25519", keys.privateKey, Buffer.from(headerPart + "." + claimsPart));
   return {
-    token: `${headerPart}.${claimsPart}.${base64url(new Uint8Array(signature))}`,
+    token: headerPart + "." + claimsPart + "." + base64url(new Uint8Array(signature)),
     publicKey: bufferToBase64(await crypto.subtle.exportKey("raw", keys.publicKey)),
     claims,
   };
 }
 
-describe("V1 client API", () => {
+function validation(validatedAt = "2026-09-23T10:00:00Z", interval: number | null = null) {
+  return { validation_interval_seconds: interval, validated_at: validatedAt };
+}
+
+function activeState(): ActiveLicenseState {
+  return {
+    kind: "license",
+    status: "active",
+    expires_at: null,
+    terms: {
+      max_activations: 3,
+      features: ["export"],
+      updates_until: "2027-09-19T10:00:00Z",
+    },
+  };
+}
+
+function opaqueActivationData(): ActivationResponse {
+  const state = activeState();
+  return {
+    activation_id: "act_1",
+    machine_token: "mtk_secret_value_123",
+    credential_mode: "opaque",
+    signed_license_token: null,
+    signed_license_token_expires_at: null,
+    signing_key_id: null,
+    license_expires_at: null,
+    terms: state.terms,
+    state,
+    validation: validation(),
+    meta: { request_id: "req_activate" },
+  };
+}
+
+describe("unified Client API contract", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("sends instance, product, device and immutable release identity", async () => {
-    let body: Record<string, unknown> = {};
-    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
-      body = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ success: true, data: { ok: true } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }));
-    await apiActivate({
-      serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
-      productId: "prd_1",
-      licenseKey: "LK-SECRET",
-      fingerprint: "fp",
-      devicePlatform: "macos-arm64",
-      releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
-    });
-    expect(body).toMatchObject({
-      instance_id: "ins_1",
-      product_id: "prd_1",
-      device_platform: "macos-arm64",
-      release_version: "2.4.0",
-      release_platform: "macos-universal",
-    });
-  });
-
-  it("uses the strict deactivate payload without release-only fields", async () => {
+  it("sends the strict License credential union without legacy top-level or device fields", async () => {
     let body: Record<string, unknown> = {};
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       body = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({
         success: true,
-        data: { activation_id: "act_1", status: "deactivated" },
+        data: {
+          state: activeState(),
+          credential_update: {
+            credential_mode: "opaque",
+            signed_license_token: null,
+            signed_license_token_expires_at: null,
+            signing_key_id: null,
+          },
+          validation: validation(),
+          meta: { request_id: "req_validate" },
+        },
       }), { status: 200, headers: { "content-type": "application/json" } });
     }));
-    await apiDeactivate({
+
+    const result = await apiValidate({
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      credential: {
+        kind: "license",
+        activation_id: "act_1",
+        machine_token: "mtk_secret_value_123",
+      },
+    });
+
+    expect(body).toEqual({
+      instance_id: "ins_1",
+      product_id: "prd_1",
+      fingerprint: "device-fingerprint",
+      release_version: "2.4.0",
+      release_platform: "macos-universal",
+      credential: {
+        kind: "license",
+        activation_id: "act_1",
+        machine_token: "mtk_secret_value_123",
+      },
+    });
+    expect(result.state).toMatchObject({ kind: "license", status: "active" });
+    expect(result.validation.validation_interval_seconds).toBeNull();
+    expect(result.meta.request_id).toBe("req_validate");
+  });
+
+  it("supports Trial and no-credential request variants without the removed trials/validate route", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url: String(url), body });
+      const credential = body.credential as { kind: string };
+      const state = credential.kind === "trial"
+        ? { kind: "trial", status: "expired", code: "TRIAL_EXPIRED", expires_at: "2026-09-23T09:00:00Z" }
+        : {
+            kind: "activation_required",
+            trial: { status: "unavailable", reason: "already_claimed", code: "TRIAL_ALREADY_CLAIMED" },
+          };
+      return new Response(JSON.stringify({
+        success: true,
+        data: { state, validation: validation(), meta: { request_id: "req_union" } },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const context = {
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+    };
+    await apiValidate({
+      ...context,
+      credential: { kind: "trial", trial_id: "trl_1", trial_token: "ttk_secret_value_123" },
+    });
+    await apiValidate({ ...context, credential: { kind: "none" } });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://license.example.com/api/v1/client/validate",
+      "https://license.example.com/api/v1/client/validate",
+    ]);
+    expect(calls.map((call) => call.body.credential)).toEqual([
+      { kind: "trial", trial_id: "trl_1", trial_token: "ttk_secret_value_123" },
+      { kind: "none" },
+    ]);
+  });
+
+  it("parses unavailable License and Release states as successful business results with original details", async () => {
+    const states = [
+      {
+        kind: "license",
+        status: "expired",
+        code: "LICENSE_EXPIRED",
+        expires_at: "2026-09-23T09:00:00Z",
+        details: {
+          billing_period_expires_at: "2026-09-22T09:00:00Z",
+          payment_grace_seconds: 86400,
+        },
+      },
+      {
+        kind: "release_not_eligible",
+        status: "update_required",
+        code: "UPDATE_ENTITLEMENT_REQUIRED",
+        release_version: "2.4.0",
+        release_platform: "macos-universal",
+        updates_until: "2026-09-01T00:00:00Z",
+        released_at: "2026-09-20T00:00:00Z",
+      },
+    ];
+    let index = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        state: states[index++],
+        validation: validation(),
+        meta: { request_id: "req_terminal" },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    const params = {
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      credential: {
+        kind: "license" as const,
+        activation_id: "act_1",
+        machine_token: "mtk_secret_value_123",
+      },
+    };
+
+    await expect(apiValidate(params)).resolves.toMatchObject({
+      state: {
+        status: "expired",
+        code: "LICENSE_EXPIRED",
+        details: { payment_grace_seconds: "86400" },
+      },
+    });
+    await expect(apiValidate(params)).resolves.toMatchObject({
+      state: {
+        status: "update_required",
+        code: "UPDATE_ENTITLEMENT_REQUIRED",
+        released_at: "2026-09-20T00:00:00Z",
+      },
+    });
+  });
+
+  it("keeps request ID and HTTP status when a success payload violates the contract", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { state: { kind: "made_up" } },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json", "x-request-id": "req_header" },
+    })));
+    await expect(apiValidate({
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      credential: { kind: "none" },
+    })).rejects.toMatchObject({
+      name: "ClientContractError",
+      status: 200,
+      requestId: "req_header",
+    });
+  });
+
+  it("rejects an active License response without credential_update", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        state: activeState(),
+        validation: validation(),
+        meta: { request_id: "req_missing_update" },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    await expect(apiValidate({
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      credential: { kind: "none" },
+    })).rejects.toMatchObject({
+      name: "ClientContractError",
+      requestId: "req_missing_update",
+    });
+  });
+
+  it("preserves and field-redacts failed error envelopes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: false,
+      error: {
+        code: "ACTIVATION_CREDENTIALS_INVALID",
+        message: "Credentials do not match",
+        request_id: "req_error",
+        details: {
+          release_version: "2.4.0",
+          machine_token: "secret",
+          nested: { authorization: "Bearer secret", reason: "mismatch" },
+        },
+      },
+    }), { status: 401, headers: { "content-type": "application/json" } })));
+    await expect(requestClientApi("https://license.example.com", "/api/v1/client/validate"))
+      .rejects.toMatchObject({
+        code: "ACTIVATION_CREDENTIALS_INVALID",
+        status: 401,
+        requestId: "req_error",
+        details: {
+          release_version: "2.4.0",
+          machine_token: "[REDACTED]",
+          nested: JSON.stringify({ authorization: "[REDACTED]", reason: "mismatch" }),
+        },
+      });
+  });
+
+  it("parses the extended activation and deactivation operation responses separately", async () => {
+    const responses = [
+      { success: true, data: opaqueActivationData() },
+      {
+        success: true,
+        data: {
+          activation_id: "act_1",
+          status: "deactivated",
+          meta: { request_id: "req_deactivate" },
+        },
+      },
+    ];
+    let index = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(responses[index++]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })));
+    await expect(apiActivate({
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      licenseKey: "LK-SECRET-VALUE-123",
+      fingerprint: "device-fingerprint",
+      devicePlatform: "macos-arm64",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+    })).resolves.toMatchObject({
+      activation_id: "act_1",
+      state: { kind: "license", status: "active" },
+      validation: { validated_at: "2026-09-23T10:00:00Z" },
+    });
+    await expect(apiDeactivate({
       serverUrl: "https://license.example.com",
       instanceId: "ins_1",
       productId: "prd_1",
       activationId: "act_1",
-      machineToken: "mtk_secret",
-      fingerprint: "fp",
-    });
-    expect(body).toEqual({
-      instance_id: "ins_1",
-      product_id: "prd_1",
-      activation_id: "act_1",
-      machine_token: "mtk_secret",
-      fingerprint: "fp",
-    });
-  });
-
-  it("preserves business error code, request ID and safe details", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      success: false,
-      error: {
-        code: "UPDATE_ENTITLEMENT_REQUIRED",
-        message: "Update entitlement ended",
-        request_id: "req_1",
-        details: { release_version: "2.4.0", machine_token: "secret" },
-      },
-    }), { status: 403, headers: { "content-type": "application/json" } })));
-    await expect(requestClientApi("https://license.example.com", "/api/v1/client/validate"))
-      .rejects.toMatchObject({
-        code: "UPDATE_ENTITLEMENT_REQUIRED",
-        requestId: "req_1",
-        details: { release_version: "2.4.0", machine_token: "[REDACTED]" },
-      });
-  });
-
-  it("keeps server 5xx separate from business rejection", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      success: false,
-      error: { code: "DATABASE_UNAVAILABLE", message: "retry later", request_id: "req_2" },
-    }), { status: 503, headers: { "content-type": "application/json" } })));
-    await expect(requestClientApi("https://license.example.com", "/api/v1/client/validate"))
-      .rejects.toMatchObject({ kind: "server", serverCode: "DATABASE_UNAVAILABLE", requestId: "req_2" });
+      machineToken: "mtk_secret_value_123",
+      fingerprint: "device-fingerprint",
+    })).resolves.toMatchObject({ status: "deactivated", meta: { request_id: "req_deactivate" } });
   });
 });
 
-describe("V1 signed and opaque credentials", () => {
-  it("allows opaque mode with no signing key", async () => {
-    const response: ClientCredentialResponse = {
-      activation_id: "act_1",
-      machine_token: "mtk_secret",
-      credential_mode: "opaque",
-      signed_license_token: null,
-      license_expires_at: null,
-      terms: { max_activations: 1, features: [], updates_until: null },
-    };
-    await expect(verifyCredentialResponse(response, {}, {
-      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "fp",
-      releaseVersion: "1.0", releasePlatform: "macos-arm64",
-    })).resolves.toBeUndefined();
-  });
-
-  it("requires the configured key ID and verifies all signed claims", async () => {
+describe("signed credential verification", () => {
+  it("verifies signature, identities and all duplicated response facts before activation storage", async () => {
     const signed = await signedToken();
-    const response: ClientCredentialResponse = {
+    const validatedAt = new Date(signed.claims.iat * 1000).toISOString();
+    const updatesUntil = new Date(Number(signed.claims.upd) * 1000).toISOString();
+    const state: ActiveLicenseState = {
+      kind: "license",
+      status: "active",
+      expires_at: null,
+      terms: { max_activations: 1, features: ["export"], updates_until: updatesUntil },
+    };
+    const response: ActivationResponse = {
       activation_id: "act_1",
-      machine_token: "mtk_secret",
+      machine_token: "mtk_secret_value_123",
       credential_mode: "signed",
       signed_license_token: signed.token,
+      signed_license_token_expires_at: new Date(signed.claims.exp * 1000).toISOString(),
       signing_key_id: "key_v1",
       license_expires_at: null,
-      terms: { max_activations: 1, features: ["export"], updates_until: null },
+      terms: state.terms,
+      state,
+      validation: validation(validatedAt),
+      meta: { request_id: "req_signed" },
     };
-    await expect(verifyCredentialResponse(response, {}, {
-      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
-      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
-    })).rejects.toMatchObject({ code: "TRUSTED_SIGNING_KEY_MISSING" });
-    await expect(verifyCredentialResponse(response, { key_v1: signed.publicKey }, {
-      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
-      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
-    })).resolves.toMatchObject({ lic: "lic_1", rel: "rel_1" });
+    const context = {
+      instanceId: "ins_1",
+      productId: "prd_1",
+      activationId: "act_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      nowSeconds: signed.claims.iat,
+    };
+    await expect(verifyActivationResponse(response, { key_v1: signed.publicKey }, context))
+      .resolves.toMatchObject({ lic: "lic_1" });
+
+    response.state = {
+      ...state,
+      terms: { ...state.terms, features: ["tampered"] },
+    };
+    await expect(verifyActivationResponse(response, { key_v1: signed.publicKey }, context))
+      .rejects.toMatchObject({ code: "TOKEN_FEATURES_MISMATCH" });
   });
 
-  it("rejects the removed acc Claim and reports Instance mismatches explicitly", async () => {
+  it("accepts a valid short-TTL signed update independently of the online validation interval", async () => {
+    const signed = await signedToken({ exp: Math.floor(Date.now() / 1000) + 1200 });
+    const state: ActiveLicenseState = {
+      kind: "license",
+      status: "active",
+      expires_at: null,
+      terms: {
+        max_activations: 1,
+        features: ["export"],
+        updates_until: new Date(Number(signed.claims.upd) * 1000).toISOString(),
+      },
+    };
+    const update: CredentialUpdate = {
+      credential_mode: "signed",
+      signed_license_token: signed.token,
+      signed_license_token_expires_at: new Date(signed.claims.exp * 1000).toISOString(),
+      signing_key_id: "key_v1",
+    };
+    await expect(verifyValidationCredentialUpdate(
+      update,
+      { key_v1: signed.publicKey },
+      {
+        instanceId: "ins_1",
+        productId: "prd_1",
+        activationId: "act_1",
+        fingerprint: "device-fingerprint",
+        releaseVersion: "2.4.0",
+        releasePlatform: "macos-universal",
+        nowSeconds: signed.claims.iat,
+      },
+      state
+    )).resolves.toMatchObject({ exp: signed.claims.exp });
+  });
+
+  it("rejects removed and mismatched signed claims explicitly", async () => {
     const legacy = await signedToken({ ins: "", acc: "acc_1" } as unknown as Partial<SignedLicenseClaims>);
     await expect(verifySignedLicenseToken(legacy.token, legacy.publicKey))
       .rejects.toMatchObject({ code: "TOKEN_CLAIMS_INVALID" });
-
     const current = await signedToken();
     const verified = await verifySignedLicenseToken(current.token, current.publicKey);
     expect(evaluateSignedLicenseClaims(verified.claims, {
-      instanceId: "ins_other", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
-      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
+      instanceId: "ins_other",
+      productId: "prd_1",
+      activationId: "act_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      nowSeconds: current.claims.iat,
     })).toMatchObject({ valid: false, code: "TOKEN_INSTANCE_MISMATCH" });
   });
 
-  it("rejects release builds after updates_until independently of expiration", async () => {
-    const signed = await signedToken({ rat: 2_000, upd: 1_999, lexp: null });
-    const verified = await verifySignedLicenseToken(signed.token, signed.publicKey);
-    expect(evaluateSignedLicenseClaims(verified.claims, {
-      instanceId: "ins_1", productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
-      releaseVersion: "2.4.0", releasePlatform: "macos-arm64",
+  it("keeps License and update entitlement bounds independent from the online window", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const beyondLicense = await signedToken({ iat: now - 100, exp: now + 60, lexp: now + 30 });
+    await expect(verifySignedLicenseToken(beyondLicense.token, beyondLicense.publicKey))
+      .rejects.toMatchObject({ code: "TOKEN_CLAIMS_INVALID" });
+
+    const updateEnded = await signedToken({ rat: 2_000, upd: 1_999, lexp: null });
+    const updateClaims = (await verifySignedLicenseToken(updateEnded.token, updateEnded.publicKey)).claims;
+    expect(evaluateSignedLicenseClaims(updateClaims, {
+      instanceId: "ins_1",
+      productId: "prd_1",
+      activationId: "act_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      nowSeconds: updateClaims.iat,
     })).toMatchObject({ valid: false, code: "UPDATE_ENTITLEMENT_REQUIRED" });
   });
 });
 
-describe("V1 local credential storage", () => {
-  const configDir = path.join(os.tmpdir(), `licenkit-v1-cli-${process.pid}`);
+describe("local credential state and periodic verification", () => {
+  const configDir = path.join(os.tmpdir(), "licenkit-unified-cli-" + process.pid);
+
   beforeEach(() => {
     process.env.LICENKIT_CONFIG_DIR = configDir;
+    process.exitCode = undefined;
   });
+
   afterEach(() => {
     fs.rmSync(configDir, { recursive: true, force: true });
     delete process.env.LICENKIT_CONFIG_DIR;
+    process.exitCode = undefined;
+    vi.restoreAllMocks();
   });
 
-  it("stores machine credentials without the activation license key", () => {
+  function saveOpaqueActive(): void {
+    const validatedAt = new Date().toISOString();
+    const state = activeState();
     saveStoredLicense({
       serverUrl: "https://license.example.com",
       instanceId: "ins_1",
       productId: "prd_1",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-arm64",
+      releasePlatform: "macos-universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
-      machineToken: "mtk_secret",
+      machineToken: "mtk_secret_value_123",
       credentialMode: "opaque",
-      activatedAt: new Date().toISOString(),
-      lastValidatedAt: new Date().toISOString(),
+      activatedAt: validatedAt,
+      lastValidatedAt: validatedAt,
+      receivedValidationIntervalSeconds: null,
+      effectiveValidationIntervalSeconds: 3600,
+      lastEntitlementState: state,
+      licenseExpiresAt: null,
+      terms: state.terms,
+    });
+  }
+
+  it("migrates the old local License shape to a default periodic validation window", () => {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(getLicenseFilePath(), JSON.stringify({
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      devicePlatform: "macos-arm64",
+      activationId: "act_1",
+      machineToken: "mtk_secret_value_123",
+      credentialMode: "opaque",
+      activatedAt: "2026-09-23T10:00:00Z",
+      lastValidatedAt: "2026-09-23T10:00:00Z",
       licenseExpiresAt: null,
       terms: { max_activations: 1, features: [], updates_until: null },
+    }));
+    const stored = loadStoredLicense();
+    expect(stored).toMatchObject({
+      receivedValidationIntervalSeconds: null,
+      effectiveValidationIntervalSeconds: 3600,
+      lastEntitlementState: { kind: "license", status: "active" },
     });
-    const loaded = loadStoredLicense();
-    expect(loaded?.activationId).toBe("act_1");
-    expect((loaded as unknown as Record<string, unknown>)?.licenseKey).toBeUndefined();
+  });
+
+  it("requires online validate when a valid Signed Token is outside its periodic window", async () => {
+    const signed = await signedToken({ exp: Math.floor(Date.now() / 1000) + 7200 });
+    const oldValidation = new Date(Date.now() - 3601 * 1000).toISOString();
+    saveStoredLicense({
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      devicePlatform: "macos-arm64",
+      activationId: "act_1",
+      machineToken: "mtk_secret_value_123",
+      credentialMode: "signed",
+      signedLicenseToken: signed.token,
+      signedLicenseTokenExpiresAt: new Date(signed.claims.exp * 1000).toISOString(),
+      signingKeyId: "key_v1",
+      trustedSigningKeys: { key_v1: signed.publicKey },
+      activatedAt: oldValidation,
+      lastValidatedAt: oldValidation,
+      receivedValidationIntervalSeconds: null,
+      effectiveValidationIntervalSeconds: 3600,
+      lastEntitlementState: {
+        kind: "license",
+        status: "active",
+        expires_at: null,
+        terms: {
+          max_activations: 1,
+          features: ["export"],
+          updates_until: new Date(Number(signed.claims.upd) * 1000).toISOString(),
+        },
+      },
+      licenseExpiresAt: null,
+      terms: {
+        max_activations: 1,
+        features: ["export"],
+        updates_until: new Date(Number(signed.claims.upd) * 1000).toISOString(),
+      },
+    });
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await verifyCommand(undefined, { fingerprint: "device-fingerprint" });
+    expect(process.exitCode).toBe(2);
+    expect(output.mock.calls.flat().join("\n")).toContain("periodic validation window");
     expect(clearStoredLicense()).toBe(true);
+  });
+
+  it("rejects an expired short-TTL token even while the saved online window is fresh", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const signed = await signedToken({ iat: now - 120, exp: now - 1 });
+    const validatedAt = new Date((now - 100) * 1000).toISOString();
+    const terms = {
+      max_activations: 1,
+      features: ["export"],
+      updates_until: new Date(Number(signed.claims.upd) * 1000).toISOString(),
+    };
+    saveStoredLicense({
+      serverUrl: "https://license.example.com",
+      instanceId: "ins_1",
+      productId: "prd_1",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos-universal",
+      devicePlatform: "macos-arm64",
+      activationId: "act_1",
+      machineToken: "mtk_secret_value_123",
+      credentialMode: "signed",
+      signedLicenseToken: signed.token,
+      signedLicenseTokenExpiresAt: new Date(signed.claims.exp * 1000).toISOString(),
+      signingKeyId: "key_v1",
+      trustedSigningKeys: { key_v1: signed.publicKey },
+      activatedAt: validatedAt,
+      lastValidatedAt: validatedAt,
+      receivedValidationIntervalSeconds: null,
+      effectiveValidationIntervalSeconds: 3600,
+      lastEntitlementState: {
+        kind: "license",
+        status: "active",
+        expires_at: null,
+        terms,
+      },
+      licenseExpiresAt: null,
+      terms,
+    });
+    const output = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await verifyCommand(undefined, { fingerprint: "device-fingerprint" });
+
+    expect(process.exitCode).toBe(1);
+    expect(output.mock.calls.flat().join("\n")).toContain("TOKEN_EXPIRED");
+  });
+
+  it("returns exit 2 and persists Server diagnostics for a confirmed unavailable state", async () => {
+    saveOpaqueActive();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        state: {
+          kind: "license",
+          status: "suspended",
+          code: "LICENSE_SUSPENDED",
+          reason: "payment_review",
+          details: { license_id: "lic_1", machine_token: "must-redact" },
+        },
+        validation: validation("2026-09-23T11:00:00Z", 1200),
+        meta: { request_id: "req_suspended" },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await validateCommand();
+
+    expect(process.exitCode).toBe(2);
+    expect(loadStoredLicense()).toMatchObject({
+      lastValidatedAt: "2026-09-23T11:00:00Z",
+      receivedValidationIntervalSeconds: 1200,
+      effectiveValidationIntervalSeconds: 3600,
+      lastValidationRequestId: "req_suspended",
+      lastEntitlementState: {
+        status: "suspended",
+        code: "LICENSE_SUSPENDED",
+        details: { license_id: "lic_1", machine_token: "[REDACTED]" },
+      },
+    });
+    expect(output.mock.calls.flat().join("\n")).toContain("req_suspended");
+  });
+
+  it("clears local credentials only after confirmed Activation deactivation diagnostics are printed", async () => {
+    saveOpaqueActive();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        state: {
+          kind: "license",
+          status: "activation_deactivated",
+          code: "ACTIVATION_DEACTIVATED",
+          details: { activation_id: "act_1" },
+        },
+        validation: validation("2026-09-23T11:00:00Z"),
+        meta: { request_id: "req_deactivated" },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await validateCommand();
+
+    expect(process.exitCode).toBe(2);
+    expect(loadStoredLicense()).toBeNull();
+    const text = output.mock.calls.flat().join("\n");
+    expect(text).toContain("ACTIVATION_DEACTIVATED");
+    expect(text).toContain("req_deactivated");
   });
 });

@@ -34,12 +34,22 @@ export async function createSignedLicenseToken(input: {
   return `${signingInput}.${base64ToBase64Url(signature)}`;
 }
 
+export function signedClaimInstant(value: Date | string): Date {
+  const timestamp = value instanceof Date ? value.getTime() : Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new TypeError("Signed License Token claim time must be a valid instant.");
+  }
+  return new Date(Math.floor(timestamp / 1000) * 1000);
+}
+
 export function signedTokenExpiration(input: {
   issuedAt: Date;
   ttlSeconds: number;
   licenseExpiresAt: string | null;
 }): Date {
   const ttlExpiry = input.issuedAt.getTime() + input.ttlSeconds * 1000;
-  if (!input.licenseExpiresAt) return new Date(ttlExpiry);
-  return new Date(Math.min(ttlExpiry, new Date(input.licenseExpiresAt).getTime()));
+  const expiry = input.licenseExpiresAt
+    ? Math.min(ttlExpiry, new Date(input.licenseExpiresAt).getTime())
+    : ttlExpiry;
+  return signedClaimInstant(new Date(expiry));
 }
