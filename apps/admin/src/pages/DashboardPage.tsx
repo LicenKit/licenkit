@@ -1,5 +1,5 @@
 import { useState, type ComponentType } from "react";
-import { Activity, Boxes, Building2, ChevronLeft, ChevronRight, CircleDollarSign, ContactRound, KeyRound, LayoutDashboard, LogOut, Menu, ScrollText, ShieldCheck, UserRound, UsersRound, X } from "lucide-react";
+import { Activity, Boxes, Building2, ChevronLeft, ChevronRight, CircleDollarSign, ContactRound, KeyRound, LayoutDashboard, LogOut, Mail, Menu, ScrollText, ShieldCheck, UserRound, UsersRound, X } from "lucide-react";
 import type { AdminSession } from "../lib/api-client";
 import { Button } from "../components/ui";
 import { OverviewView } from "./admin/OverviewView";
@@ -9,12 +9,13 @@ import { LicensesView } from "./admin/LicensesView";
 import { CustomersView } from "./admin/CustomersView";
 import { BillingView } from "./admin/BillingView";
 import { OperationsView } from "./admin/OperationsView";
+import { EmailSettingsView } from "./admin/EmailSettingsView";
 import { InstanceView } from "./admin/InstanceView";
 import { MembersView } from "./admin/MembersView";
 import { ProfileView } from "./admin/ProfileView";
 import { InstanceIssueAlert } from "./admin/InstanceIssueAlert";
 
-type Section = "overview" | "products" | "license-plans" | "licenses" | "customers" | "billing" | "operations" | "instance" | "members" | "profile";
+type Section = "overview" | "products" | "license-plans" | "licenses" | "customers" | "billing" | "operations" | "email-settings" | "instance" | "members" | "profile";
 interface NavItem { id: Section; label: string; description: string; icon: ComponentType<{ className?: string }> }
 
 const nav: Array<{ label: string; items: NavItem[] }> = [
@@ -32,6 +33,7 @@ const nav: Array<{ label: string; items: NavItem[] }> = [
     { id: "operations", label: "事件与投递", description: "System Issue、Event 与 Delivery", icon: Activity },
   ] },
   { label: "管理", items: [
+    { id: "email-settings", label: "邮件设置", description: "Resend 连接与模板绑定", icon: Mail },
     { id: "instance", label: "Instance", description: "实例身份与只读状态", icon: Building2 },
     { id: "members", label: "Members", description: "邀请与 Membership", icon: ContactRound },
     { id: "profile", label: "Profile", description: "当前 User 的资料与密码", icon: UserRound },
@@ -93,6 +95,7 @@ export function DashboardPage({ session, onSessionChange, onLogout }: { session:
           {section === "customers" ? <CustomersView canManage={canWrite} /> : null}
           {section === "billing" ? <BillingView canManage={canWrite} /> : null}
           {section === "operations" ? <OperationsView canManage={canWrite} onIssuesChanged={() => setIssueRevision((value) => value + 1)} /> : null}
+          {section === "email-settings" ? <EmailSettingsView canManage={canWrite} /> : null}
           {section === "instance" ? <InstanceView initialInstance={instance} /> : null}
           {section === "members" ? <MembersView currentUserId={user.id} canManage={membership.role === "owner"} /> : null}
           {section === "profile" ? <ProfileView initialUser={user} onUserUpdated={(updatedUser) => onSessionChange({ ...session, user: updatedUser })} /> : null}

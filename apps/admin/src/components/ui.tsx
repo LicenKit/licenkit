@@ -195,3 +195,127 @@ export function formatDate(value?: string | null): string {
 export function CopyValue({ value, label = "复制" }: { value: string; label?: string }) {
   return <Button type="button" variant="secondary" onClick={() => void navigator.clipboard.writeText(value)}>{label}</Button>;
 }
+
+export function Drawer({
+  open,
+  title,
+  description,
+  children,
+  onClose,
+  wide = false,
+}: {
+  open: boolean;
+  title: string;
+  description?: ReactNode;
+  children: ReactNode;
+  onClose: () => void;
+  wide?: boolean;
+}) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const drawerRef = useRef<HTMLElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const drawer = drawerRef.current;
+    const focusable = drawer?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    );
+    (focusable?.[0] ?? drawer)?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !drawer) return;
+      const items = [...drawer.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      )];
+      if (items.length === 0) {
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [open]);
+
+  if (!open) return null;
+  return (
+    <div className="drawer-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose() }}>
+      <aside ref={drawerRef} tabIndex={-1} className={clsx("drawer", wide && "drawer-wide")} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}>
+        <header className="drawer-header">
+          <div>
+            <h2 id={titleId}>{title}</h2>
+            {description ? <div id={descriptionId} className="drawer-description">{description}</div> : null}
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">
+            <X className="size-5" />
+          </button>
+        </header>
+        <div className="drawer-body">{children}</div>
+      </aside>
+    </div>
+  );
+}
+
+export function PaginationBar({
+  page,
+  totalPages,
+  totalItems,
+  onPageChange,
+  loading = false,
+}: {
+  page: number;
+  totalPages: number;
+  totalItems?: number;
+  onPageChange: (page: number) => void;
+  loading?: boolean;
+}) {
+  if (totalPages <= 1 && (totalItems === undefined || totalItems <= 0)) return null;
+
+  return (
+    <div className="pagination-bar">
+      <div className="pagination-info">
+        <span>第 <strong>{page}</strong> / <strong>{Math.max(1, totalPages)}</strong> 页</span>
+        {totalItems !== undefined ? <span className="pagination-total">（共 {totalItems} 条）</span> : null}
+      </div>
+      <div className="button-row">
+        <Button
+          variant="secondary"
+          disabled={page <= 1 || loading}
+          onClick={() => onPageChange(page - 1)}
+        >
+          上一页
+        </Button>
+        <Button
+          variant="secondary"
+          disabled={page >= totalPages || loading}
+          onClick={() => onPageChange(page + 1)}
+        >
+          下一页
+        </Button>
+      </div>
+    </div>
+  );
+}
