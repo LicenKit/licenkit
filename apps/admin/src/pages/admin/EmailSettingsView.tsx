@@ -359,7 +359,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
           <p>测试将使用示例数据实际调用发信服务商发送测试邮件，便于验证密钥可用性与模板语法是否正确。</p>
         </Notice>
         {!selectedIntegration ? (
-          <EmptyState title="尚未选择 Email Provider" description="先连接或选择一个 Provider Integration。" />
+          <EmptyState title="尚未选择发信服务商" description="请先在上方连接或选择一个发信通道。" />
         ) : (
           <div className="email-contract-list">
             {currentContracts.map((contract) => {
@@ -381,7 +381,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                     <div className="button-row wrap">
                       {canManage ? (
                         <Button variant="secondary" onClick={() => openBinding(contract)}>
-                          {binding ? "编辑 Binding" : "创建 Binding"}
+                          {binding ? "编辑绑定" : "绑定模板"}
                         </Button>
                       ) : null}
                       {canManage && binding ? (
@@ -413,12 +413,12 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                     </div>
                   ) : null}
                   <details className="email-contract-detail">
-                    <summary>查看合同变量与 Provider 示例</summary>
+                    <summary>查看可用变量与模板示例</summary>
                     <section>
                       <div className="email-section-heading">
                         <div>
-                          <h4>合同变量</h4>
-                          <p>变量名、类型、约束和取值逻辑预定义在服务端代码中；业务事件创建 Delivery 时写入加密变量。</p>
+                          <h4>模板变量</h4>
+                          <p>可在邮件模板中引用的业务变量。系统在触发通知时会自动填充对应数据。</p>
                         </div>
                         <Badge>{contract.variables.length} variables</Badge>
                       </div>
@@ -455,13 +455,13 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                       <section>
                         <div className="email-section-heading">
                           <div>
-                            <h4>{example.provider} 参考模板</h4>
-                            <p>占位语法 {example.placeholderSyntax}；LicenKit 不会创建或同步 Provider 远程模板。</p>
+                            <h4>参考模板 ({example.provider})</h4>
+                            <p>变量占位符格式：{example.placeholderSyntax}。请在发信服务商后台创建对应的邮件模板。</p>
                           </div>
                           <Badge>{example.fileName}</Badge>
                         </div>
                         <div className="button-row wrap">
-                          <Button variant="secondary" onClick={() => void copyText(example.subject)}><Copy className="size-4" />复制 Subject</Button>
+                          <Button variant="secondary" onClick={() => void copyText(example.subject)}><Copy className="size-4" />复制邮件标题</Button>
                           <Button variant="secondary" onClick={() => void copyText(example.html)}><Copy className="size-4" />复制 HTML</Button>
                           <Button variant="secondary" onClick={() => downloadHtml(example)}><Download className="size-4" />下载 HTML</Button>
                         </div>
@@ -475,9 +475,9 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
         )}
       </Card>
 
-      <Modal open={integrationMode !== null} onClose={() => { setIntegrationMode(null); setIntegrationTarget(null) }} title={integrationMode === "create" ? "连接 Resend" : "编辑 Email Provider"} description="保存后，尚未成功的 Delivery 会在下一次发送时读取这些最新配置。">
+      <Modal open={integrationMode !== null} onClose={() => { setIntegrationMode(null); setIntegrationTarget(null) }} title={integrationMode === "create" ? "连接发信通道" : "编辑发信通道"} description="保存后，后续发信将自动使用最新配置。">
         <form className="form-stack" onSubmit={saveIntegration}>
-          <Field label="Provider"><Input value="resend" disabled /></Field>
+          <Field label="发信服务商"><Input value="resend" disabled /></Field>
           <Field label="连接名称"><Input value={integrationForm.name} onChange={(event) => setIntegrationForm({ ...integrationForm, name: event.target.value })} maxLength={120} required /></Field>
           {integrationMode === "create" ? (
             <Field label="Resend API Key" hint="保存后不回显。">
@@ -485,12 +485,12 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
             </Field>
           ) : null}
           <div className="form-grid">
-            <Field label="From Email"><Input type="email" value={integrationForm.defaultFromEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromEmail: event.target.value })} required /></Field>
-            <Field label="From Name（可选）"><Input value={integrationForm.defaultFromName} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromName: event.target.value })} /></Field>
+            <Field label="发件邮箱 (From)"><Input type="email" value={integrationForm.defaultFromEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromEmail: event.target.value })} required /></Field>
+            <Field label="发件人名称（可选）"><Input value={integrationForm.defaultFromName} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromName: event.target.value })} /></Field>
           </div>
           <div className="form-grid">
-            <Field label="Reply-To（可选）"><Input type="email" value={integrationForm.replyToEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, replyToEmail: event.target.value })} /></Field>
-            <Field label="最大自动发送次数" hint="包含首次 Provider 调用"><Input type="number" min="1" max="20" value={integrationForm.maxAutomaticAttempts} onChange={(event) => setIntegrationForm({ ...integrationForm, maxAutomaticAttempts: event.target.value })} required /></Field>
+            <Field label="回复邮箱（可选）"><Input type="email" value={integrationForm.replyToEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, replyToEmail: event.target.value })} /></Field>
+            <Field label="最大自动重试次数" hint="包含首次发送尝试"><Input type="number" min="1" max="20" value={integrationForm.maxAutomaticAttempts} onChange={(event) => setIntegrationForm({ ...integrationForm, maxAutomaticAttempts: event.target.value })} required /></Field>
           </div>
           <div className="form-actions">
             <Button type="button" variant="secondary" onClick={() => setIntegrationMode(null)}>取消</Button>
@@ -499,24 +499,24 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
         </form>
       </Modal>
 
-      <Modal open={Boolean(rotateTarget)} onClose={() => setRotateTarget(null)} title="轮换 Resend API Key" description="保存后，之后的所有发送立即使用新 Key。">
+      <Modal open={Boolean(rotateTarget)} onClose={() => setRotateTarget(null)} title="更换 API 密钥" description="保存后，后续外发邮件将立即使用新密钥。">
         <form className="form-stack" onSubmit={rotateCredential}>
-          <Field label="新 API Key"><Input type="password" value={newApiKey} onChange={(event) => setNewApiKey(event.target.value)} autoComplete="new-password" required /></Field>
-          <Notice tone="warning"><strong>Key 不会回显</strong><p>建议保存后立即从某个 Binding 发送测试邮件。</p></Notice>
+          <Field label="新 API 密钥"><Input type="password" value={newApiKey} onChange={(event) => setNewApiKey(event.target.value)} autoComplete="new-password" required /></Field>
+          <Notice tone="warning"><strong>密钥不回显</strong><p>为保障安全，密钥保存后不会在界面明文展示。建议保存后发送一封测试邮件验证连通性。</p></Notice>
           <div className="form-actions">
             <Button type="button" variant="secondary" onClick={() => setRotateTarget(null)}>取消</Button>
-            <Button type="submit" loading={saving}>轮换 Key</Button>
+            <Button type="submit" loading={saving}>确认更换</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={Boolean(bindingContract)} onClose={() => setBindingContract(null)} title="配置 Template Binding" description={bindingContract ? `${bindingContract.notificationType}@${bindingContract.version}` : undefined} wide>
+      <Modal open={Boolean(bindingContract)} onClose={() => setBindingContract(null)} title="配置模板绑定" description={bindingContract ? `${bindingContract.notificationType}@${bindingContract.version}` : undefined} wide>
         {bindingContract ? (
           <form className="form-stack" onSubmit={saveBinding}>
-            <Field label="Provider Template Ref" hint="填写 Resend Template ID 或 Alias；保存不会修改远程模板。">
+            <Field label="模板标识 (Template ID / Alias)" hint="填写发信服务商后台中的模板 ID 或别名；保存仅在本系统建立关联，不会修改远程模板。">
               <Input value={providerTemplateRef} onChange={(event) => setProviderTemplateRef(event.target.value)} maxLength={512} required />
             </Field>
-            <Notice><strong>变量合同来自服务端代码</strong><p>Provider 模板必须使用下列变量名。事件发生时由对应业务代码取值并写入加密变量。</p></Notice>
+            <Notice><strong>支持的动态变量清单</strong><p>在 Resend 邮件模板中可引用下列变量占位符，触发通知时系统将自动注入相应业务数据。</p></Notice>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -543,7 +543,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
             </div>
             <div className="form-actions">
               <Button type="button" variant="secondary" onClick={() => setBindingContract(null)}>取消</Button>
-              <Button type="submit" loading={saving}>保存 Binding</Button>
+              <Button type="submit" loading={saving}>保存模板绑定</Button>
             </div>
           </form>
         ) : null}
@@ -552,30 +552,30 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
       <Modal open={Boolean(testContract)} onClose={() => setTestContract(null)} title="发送配置测试" description={testContract?.notificationType} wide>
         {testContract ? (
           <form className="form-stack" onSubmit={sendConfigurationTest}>
-            <Field label="测试收件邮箱" hint="测试会真实发送，并使用合同中显示的示例变量。">
+            <Field label="测试收件邮箱" hint="系统将真实发送一封测试邮件，内容采用下方列表中的示例数据。">
               <Input type="email" value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} placeholder="you@example.com" required />
             </Field>
             <Notice tone="warning">
-              <strong>结果只在本次操作中展示</strong>
-              <p>Provider accepted 只表示请求被接管，不代表最终进入收件箱；服务端不会保存这次测试。</p>
+              <strong>测试结果说明</strong>
+              <p>服务商受理仅代表发信请求已成功送达网关，最终是否进入收件箱取决于收件方垃圾邮件策略；测试记录不会存入正式投递日志。</p>
             </Notice>
             {testResult ? (
               <Notice tone={testResult.providerAccepted ? "success" : "warning"}>
-                <strong>{testResult.providerAccepted ? "Provider accepted" : "Provider 未接受"}</strong>
+                <strong>{testResult.providerAccepted ? "服务商已成功受理" : "服务商未受理请求"}</strong>
                 <pre>{safeJson(testResult)}</pre>
               </Notice>
             ) : null}
             {retryWaitingResult ? (
               <Notice tone="success">
                 <strong>已重新排队</strong>
-                <p>{retryWaitingResult.queuedCount} 条等待配置的 Delivery 将使用最新配置发送。</p>
+                <p>{retryWaitingResult.queuedCount} 封待处理邮件已重新排队，将使用最新配置发送。</p>
               </Notice>
             ) : null}
             <div className="form-actions">
               <Button type="button" variant="secondary" onClick={() => setTestContract(null)}>关闭</Button>
               {testResult?.providerAccepted ? (
                 <Button type="button" variant="secondary" loading={saving} onClick={() => void retryWaitingDeliveries()}>
-                  <RefreshCw className="size-4" />重试等待配置的邮件
+                  <RefreshCw className="size-4" />重试待处理邮件
                 </Button>
               ) : null}
               <Button type="submit" loading={saving}><Send className="size-4" />发送测试</Button>

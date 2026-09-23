@@ -28,7 +28,7 @@ function delivery(overrides: Partial<EmailDelivery> = {}): EmailDelivery {
 
 describe("email delivery presentation", () => {
   it("presents Provider acceptance as the phase-one sent boundary", () => {
-    expect(deliveryStatusExplanation("accepted")).toContain("按当前一期定义为已发送");
+    expect(deliveryStatusExplanation("accepted")).toContain("发信服务商已受理发送请求");
   });
 
   it("explains configuration waiting and unknown outcomes", () => {
@@ -45,7 +45,7 @@ describe("email delivery presentation", () => {
 
   it("distinguishes customer and Instance Invitation recipients", () => {
     expect(deliveryRecipientLabel(delivery())).toBe("cus_test");
-    expect(deliveryRecipientLabel(delivery({ recipientType: "instance_invitation", customerId: null }))).toBe("Instance 邀请");
+    expect(deliveryRecipientLabel(delivery({ recipientType: "instance_invitation", customerId: null }))).toBe("实例邀请");
   });
 
   it("preserves the API supplied template filename and source", () => {

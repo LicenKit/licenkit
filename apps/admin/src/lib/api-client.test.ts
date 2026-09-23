@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, queryString, snakeize } from "./api-client";
+import { ApiError, api, formatApiError, queryString, snakeize } from "./api-client";
 
 describe("Admin API JSON boundary", () => {
   beforeEach(() => {
@@ -61,5 +61,28 @@ describe("Admin API JSON boundary", () => {
     const caught = await api.setup.status().catch((error: unknown) => error);
     expect(caught).toBeInstanceOf(ApiError);
     expect((caught as ApiError).requestId).toBeNull();
+  });
+
+  it("formatApiError 输出英文错误码与友好中文说明", () => {
+    const errorWithTranslation = new ApiError({
+      code: "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED",
+      message: "Customer Site and LicenKit API must use the same schemeful site for SameSite=Lax Customer cookies",
+      status: 400,
+      method: "POST",
+      path: "/api/v1/setup/complete",
+      requestId: "req_123",
+    });
+    expect(formatApiError(errorWithTranslation)).toBe(
+      "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED: 官网地址必须与管理后台使用相同的主域名，且均为 HTTPS · req_123",
+    );
+
+    const errorUnknown = new ApiError({
+      code: "UNKNOWN_CUSTOM_ERROR",
+      message: "An unfamiliar internal error",
+      status: 500,
+      method: "GET",
+      path: "/api/v1/test",
+    });
+    expect(formatApiError(errorUnknown)).toBe("UNKNOWN_CUSTOM_ERROR: An unfamiliar internal error");
   });
 });

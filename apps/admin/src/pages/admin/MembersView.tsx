@@ -80,7 +80,7 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
       <PageHeader
         eyebrow="团队与协作"
         title="团队成员"
-        description="管理当前工作空间的成员账号与角色权限，支持发起邀请及状态管理。"
+        description="管理当前实例的成员账号与角色权限，支持发起邀请及状态管理。"
         action={
           <div className="button-row">
             <Button variant="secondary" loading={loading} onClick={() => void load()}>
@@ -100,14 +100,14 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
           <Card>
             <div className="card-header">
               <div>
-                <p className="eyebrow">空间成员</p>
+                <p className="eyebrow">实例成员</p>
                 <h2>已加入成员</h2>
-                <p>工作空间所有者 (Owner) 可配置成员角色、暂停或移除成员访问权限。</p>
+                <p>实例所有者 (Owner) 可配置成员角色、暂停或移除成员访问权限。</p>
               </div>
               <Badge>{members.length}</Badge>
             </div>
             {members.length === 0 ? (
-              <EmptyState title="暂无成员" description="空间所有者应在此处展示。" />
+              <EmptyState title="暂无成员" description="实例所有者应在此处展示。" />
             ) : (
               <div className="table-wrap">
                 <table>
@@ -193,7 +193,7 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
               <div>
                 <p className="eyebrow">邀请记录</p>
                 <h2>待加入邀请</h2>
-                <p>通过邮件发送的空间邀请。重新发送将作废旧邀请链接并生成新的安全链接。</p>
+                <p>通过邮件发送的实例邀请。重新发送将作废旧邀请链接并生成新的安全链接。</p>
               </div>
               <Badge>{invitations.length}</Badge>
             </div>
@@ -253,7 +253,7 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
         </>
       )}
 
-      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="邀请新成员" description="受邀人将收到邀请邮件，通过邮件安全链接自行设置密码并加入当前空间。">
+      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="邀请新成员" description="受邀人将收到邀请邮件，通过邮件安全链接自行设置密码并加入当前实例。">
         <form className="form-stack" onSubmit={invite}>
           <Field label="成员邮箱">
             <Input
@@ -301,7 +301,7 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
         onConfirm={() => void handleRemoveMember()}
         loading={savingId === removingMember?.userId}
         title="移除团队成员"
-        description={`确定从当前空间移除成员 ${removingMember?.user.email || ""}？移除后该成员将无法访问本空间，重新加入需要重新发送邀请。`}
+        description={`确定从当前实例移除成员 ${removingMember?.user.email || ""}？移除后该成员将无法访问本实例，重新加入需要重新发送邀请。`}
         confirmText="确认移除"
         danger
       />

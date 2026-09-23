@@ -79,7 +79,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
       <PageHeader
         eyebrow="授权目录"
         title="产品与发布"
-        description="受控软件的产品定义与官方版本发布记录。登记的版本用于客户端更新校验与版本权益判定。"
+        description="管理软件产品的定义与官方版本发布记录。登记的版本用于客户端更新校验与版本权益判定。"
         action={
           <div className="button-row">
             <Button variant="secondary" onClick={() => void loadProducts()} loading={loading}>
@@ -151,8 +151,8 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
                 <div className="card-header">
                   <div>
                     <p className="eyebrow">版本发布</p>
-                    <h2>官方版本发布记录</h2>
-                    <p>版本号、平台架构、发布时间与 SHA-256 创建后不可原地修改，用于客户端升级权益校验。</p>
+                    <h2>版本发布</h2>
+                    <p>版本号、架构平台、发布时间与 SHA-256 哈希创建后不可原地修改，用于客户端升级权益校验。</p>
                   </div>
                   {canWrite ? (
                     <Button onClick={() => setReleaseModal(true)}>
@@ -216,7 +216,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
           </label>
           {productForm.trialEnabled ? (
             <div className="form-grid">
-              <Field label="试用时长（秒）"><Input type="number" min="1" value={productForm.trialDurationSeconds} onChange={(event) => setProductForm({ ...productForm, trialDurationSeconds: event.target.value })} placeholder="604800 (7天)" required /></Field>
+              <Field label="试用时长（秒）" hint="设备试用的有效秒数。参考：7 天 = 604800"><Input type="number" min="1" value={productForm.trialDurationSeconds} onChange={(event) => setProductForm({ ...productForm, trialDurationSeconds: event.target.value })} placeholder="604800 (7天)" required /></Field>
               <Field label="试用功能白名单" hint="用英文逗号分隔"><Input value={productForm.trialFeatures} onChange={(event) => setProductForm({ ...productForm, trialFeatures: event.target.value })} placeholder="pro_export,batch" /></Field>
             </div>
           ) : null}
@@ -227,11 +227,11 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
         </form>
       </Modal>
 
-      <Modal open={releaseModal} onClose={() => setReleaseModal(false)} title="登记发布版本" description="登记可信官方版本。新编译的二进制或新 SHA-256 哈希必须创建新的版本记录。">
+      <Modal open={releaseModal} onClose={() => setReleaseModal(false)} title="登记新版本" description="新编译的安装包或更新哈希需创建新版本，创建后不可修改。">
         <form className="form-stack" onSubmit={createRelease}>
           <div className="form-grid">
             <Field label="版本号"><Input value={releaseForm.version} onChange={(event) => setReleaseForm({ ...releaseForm, version: event.target.value })} placeholder="1.0.0" required /></Field>
-            <Field label="适用操作系统与平台"><Input value={releaseForm.platform} onChange={(event) => setReleaseForm({ ...releaseForm, platform: event.target.value })} placeholder="macos-universal" required /></Field>
+            <Field label="适用平台与架构"><Input value={releaseForm.platform} onChange={(event) => setReleaseForm({ ...releaseForm, platform: event.target.value })} placeholder="macos-universal" required /></Field>
           </div>
           <Field label="安装包 SHA-256 哈希"><Input value={releaseForm.artifactSha256} onChange={(event) => setReleaseForm({ ...releaseForm, artifactSha256: event.target.value })} pattern="[a-fA-F0-9]{64}" placeholder="64 位十六进制哈希" required /></Field>
           <Field label="发布时间"><Input type="datetime-local" value={releaseForm.releasedAt} onChange={(event) => setReleaseForm({ ...releaseForm, releasedAt: event.target.value })} required /></Field>

@@ -133,11 +133,11 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
                 <div className="metric-grid compact">
                   <div>
                     <span>授权模型</span>
-                    <strong>{selected.licenseModel === "perpetual" ? "永久买断 (perpetual)" : selected.licenseModel === "fixed_term" ? "固定期限 (fixed_term)" : "周期订阅 (subscription)"}</strong>
+                    <strong>{selected.licenseModel === "perpetual" ? "永久买断制" : selected.licenseModel === "fixed_term" ? "固定期限" : "周期订阅制"}</strong>
                   </div>
                   <div>
                     <span>凭证签名模式</span>
-                    <strong>{selected.credentialMode === "signed" ? "在线激活 + 离线签名凭证" : "仅在线激活 (opaque)"}</strong>
+                    <strong>{selected.credentialMode === "signed" ? "在线激活 + 离线签名凭证" : "仅在线机器码激活"}</strong>
                   </div>
                   <div>
                     <span>最大激活设备数</span>
@@ -175,7 +175,7 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
                 <div className="card-header">
                   <div>
                     <p className="eyebrow">业务规则</p>
-                    <h2>生命周期与更新说明</h2>
+                    <h2>规则说明</h2>
                   </div>
                   <FileClock className="size-5" />
                 </div>
@@ -204,43 +204,43 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
           <div className="form-grid">
             <Field label="授权模型">
               <Select value={form.licenseModel} onChange={(event) => setForm({ ...form, licenseModel: event.target.value as LicenseModel })}>
-                <option value="perpetual">perpetual · 永久买断制</option>
-                <option value="fixed_term">fixed_term · 固定期限</option>
-                <option value="subscription">subscription · 周期订阅制</option>
+                <option value="perpetual">永久买断制</option>
+                <option value="fixed_term">固定期限</option>
+                <option value="subscription">周期订阅制</option>
               </Select>
             </Field>
             <Field label="凭证模式">
               <Select value={form.credentialMode} onChange={(event) => setForm({ ...form, credentialMode: event.target.value as CredentialMode })}>
-                <option value="opaque">opaque · 仅在线机器码激活</option>
-                <option value="signed">signed · 额外签发离线签名凭证</option>
+                <option value="opaque">仅在线机器码激活</option>
+                <option value="signed">在线激活 + 离线签名凭证</option>
               </Select>
             </Field>
           </div>
           <div className="form-grid">
-            <Field label="最大允许激活设备数">
+            <Field label="最多激活设备数">
               <Input type="number" min="1" value={form.maxActivations} onChange={(event) => setForm({ ...form, maxActivations: event.target.value })} required />
             </Field>
-            <Field label="功能白名单列表" hint="用英文逗号分隔，如 pro_export,batch">
+            <Field label="功能特性列表" hint="用英文逗号分隔，如 pro_export,batch">
               <Input value={form.features} onChange={(event) => setForm({ ...form, features: event.target.value })} placeholder="pro_export,batch" />
             </Field>
           </div>
           {form.licenseModel === "perpetual" ? (
-            <Field label="版本更新权益期（秒）" hint="买断后支持更新软件版本的期限。留空表示永久享受所有未来版本更新（如 31536000 为 1 年）">
-              <Input type="number" min="1" value={form.updateWindowSeconds} onChange={(event) => setForm({ ...form, updateWindowSeconds: event.target.value })} />
+            <Field label="版本更新权益期（秒）" hint="买断后可免费更新软件版本的时长（秒）。留空表示永久享受未来所有版本更新；参考：1 年 = 31536000">
+              <Input type="number" min="1" value={form.updateWindowSeconds} onChange={(event) => setForm({ ...form, updateWindowSeconds: event.target.value })} placeholder="留空表示永久更新权益" />
             </Field>
           ) : null}
           {form.licenseModel === "fixed_term" ? (
-            <Field label="默认固定有效期（秒）" hint="如 2592000 为 30 天，31536000 为 365 天">
-              <Input type="number" min="1" value={form.defaultTermSeconds} onChange={(event) => setForm({ ...form, defaultTermSeconds: event.target.value })} required />
+            <Field label="默认固定有效期（秒）" hint="授权生效时长（秒）。参考：30 天 = 2592000，1 年 = 31536000">
+              <Input type="number" min="1" value={form.defaultTermSeconds} onChange={(event) => setForm({ ...form, defaultTermSeconds: event.target.value })} placeholder="例如：2592000 (30天)" required />
             </Field>
           ) : null}
           {form.licenseModel === "subscription" ? (
-            <Field label="订阅扣费宽限期（秒）" hint="扣费失败后的缓冲期。在此期间客户端仍可正常校验通过（如 259200 为 3 天）">
-              <Input type="number" min="0" value={form.paymentGraceSeconds} onChange={(event) => setForm({ ...form, paymentGraceSeconds: event.target.value })} />
+            <Field label="订阅扣费宽限期（秒）" hint="订阅扣费失败后的缓冲宽限时长（秒）。缓冲期内客户端仍可正常校验；参考：3 天 = 259200">
+              <Input type="number" min="0" value={form.paymentGraceSeconds} onChange={(event) => setForm({ ...form, paymentGraceSeconds: event.target.value })} placeholder="例如：259200 (3天)" />
             </Field>
           ) : null}
           {form.credentialMode === "signed" ? (
-            <Field label="离线凭证有效期 TTL（秒）" hint="离线签名凭证有效时长。客户端需在到期前联网重新同步（如 2592000 为 30 天）">
+            <Field label="离线凭证有效期 TTL（秒）" hint="离线签名凭证有效时长（秒）。客户端需在此期限内联网同步；参考：30 天 = 2592000">
               <Input type="number" min={MIN_SIGNED_TOKEN_TTL_SECONDS} value={form.signedTokenTtlSeconds} onChange={(event) => setForm({ ...form, signedTokenTtlSeconds: event.target.value })} required />
             </Field>
           ) : null}

@@ -1,3 +1,5 @@
+import { getErrorMessage } from "./i18n";
+
 const API_BASE = "/api/v1";
 
 export type Identifier = string;
@@ -48,7 +50,8 @@ export function isApiError(value: unknown): value is ApiError { return value ins
 export function formatApiError(value: unknown): string {
   if (value instanceof ApiError) {
     const request = value.requestId ? ` · ${value.requestId}` : "";
-    return `${value.code}: ${value.message}${request}`;
+    const localizedMessage = getErrorMessage(value.code, value.message);
+    return `${value.code}: ${localizedMessage}${request}`;
   }
   return value instanceof Error ? value.message : "发生未知错误";
 }

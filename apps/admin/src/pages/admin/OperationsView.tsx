@@ -102,7 +102,7 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
           <div className="card-header">
             <div>
               <p className="eyebrow">运行异常排查</p>
-              <h2>系统异常提示</h2>
+              <h2>异常提示</h2>
               <p>问题解决后可标记为已处理。若同一异常后续再次发生，系统将自动恢复为待处理状态。</p>
             </div>
             <Badge tone={issues.some((item) => item.status === "pending") ? "warning" : "neutral"}>
@@ -162,12 +162,12 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
             <div>
               <p className="eyebrow">Webhook 接入记录</p>
               <h2>入站事件</h2>
-              <p>记录由支付服务商已验签发送的通知事件及其处理状态。支持依赖修复后的人工安全重新执行。</p>
+              <p>记录支付服务商发送的通知事件及处理状态。在修复相关配置或依赖后，可在此安全重试。</p>
             </div>
             <Badge>{events.length} 条记录</Badge>
           </div>
           {events.length === 0 ? (
-            <EmptyState title="暂无入站事件" description="来自支付服务商的已验签通知事件将显示在此处。" />
+            <EmptyState title="暂无入站事件" description="来自支付服务商的通知事件将显示在此处。" />
           ) : (
             <div className="table-wrap">
               <table>
@@ -199,7 +199,7 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
         </Card>
       ) : null}
 
-      <Modal open={Boolean(selectedEvent)} onClose={() => setSelectedEvent(null)} title="入站事件排查详情" description={selectedEvent?.externalEventId} wide>
+      <Modal open={Boolean(selectedEvent)} onClose={() => setSelectedEvent(null)} title="入站事件详情" description={selectedEvent?.externalEventId} wide>
         {selectedEvent ? (
           <div className="diagnostic-detail">
             <div className="metric-grid compact">
@@ -230,7 +230,7 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
       <ConfirmModal
         open={Boolean(replayConfirmTarget)}
         title="确认重新执行入站事件"
-        description={`确定重新执行事件（${replayConfirmTarget?.eventType} · ${replayConfirmTarget?.externalEventId}）？系统将按幂等规则重新触发处理流程，不会造成重复记录。`}
+        description={`确定重新执行事件（${replayConfirmTarget?.eventType} · ${replayConfirmTarget?.externalEventId}）？系统将重新触发处理流程，不会产生重复记录。`}
         confirmLabel="重新执行"
         variant="primary"
         loading={saving}

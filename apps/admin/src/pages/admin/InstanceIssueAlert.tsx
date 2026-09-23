@@ -15,11 +15,11 @@ export function InstanceIssueAlert({ onOpenIssues, refreshKey }: { onOpenIssues:
     return () => { active = false };
   }, [refreshKey]);
 
-  if (error) return <ErrorPanel error={error} title="无法加载 Instance 告警" />;
+  if (error) return <ErrorPanel error={error} title="无法加载系统运行告警" />;
   if (issues.length === 0) return null;
   const recent = [...issues].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0]!;
   return (
-    <aside className="instance-issue-alert" aria-label="Instance 待处理问题">
+    <aside className="instance-issue-alert" aria-label="实例待处理问题">
       <AlertTriangle className="size-5" />
       <div><strong>{recent.errorCode}</strong><span>{recent.category} · {recent.operation} · 最近发生于 {formatDate(recent.lastSeenAt)}</span></div>
       <Badge tone="warning">{issues.length} 个待处理</Badge>

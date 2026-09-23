@@ -123,8 +123,8 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
       <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">邮件队列与状态</p>
-            <h2>邮件投递记录</h2>
+            <p className="eyebrow">邮件服务</p>
+            <h2>投递记录</h2>
             <p>追踪系统外发邮件的处理进度、重发队列与最终投递结果。</p>
           </div>
           <div className="button-row">
@@ -136,8 +136,8 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
 
         {deliveries.length > 0 ? (
           <Notice tone="info">
-            <strong>重发机制说明</strong>
-            <p>手动重发将使用当前最新保存的发信通道配置。对于结果未知的投递任务，请在确认可能重复后再执行重发。</p>
+            <strong>重发说明</strong>
+            <p>手动重发将使用当前通道配置重新发送。若上次发送结果未明，重发可能导致收件人收到重复邮件，请确认后操作。</p>
           </Notice>
         ) : null}
 

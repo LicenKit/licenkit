@@ -1,9 +1,27 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { KeyRound, RefreshCw, UserRound } from "lucide-react";
+import { KeyRound, Languages, RefreshCw, UserRound } from "lucide-react";
 import { api, type User } from "../../lib/api-client";
-import { Button, Card, ErrorPanel, Field, Input, Notice, PageHeader } from "../../components/ui";
+import {
+  Button,
+  Card,
+  ErrorPanel,
+  Field,
+  Input,
+  Notice,
+  PageHeader,
+  Select,
+} from "../../components/ui";
+import { useI18n } from "../../lib/i18n/I18nContext";
+import type { SupportedLocale } from "../../lib/i18n/types";
 
-export function ProfileView({ initialUser, onUserUpdated }: { initialUser: User; onUserUpdated: (user: User) => void }) {
+export function ProfileView({
+  initialUser,
+  onUserUpdated,
+}: {
+  initialUser: User;
+  onUserUpdated: (user: User) => void;
+}) {
+  const { t, locale, setLocale } = useI18n();
   const [user, setUser] = useState(initialUser);
   const [name, setName] = useState(initialUser.name);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -14,84 +32,175 @@ export function ProfileView({ initialUser, onUserUpdated }: { initialUser: User;
   const [message, setMessage] = useState<string | null>(null);
 
   async function load() {
-    setLoading(true); setError(null); setMessage(null);
+    setLoading(true);
+    setError(null);
+    setMessage(null);
     try {
       const result = await api.admin.profile.get();
-      setUser(result); setName(result.name); onUserUpdated(result);
-    } catch (caught) { setError(caught) } finally { setLoading(false) }
+      setUser(result);
+      setName(result.name);
+      onUserUpdated(result);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setLoading(false);
+    }
   }
-  useEffect(() => { void load() }, []);
+
+  useEffect(() => {
+    void load();
+  }, []);
 
   async function saveProfile(event: FormEvent) {
-    event.preventDefault(); setSaving("profile"); setError(null); setMessage(null);
+    event.preventDefault();
+    setSaving("profile");
+    setError(null);
+    setMessage(null);
     try {
       const result = await api.admin.profile.update(name.trim());
-      setUser(result); setName(result.name); onUserUpdated(result); setMessage("显示名称已更新。");
-    } catch (caught) { setError(caught) } finally { setSaving(null) }
+      setUser(result);
+      setName(result.name);
+      onUserUpdated(result);
+      setMessage(t.settings.profileSaved);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setSaving(null);
+    }
   }
 
   async function changePassword(event: FormEvent) {
-    event.preventDefault(); setSaving("password"); setError(null); setMessage(null);
+    event.preventDefault();
+    setSaving("password");
+    setError(null);
+    setMessage(null);
     try {
       await api.admin.profile.changePassword({ currentPassword, newPassword });
-      setCurrentPassword(""); setNewPassword(""); setMessage("密码已更新，其他管理员 Session 已撤销。");
-    } catch (caught) { setError(caught) } finally { setSaving(null) }
+      setCurrentPassword("");
+      setNewPassword("");
+      setMessage(t.settings.passwordChanged);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setSaving(null);
+    }
   }
 
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="个人账号"
-        title="个人资料"
-        description="管理当前登录管理员的账户资料与安全凭据。"
-        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
+        eyebrow={t.settings.profileEyebrow}
+        title={t.settings.profileTitle}
+        description={t.settings.profileDescription}
+        action={
+          <Button variant="secondary" loading={loading} onClick={() => void load()}>
+            <RefreshCw className="size-4" />
+            {t.common.refresh}
+          </Button>
+        }
       />
       <ErrorPanel error={error} />
-      {message ? <Notice tone="success"><strong>{message}</strong></Notice> : null}
+      {message ? (
+        <Notice tone="success">
+          <strong>{message}</strong>
+        </Notice>
+      ) : null}
+
       <div className="two-column">
         <Card>
           <div className="card-header">
             <div>
-              <p className="eyebrow">基本信息</p>
-              <h2>个人信息</h2>
-              <p>登录邮箱为管理员账户唯一标识，不可在此处直接修改。</p>
+              <p className="eyebrow">{t.settings.basicInfoTitle}</p>
+              <h2>{t.settings.basicInfoTitle}</h2>
+              <p>{t.settings.basicInfoSubtitle}</p>
             </div>
             <UserRound className="size-5" />
           </div>
           <form className="form-stack" onSubmit={saveProfile}>
-            <Field label="显示名称">
-              <Input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required />
+            <Field label={t.settings.nameLabel}>
+              <Input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="name"
+                required
+              />
             </Field>
-            <Field label="登录邮箱" hint="当前系统不支持在线更改管理员登录邮箱">
+            <Field label={t.settings.emailLabel} hint={t.settings.emailHint}>
               <Input type="email" value={user.email} readOnly disabled />
             </Field>
             <div className="form-actions">
-              <Button type="submit" loading={saving === "profile"}>保存个人信息</Button>
+              <Button type="submit" loading={saving === "profile"}>
+                {t.settings.saveProfile}
+              </Button>
             </div>
           </form>
         </Card>
+
         <Card>
           <div className="card-header">
             <div>
-              <p className="eyebrow">密码安全</p>
-              <h2>修改登录密码</h2>
-              <p>密码更新后，除当前浏览器外的其他登录会话将自动失效。</p>
+              <p className="eyebrow">{t.settings.languageTitle}</p>
+              <h2>{t.settings.languageLabel}</h2>
+              <p>{t.settings.languageDescription}</p>
             </div>
-            <KeyRound className="size-5" />
+            <Languages className="size-5" />
           </div>
-          <form className="form-stack" onSubmit={changePassword}>
-            <Field label="当前密码">
-              <Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required />
+          <div className="form-stack">
+            <Field label={t.settings.languageLabel}>
+              <Select
+                value={locale}
+                onChange={(event) => {
+                  const nextLocale = event.target.value as SupportedLocale;
+                  setLocale(nextLocale);
+                  setMessage(t.settings.languageSaved);
+                }}
+              >
+                <option value="zh-CN">{t.settings.options.zhCN}</option>
+                <option value="en-US">{t.settings.options.enUS}</option>
+              </Select>
             </Field>
-            <Field label="新密码" hint="长度不少于 12 位，建议组合使用大小写字母、数字及特殊符号">
-              <Input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required />
-            </Field>
-            <div className="form-actions">
-              <Button type="submit" loading={saving === "password"}>确认修改密码</Button>
-            </div>
-          </form>
+          </div>
         </Card>
       </div>
+
+      <Card>
+        <div className="card-header">
+          <div>
+            <p className="eyebrow">{t.settings.passwordTitle}</p>
+            <h2>{t.settings.passwordTitle}</h2>
+            <p>{t.settings.passwordSubtitle}</p>
+          </div>
+          <KeyRound className="size-5" />
+        </div>
+        <form className="form-stack" onSubmit={changePassword}>
+          <div className="form-grid">
+            <Field label={t.settings.currentPasswordLabel}>
+              <Input
+                type="password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </Field>
+            <Field label={t.settings.newPasswordLabel} hint={t.settings.newPasswordHint}>
+              <Input
+                type="password"
+                minLength={12}
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                autoComplete="new-password"
+                required
+              />
+            </Field>
+          </div>
+          <div className="form-actions">
+            <Button type="submit" loading={saving === "password"}>
+              {t.settings.changePassword}
+            </Button>
+          </div>
+        </form>
+      </Card>
     </div>
   );
 }

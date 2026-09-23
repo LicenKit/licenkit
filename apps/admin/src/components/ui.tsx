@@ -2,6 +2,7 @@ import { Component, useEffect, useId, useRef, type ButtonHTMLAttributes, type Er
 import { AlertCircle, CheckCircle2, Info, Loader2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { ApiError, formatApiError } from "../lib/api-client";
+import { getCurrentLocale } from "../lib/i18n";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -32,12 +33,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   override render() {
     if (this.state.hasError) {
+      const isEn = getCurrentLocale() === "en-US";
       return (
         <div className="card" style={{ margin: "1.5rem 0", padding: "1.5rem" }}>
-          <ErrorPanel error={this.state.error} title={this.props.fallbackTitle || "页面加载出现异常"} />
+          <ErrorPanel error={this.state.error} title={this.props.fallbackTitle || (isEn ? "Failed to load view" : "页面加载出现异常")} />
           <div style={{ marginTop: "1rem" }}>
             <Button variant="secondary" onClick={this.reset}>
-              重试加载
+              {isEn ? "Retry" : "重试加载"}
             </Button>
           </div>
         </div>
@@ -113,7 +115,13 @@ export function statusTone(status?: string): "success" | "warning" | "danger" | 
 }
 
 export function StatusBadge({ status, label }: { status?: string | null; label?: string }) {
-  return <Badge tone={statusTone(status ?? undefined)}>{label || status || "—"}</Badge>;
+  const tone = statusTone(status ?? undefined);
+  return (
+    <Badge tone={tone}>
+      <span className={clsx("status-dot", `status-dot-${tone}`)} aria-hidden="true" />
+      {label || status || "—"}
+    </Badge>
+  );
 }
 
 export function Modal({ open, title, description, children, onClose, wide = false }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
@@ -230,10 +238,11 @@ export function safeJson(value: unknown): string {
   try { return JSON.stringify(value, null, 2) } catch { return String(value) }
 }
 
-export function formatDate(value?: string | null): string {
+export function formatDate(value?: string | null, locale?: string): string {
   if (!value) return "—";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+  const targetLocale = locale || getCurrentLocale();
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(targetLocale, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 export function CopyValue({ value, label = "复制" }: { value: string; label?: string }) {

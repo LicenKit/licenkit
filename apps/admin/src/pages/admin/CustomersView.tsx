@@ -148,7 +148,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
       <PageHeader
         eyebrow="客户身份"
         title="客户管理"
-        description="管理通过在线购买或手动签发建立的客户档案，支持查看名下授权、更新联系邮箱及会话安全控制。"
+        description="管理通过在线购买或手动签发建立的客户档案，支持查看名下授权、更新联系邮箱及登录状态控制。"
         action={
           <Button variant="secondary" onClick={() => void load()} loading={loading}>
             <RefreshCw className="size-4" />刷新
@@ -175,8 +175,8 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
               onChange={(event) => setStatusFilter(event.target.value)}
             >
               <option value="">全部状态</option>
-              <option value="active">active · 正常</option>
-              <option value="disabled">disabled · 已禁用</option>
+              <option value="active">正常</option>
+              <option value="disabled">已禁用</option>
             </Select>
           </div>
           <Badge>{filteredCustomers.length} 位客户</Badge>
@@ -186,8 +186,8 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
           <LoadingState label="正在加载客户数据" />
         ) : filteredCustomers.length === 0 ? (
           <EmptyState
-            title={customers.length === 0 ? "还没有 Customer" : "未找到匹配的客户"}
-            description={customers.length === 0 ? "手动签发或支付履约会自动建立客户记录。" : "请尝试更换搜索关键字或清除过滤条件。"}
+            title={customers.length === 0 ? "暂无客户档案" : "未找到匹配的客户"}
+            description={customers.length === 0 ? "当发生首次在线购买或手动签发授权时，系统将自动建立客户档案。" : "请尝试更换搜索关键字或清除过滤条件。"}
           />
         ) : (
           <div className="table-wrap">
@@ -253,7 +253,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
         open={Boolean(selectedId)}
         onClose={() => setSelectedId(null)}
         title={selected?.name || selected?.email || "客户详情"}
-        description={selected ? `Customer ID: ${selected.id}` : undefined}
+        description={selected ? `客户编号：${selected.id}` : undefined}
         wide
       >
         {selected ? (
@@ -288,7 +288,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
               <Notice tone="info">
                 <strong>联系邮箱安全说明</strong>
                 <p>
-                  修改客户主邮箱后，系统将自动失效原邮箱的登录令牌与活动会话；名下已激活的有效授权不受影响。
+                  修改客户主邮箱后，原邮箱的所有登录状态将立即失效；名下已激活的有效授权不受影响。
                 </p>
               </Notice>
               {canManage ? (
@@ -297,7 +297,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                     编辑联系信息
                   </Button>
                   <Button variant="secondary" loading={saving} onClick={() => setConfirmRevokeSessions(true)}>
-                    <ShieldOff className="size-4" />吊销活动会话
+                    <ShieldOff className="size-4" />强制退出登录
                   </Button>
                   <Button
                     variant={selected.status === "active" ? "danger" : "secondary"}
@@ -347,8 +347,8 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                             <small className="mono">{license.id}</small>
                           </td>
                           <td>
-                            <span>{license.licenseModel === "subscription" ? "定期订阅" : "永久授权"}</span>
-                            <small>{license.renewalMode}</small>
+                            <span>{license.licenseModel === "perpetual" ? "永久买断" : license.licenseModel === "fixed_term" ? "固定期限" : "周期订阅"}</span>
+                            <small>{license.renewalMode === "billing" ? "自动续费" : "手动续期"}</small>
                           </td>
                           <td>
                             <StatusBadge status={license.status} />
@@ -404,15 +404,15 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
         </form>
       </Modal>
 
-      {/* 吊销会话确认 */}
+      {/* 强制退出登录确认 */}
       <ConfirmModal
         open={confirmRevokeSessions}
         onClose={() => setConfirmRevokeSessions(false)}
         onConfirm={() => void handleRevokeSessions()}
         loading={saving}
-        title="吊销客户活动会话"
-        description={`确定吊销客户“${selected?.email || ""}”当前的所有有效登录会话与未使用的登录链接？客户下次需重新通过邮箱验证登录。`}
-        confirmText="确认吊销会话"
+        title="强制退出客户登录"
+        description={`确定强制退出客户“${selected?.email || ""}”的所有登录状态并失效未使用的登录链接？客户下次需重新通过邮箱验证登录。`}
+        confirmText="确认退出登录"
         danger
       />
 
@@ -425,7 +425,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
         title={selected?.status === "active" ? "禁用客户账号" : "启用客户账号"}
         description={
           selected?.status === "active"
-            ? `确定禁用客户“${selected?.email || ""}”？禁用后客户将无法登录自助门户，现存活动会话将失效。已签发授权本身不会自动暂停。`
+            ? `确定禁用客户“${selected?.email || ""}”？禁用后客户将无法登录自助门户，现存登录状态将立即失效。已签发授权本身不会自动暂停。`
             : `确定重新启用客户“${selected?.email || ""}”？启用后客户可重新接收登录凭证并访问门户。`
         }
         confirmText={selected?.status === "active" ? "确认禁用" : "确认启用"}
