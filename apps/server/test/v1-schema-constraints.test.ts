@@ -21,8 +21,8 @@ function columns(db: Database.Database, table: string): string[] {
 
 function seedOwner(db: Database.Database): void {
   db.prepare(
-    `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-     VALUES ('ins_a', 'Instance A', 'a', 'https://a.example.test', 'active', ?, ?)`,
+    `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+     VALUES ('ins_a', 'Instance A', 'a', 'https://a.example.test', 'https://license-a.example.test', 'active', ?, ?)`,
   ).run(now, now);
   db.prepare(
     `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
@@ -182,8 +182,8 @@ describe("User and Instance initial database schema", () => {
     const db = createDb();
     seedOwner(db);
     db.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES ('ins_b', 'Instance B', 'b', 'https://b.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_b', 'Instance B', 'b', 'https://b.example.test', 'https://license-b.example.test', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO customers (id, instance_id, email, status, created_at, updated_at)

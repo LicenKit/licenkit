@@ -165,7 +165,8 @@ export interface Instance {
   id: Identifier;
   slug: string;
   name: string;
-  siteUrl: string;
+  customerSiteUrl: string;
+  adminApiUrl: string;
   status: "active" | "suspended" | "archived";
   createdAt?: IsoDateTime;
   updatedAt?: IsoDateTime;
@@ -397,7 +398,7 @@ export const api = {
   setup: {
     status: () => request<SetupStatus>("/setup/status", { scope: "public" }),
     verifyToken: (setupToken: string) => request<{ valid: true }>("/setup/verify-token", { method: "POST", body: { setupToken }, scope: "public" }),
-    complete: (body: { setupToken: string; user: { name: string; email: string; password: string }; instance: { name: string; slug: string; siteUrl: string } }) => request<AdminSession>("/setup", {
+    complete: (body: { setupToken: string; user: { name: string; email: string; password: string }; instance: { name: string; slug: string; customerSiteUrl: string; adminApiUrl: string } }) => request<AdminSession>("/setup", {
       method: "POST",
       body: {
         setupToken: body.setupToken,

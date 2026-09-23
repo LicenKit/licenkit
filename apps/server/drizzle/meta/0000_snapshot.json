@@ -3640,6 +3640,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "admin_api_url": {
+          "name": "admin_api_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -3664,6 +3671,13 @@
         }
       },
       "indexes": {
+        "uq_instances_admin_api_url": {
+          "name": "uq_instances_admin_api_url",
+          "columns": [
+            "admin_api_url"
+          ],
+          "isUnique": true
+        },
         "uq_instances_slug": {
           "name": "uq_instances_slug",
           "columns": [

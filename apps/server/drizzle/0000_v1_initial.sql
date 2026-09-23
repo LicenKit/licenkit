@@ -568,6 +568,7 @@ CREATE TABLE `instances` (
 	`name` text NOT NULL,
 	`slug` text NOT NULL,
 	`site_url` text NOT NULL,
+	`admin_api_url` text NOT NULL,
 	`status` text DEFAULT 'active' NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
@@ -580,6 +581,7 @@ CREATE TABLE `instances` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `uq_instances_slug` ON `instances` (`slug`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_instances_admin_api_url` ON `instances` (`admin_api_url`);--> statement-breakpoint
 CREATE TABLE `license_key_rotations` (
 	`id` text PRIMARY KEY NOT NULL,
 	`instance_id` text NOT NULL,

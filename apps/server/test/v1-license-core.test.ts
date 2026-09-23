@@ -85,8 +85,8 @@ describe("V1 License core contract", () => {
   beforeEach(async () => {
     testEnv = createTestEnv();
     await run(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?1, 'V1 Core', 'v1-core', 'https://license.example.test', 'active', ?2, ?2)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?1, 'V1 Core', 'v1-core', 'https://license.example.test', 'https://admin.example.test', 'active', ?2, ?2)`,
       instanceId,
       "2026-09-01T00:00:00.000Z",
     );

@@ -150,9 +150,9 @@ describe("Instance, Membership, Profile and Invitation API", () => {
     testEnv = createTestEnv({ ENVIRONMENT: "test" });
     const ownerHash = await hashPassword(OWNER_PASSWORD);
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?, 'Membership Test', 'membership-test', ?, 'active', ?, ?)`,
-    ).run(INSTANCE_ID, CUSTOMER_SITE_URL, NOW, NOW);
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Membership Test', 'membership-test', ?, ?, 'active', ?, ?)`,
+    ).run(INSTANCE_ID, CUSTOMER_SITE_URL, ORIGIN, NOW, NOW);
     testEnv.sqliteDb.prepare(
       `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
        VALUES (?, ?, ?, 'Owner', ?, ?)`,
@@ -194,7 +194,8 @@ describe("Instance, Membership, Profile and Invitation API", () => {
       id: INSTANCE_ID,
       name: "Membership Test",
       slug: "membership-test",
-      site_url: CUSTOMER_SITE_URL,
+      customer_site_url: CUSTOMER_SITE_URL,
+      admin_api_url: ORIGIN,
       status: "active",
     });
     const members = await app.request(`${ORIGIN}/members`, requestInit(), testEnv.env);
@@ -243,6 +244,9 @@ describe("Instance, Membership, Profile and Invitation API", () => {
   it("creates an Admin invitation link on non-production localhost HTTP", async () => {
     const localAdminOrigin = "http://localhost:8787";
     testEnv.env.ENVIRONMENT = "development";
+    testEnv.sqliteDb.prepare(
+      "UPDATE instances SET admin_api_url = ? WHERE id = ?",
+    ).run(localAdminOrigin, INSTANCE_ID);
 
     const response = await adminApp().request(
       `${localAdminOrigin}/invitations`,
@@ -271,6 +275,9 @@ describe("Instance, Membership, Profile and Invitation API", () => {
     environment,
   ) => {
     testEnv.env.ENVIRONMENT = environment;
+    testEnv.sqliteDb.prepare(
+      "UPDATE instances SET admin_api_url = ? WHERE id = ?",
+    ).run(adminOrigin, INSTANCE_ID);
 
     const response = await adminApp().request(
       `${adminOrigin}/invitations`,
@@ -435,6 +442,11 @@ describe("Instance, Membership, Profile and Invitation API", () => {
     expectOnlySnakeCaseJsonKeys(rejoinedPayload);
     expect(rejoinedPayload.data).toMatchObject({
       user: { id: returningUserId, email: "session-rejoin@example.test" },
+      instance: {
+        id: INSTANCE_ID,
+        customer_site_url: CUSTOMER_SITE_URL,
+        admin_api_url: ORIGIN,
+      },
       membership: { role: "admin", status: "active" },
     });
     expect(testEnv.sqliteDb.prepare(

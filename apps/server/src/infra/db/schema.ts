@@ -27,12 +27,14 @@ export const instances = sqliteTable(
     name: text("name").notNull(),
     slug: text("slug").notNull(),
     siteUrl: text("site_url").notNull(),
+    adminApiUrl: text("admin_api_url").notNull(),
     status: text("status").notNull().default("active"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
     unique("uq_instances_slug").on(table.slug),
+    uniqueIndex("uq_instances_admin_api_url").on(table.adminApiUrl),
     check(
       "ck_instances_slug",
       sql`length(${table.slug}) > 0

@@ -52,7 +52,8 @@ function setupBody(suffix = "primary") {
     instance: {
       name: `Example ${suffix}`,
       slug: `example-${suffix}`,
-      site_url: `${CUSTOMER_SITE_ORIGIN}/site/`,
+      customer_site_url: `${CUSTOMER_SITE_ORIGIN}/site/`,
+      admin_api_url: ORIGIN,
     },
   };
 }
@@ -82,7 +83,6 @@ describe("V1 deployment setup and administrator identity", () => {
   beforeEach(() => {
     testEnv = createTestEnv({
       INITIAL_SETUP_TOKEN: SETUP_TOKEN,
-      CUSTOMER_SITE_ORIGIN,
       ENVIRONMENT: "test",
     });
   });
@@ -158,7 +158,8 @@ describe("V1 deployment setup and administrator identity", () => {
       instance: {
         name: "Example primary",
         slug: "example-primary",
-        site_url: `${CUSTOMER_SITE_ORIGIN}/site`,
+        customer_site_url: `${CUSTOMER_SITE_ORIGIN}/site`,
+        admin_api_url: ORIGIN,
         status: "active",
       },
       membership: { role: "owner", status: "active" },
@@ -191,7 +192,7 @@ describe("V1 deployment setup and administrator identity", () => {
     expectOnlySnakeCaseJsonKeys(statusPayload);
   });
 
-  it("accepts the configured cross-Origin Site URL and rejects every other Origin before writing", async () => {
+  it("requires the configured Admin/API URL to match the Setup Worker Origin", async () => {
     const app = identityApp();
     const invalidTokenBody = setupBody();
     invalidTokenBody.setup_token = "wrong-token";
@@ -209,15 +210,14 @@ describe("V1 deployment setup and administrator identity", () => {
     expectOnlySnakeCaseJsonKeys(await legacy.json());
 
     const body = setupBody();
-    body.instance.site_url = "https://other.example.test";
+    body.instance.admin_api_url = "https://other.example.test";
     const wrongOrigin = await postJson(app, "/api/v1/setup", body, testEnv.env);
     expect(wrongOrigin.status).toBe(400);
     const wrongOriginPayload = await wrongOrigin.json() as any;
-    expect(wrongOriginPayload.error.code).toBe("SETUP_SITE_URL_ORIGIN_MISMATCH");
+    expect(wrongOriginPayload.error.code).toBe("SETUP_ADMIN_API_URL_ORIGIN_MISMATCH");
     expect(wrongOriginPayload.error.details).toEqual({
-      app_origin: ORIGIN,
-      customer_site_origin: CUSTOMER_SITE_ORIGIN,
-      site_origin: "https://other.example.test",
+      admin_api_origin: "https://other.example.test",
+      request_origin: ORIGIN,
     });
     expectOnlySnakeCaseJsonKeys(wrongOriginPayload);
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 0 });
@@ -226,9 +226,8 @@ describe("V1 deployment setup and administrator identity", () => {
 
   it("rejects a cross-site Customer Origin before Setup writes any state", async () => {
     const crossSiteOrigin = "https://portal.other.test";
-    testEnv.env.CUSTOMER_SITE_ORIGIN = crossSiteOrigin;
     const body = setupBody();
-    body.instance.site_url = `${crossSiteOrigin}/customer`;
+    body.instance.customer_site_url = `${crossSiteOrigin}/customer`;
 
     const verify = await postJson(
       identityApp(),
@@ -236,16 +235,7 @@ describe("V1 deployment setup and administrator identity", () => {
       { setup_token: SETUP_TOKEN },
       testEnv.env,
     );
-    expect(verify.status).toBe(400);
-    expect((await verify.json() as any).error).toMatchObject({
-      code: "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED",
-      details: {
-        app_origin: ORIGIN,
-        customer_site_origin: crossSiteOrigin,
-        app_site: "https://example.test",
-        customer_site: "https://other.test",
-      },
-    });
+    expect(verify.status).toBe(200);
 
     const response = await postJson(identityApp(), "/api/v1/setup", body, testEnv.env);
     expect(response.status).toBe(400);
@@ -258,32 +248,29 @@ describe("V1 deployment setup and administrator identity", () => {
   });
 
   it.each([
-    ["missing", undefined, "test", "CUSTOMER_SITE_ORIGIN_MISSING"],
-    ["path", "https://site.example.test/customer", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["query", "https://site.example.test?source=test", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["fragment", "https://site.example.test#customer", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["credentials", "https://user:password@site.example.test", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["non-canonical", "https://site.example.test/", "test", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["non-loopback development HTTP", "http://site.example.test", "development", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["IPv6 loopback development HTTP", "http://[::1]:4321", "development", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["production HTTP", "http://site.example.test", "production", "CUSTOMER_SITE_ORIGIN_INVALID"],
-    ["production localhost HTTP", "http://localhost:4321", "production", "CUSTOMER_SITE_ORIGIN_INVALID"],
-  ])("rejects an invalid %s Customer Site Origin configuration without writing", async (
-    _case,
-    configuredOrigin,
+    ["query", "customer_site_url", "https://site.example.test?source=test", "test", "SETUP_CUSTOMER_SITE_URL_INVALID"],
+    ["fragment", "customer_site_url", "https://site.example.test#customer", "test", "SETUP_CUSTOMER_SITE_URL_INVALID"],
+    ["credentials", "customer_site_url", "https://user:password@site.example.test", "test", "SETUP_CUSTOMER_SITE_URL_INVALID"],
+    ["non-loopback development HTTP", "customer_site_url", "http://site.example.test", "development", "SETUP_CUSTOMER_SITE_URL_INVALID"],
+    ["IPv6 loopback development HTTP", "customer_site_url", "http://[::1]:4321", "development", "SETUP_CUSTOMER_SITE_URL_INVALID"],
+    ["production localhost HTTP", "customer_site_url", "http://localhost:4321", "production", "SETUP_CUSTOMER_SITE_URL_INVALID"],
+    ["Admin path", "admin_api_url", `${ORIGIN}/admin`, "test", "SETUP_ADMIN_API_URL_INVALID"],
+    ["Admin trailing slash", "admin_api_url", `${ORIGIN}/`, "test", "SETUP_ADMIN_API_URL_INVALID"],
+  ])("rejects an invalid %s URL without writing", async (
+    testCase,
+    field,
+    configuredUrl,
     environment,
     expectedCode,
   ) => {
-    testEnv.env.CUSTOMER_SITE_ORIGIN = configuredOrigin;
     testEnv.env.ENVIRONMENT = environment;
-    const response = await postJson(identityApp(), "/api/v1/setup", setupBody(), testEnv.env);
-    expect(response.status).toBe(500);
+    const body = setupBody();
+    body.instance[field as "customer_site_url" | "admin_api_url"] = configuredUrl;
+    const response = await postJson(identityApp(), "/api/v1/setup", body, testEnv.env);
+    expect(response.status).toBe(400);
     const payload = await response.json() as any;
     expect(payload.error.code).toBe(expectedCode);
-    if (expectedCode === "CUSTOMER_SITE_ORIGIN_INVALID") {
-      expect(payload.error.details.violation).toEqual(expect.any(String));
-    }
-    if (_case === "credentials") {
+    if (testCase === "credentials") {
       expect(JSON.stringify(payload)).not.toContain("user:password");
     }
     for (const table of ["users", "instances", "deployment_bootstrap", "audit_logs"]) {
@@ -294,13 +281,13 @@ describe("V1 deployment setup and administrator identity", () => {
   it.each([
     "http://localhost:4321",
     "http://127.0.0.1:4321",
-  ])("accepts the explicit non-production loopback Customer Site Origin %s", async (origin) => {
-    testEnv.env.CUSTOMER_SITE_ORIGIN = origin;
+  ])("accepts an explicit non-production loopback Customer Site URL %s", async (origin) => {
     testEnv.env.ENVIRONMENT = "development";
     const body = setupBody();
-    body.instance.site_url = `${origin}/site`;
+    body.instance.customer_site_url = `${origin}/site`;
 
     const apiOrigin = `${new URL(origin).protocol}//${new URL(origin).hostname}:8787`;
+    body.instance.admin_api_url = apiOrigin;
     const response = await postJson(
       identityApp(),
       "/api/v1/setup",
@@ -311,8 +298,9 @@ describe("V1 deployment setup and administrator identity", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(testEnv.sqliteDb.prepare("SELECT site_url FROM instances").get()).toEqual({
+    expect(testEnv.sqliteDb.prepare("SELECT site_url, admin_api_url FROM instances").get()).toEqual({
       site_url: `${origin}/site`,
+      admin_api_url: apiOrigin,
     });
   });
 

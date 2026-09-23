@@ -83,16 +83,17 @@ customerAuthRouter.post(
     const input = MagicLinkRequestSchema.parse(await c.req.json());
     const email = input.email.trim().toLowerCase();
     const ip = requestIp(c) ?? "unknown";
+    const requestInstanceId = c.get("customerRequestInstanceId")!;
     // Fail for every caller before identity lookup when sensitive payload encryption is unavailable.
     getStorageEncryptionKey(c.env);
     const instanceResult = await c.env.DB
       .prepare(
         `SELECT id, slug, site_url
          FROM instances
-         WHERE slug = ?1 AND status = 'active'
+         WHERE slug = ?1 AND id = ?2 AND status = 'active'
          LIMIT 1`,
       )
-      .bind(input.instanceSlug)
+      .bind(input.instanceSlug, requestInstanceId)
       .all<{ id: string; slug: string; site_url: string }>();
     const instance = instanceResult.results[0];
     if (!instance) {
@@ -316,14 +317,15 @@ customerAuthRouter.post(
     const tokenHash = await hashOneTimeLinkToken(input.token);
     const now = new Date();
     const nowIso = now.toISOString();
+    const requestInstanceId = c.get("customerRequestInstanceId")!;
     const instanceResult = await c.env.DB
       .prepare(
         `SELECT id
          FROM instances
-         WHERE slug = ?1 AND status = 'active'
+         WHERE slug = ?1 AND id = ?2 AND status = 'active'
          LIMIT 1`
       )
-      .bind(input.instanceSlug)
+      .bind(input.instanceSlug, requestInstanceId)
       .all<{ id: string }>();
     const instance = instanceResult.results[0];
     if (!instance) {

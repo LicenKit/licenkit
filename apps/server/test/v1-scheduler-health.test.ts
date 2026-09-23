@@ -33,8 +33,8 @@ describe("V1 readiness without Scheduler persistence", () => {
        VALUES ('usr_system_owner', 'owner@example.test', 'unused', 'Owner', ?, ?)`,
     ).run("2026-09-19T11:00:00.000Z", "2026-09-19T11:00:00.000Z");
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES ('ins_system', 'System', 'system', 'https://site.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_system', 'System', 'system', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run("2026-09-19T11:00:00.000Z", "2026-09-19T11:00:00.000Z");
     testEnv.sqliteDb.prepare(
       `INSERT INTO instance_memberships (
@@ -58,8 +58,8 @@ describe("V1 readiness without Scheduler persistence", () => {
     expect(body.data).toMatchObject({
       initialized: true,
       instance_name: "System",
-      app_url: "https://license.example.test",
-      site_url: "https://site.example.test",
+      admin_api_url: "https://license.example.test",
+      customer_site_url: "https://site.example.test",
       api_base_url: "https://license.example.test/api/v1",
       initialized_at: "2026-09-19T11:00:00.000Z",
     });

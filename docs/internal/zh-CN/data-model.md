@@ -72,10 +72,11 @@ User 不保存 Instance 外键、角色或全局状态。当前自部署版不�
 | `name` | 非空 |
 | `slug` | 非空、全局唯一、小写字母/数字/短横线 |
 | `site_url` | 非空 URL |
+| `admin_api_url` | 非空、唯一规范 Origin |
 | `status` | `active/suspended/archived` |
 | `created_at` / `updated_at` | 非空时间 |
 
-当前自部署不提供状态修改入口。`site_url` 拒绝 credentials、query 和 fragment；自部署 Setup 要求它的 Origin 与部署变量 `CUSTOMER_SITE_ORIGIN` 精确一致，可以与 LicenKit API Origin 不同，但必须保持同协议、同可注册站点。正式环境和普通域名必须使用 HTTPS；仅显式非正式环境的 `localhost` 或 `127.0.0.1` 可使用 HTTP。
+当前自部署不提供状态修改入口。数据库字段 `site_url` 对应公开合同的 `customer_site_url`，表示用户自己的官网或 Customer Portal 基础地址；`admin_api_url` 表示 LicenKit 管理后台和 API 的 Origin。Setup 要求 `admin_api_url` 与当前 Worker Origin 完全一致，并要求两个地址同协议、同可注册站点。正式环境和普通域名必须使用 HTTPS；仅显式非正式环境的 `localhost` 或 `127.0.0.1` 可使用 HTTP。
 
 ### 3.4 `admin_sessions`
 

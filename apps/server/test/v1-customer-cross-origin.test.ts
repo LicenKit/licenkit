@@ -9,7 +9,7 @@ describe("V1 Customer cross-Origin boundary", () => {
   let testEnv: TestEnvContext;
 
   beforeEach(() => {
-    testEnv = createTestEnv({ CUSTOMER_SITE_ORIGIN });
+    testEnv = createTestEnv();
   });
 
   async function preflight(
@@ -48,7 +48,8 @@ describe("V1 Customer cross-Origin boundary", () => {
           instance: {
             name: "Cross Origin",
             slug: "cross-origin",
-            site_url: siteOrigin,
+            customer_site_url: siteOrigin,
+            admin_api_url: API_ORIGIN,
           },
         }),
       },
@@ -60,7 +61,8 @@ describe("V1 Customer cross-Origin boundary", () => {
   it.each([
     "/api/v1/customer/auth/magic-link",
     "/api/v1/customer/licenses/license-id/recover-key",
-  ])("answers an allowed Customer preflight before Setup and authentication for %s", async (path) => {
+  ])("answers an allowed Customer preflight after Setup and before authentication for %s", async (path) => {
+    await completeSetup();
     const response = await preflight(path);
 
     expect(response.status).toBe(204);
@@ -83,6 +85,7 @@ describe("V1 Customer cross-Origin boundary", () => {
     "http://site.example.test",
     "https://site.example.test/not-an-origin",
   ])("rejects the untrusted or malformed preflight Origin %s", async (origin) => {
+    await completeSetup();
     const response = await preflight("/api/v1/customer/auth/magic-link", origin);
     expect(response.status).toBe(403);
     expect(response.headers.get("access-control-allow-origin")).toBeNull();
@@ -93,6 +96,7 @@ describe("V1 Customer cross-Origin boundary", () => {
   });
 
   it("rejects methods and headers outside the Customer CORS contract", async () => {
+    await completeSetup();
     const method = await preflight(
       "/api/v1/customer/licenses/license-id",
       CUSTOMER_SITE_ORIGIN,
@@ -137,18 +141,18 @@ describe("V1 Customer cross-Origin boundary", () => {
     expect(response.headers.get("access-control-expose-headers")).toBeNull();
   });
 
-  it("includes exact credentialed CORS headers on Customer API errors for the trusted Site", async () => {
+  it("rejects Customer API requests before Setup because no Instance host mapping exists", async () => {
     const response = await app.request(
       `${API_ORIGIN}/api/v1/customer/auth/config`,
       { headers: { Origin: CUSTOMER_SITE_ORIGIN, "X-Request-Id": "req_cross_origin" } },
       testEnv.env,
     );
 
-    expect(response.status).toBe(503);
-    expect((await response.json() as any).error.code).toBe("SETUP_REQUIRED");
-    expect(response.headers.get("access-control-allow-origin")).toBe(CUSTOMER_SITE_ORIGIN);
-    expect(response.headers.get("access-control-allow-credentials")).toBe("true");
-    expect(response.headers.get("access-control-expose-headers")).toBe("X-Request-Id");
+    expect(response.status).toBe(403);
+    expect((await response.json() as any).error.code).toBe("CUSTOMER_API_ORIGIN_NOT_CONFIGURED");
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    expect(response.headers.get("access-control-allow-credentials")).toBeNull();
+    expect(response.headers.get("access-control-expose-headers")).toBeNull();
     expect(response.headers.get("x-request-id")).toBe("req_cross_origin");
   });
 
@@ -201,7 +205,6 @@ describe("V1 Customer cross-Origin boundary", () => {
 
   it("allows a browser-style same-Origin GET without Origin but keeps POST fail-closed", async () => {
     testEnv = createTestEnv({
-      CUSTOMER_SITE_ORIGIN: API_ORIGIN,
       TURNSTILE_SITE_KEY: "turnstile-same-origin",
     });
     await completeSetup(API_ORIGIN);

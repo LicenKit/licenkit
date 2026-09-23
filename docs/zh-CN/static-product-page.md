@@ -31,7 +31,7 @@ VITE_PADDLE_ENVIRONMENT=live
 VITE_PADDLE_CLIENT_SIDE_TOKEN=live_...
 ```
 
-`instanceSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中显式填写的 `siteUrl` 用于生成邮件 Magic Link；其 Origin 必须与 `CUSTOMER_SITE_ORIGIN` 精确一致，可以与 LicenKit `appUrl` 不同，但二者必须保持同协议、同可注册站点。站点通过部署时确定的绝对 API 地址调用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断、Delivery 敏感负载和验证令牌不能进入源码、静态构建产物、日志或分析事件。
+`instanceSlug` 供 Customer Portal 路由使用，不参与产品页 Checkout 配置查询。Setup 中的 `customerSiteUrl` 是用户自己的官网地址，用于生成邮件 Magic Link；`adminApiUrl` 是 LicenKit 管理后台和 API 的 Origin，Setup 页面默认读取当前 Worker Origin。两者可以跨 Origin，但必须保持同协议、同可注册站点。站点通过 `adminApiUrl` 下的绝对 API 地址调用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断、Delivery 敏感负载和验证令牌不能进入源码、静态构建产物、日志或分析事件。
 
 同一个 Paddle Price ID 必须在 LicenKit Admin 中创建 Billing Offer，关联唯一 Billing Provider、Product、License Plan 和购买类型。前端不需要 LicenKit Offer ID、Product ID 或 License Plan ID；后端从已验签 Webhook 中取得 Price ID 后执行关联。
 

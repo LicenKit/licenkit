@@ -35,6 +35,7 @@ interface LoginRow {
   instance_name: string;
   instance_slug: string;
   instance_site_url: string;
+  instance_admin_api_url: string;
   instance_status: string;
   role: InstanceRole;
   membership_status: "active";
@@ -48,6 +49,7 @@ interface SessionResponseRow {
   instance_name: string;
   instance_slug: string;
   instance_site_url: string;
+  instance_admin_api_url: string;
   instance_status: string;
   role: InstanceRole;
   membership_status: "active";
@@ -60,7 +62,8 @@ function formatIdentityContext(row: SessionResponseRow) {
       id: row.instance_id,
       name: row.instance_name,
       slug: row.instance_slug,
-      site_url: row.instance_site_url,
+      customer_site_url: row.instance_site_url,
+      admin_api_url: row.instance_admin_api_url,
       status: row.instance_status,
     },
     membership: { role: row.role, status: row.membership_status },
@@ -80,13 +83,14 @@ authRouter.post(
     const result = await c.env.DB
       .prepare(
         `WITH active_instance AS (
-           SELECT id, name, slug, site_url, status
+           SELECT id, name, slug, site_url, admin_api_url, status
            FROM instances
            WHERE status = 'active'
          )
          SELECT u.id AS user_id, u.email, u.password_hash, u.name,
                 instance.id AS instance_id, instance.name AS instance_name,
                 instance.slug AS instance_slug, instance.site_url AS instance_site_url,
+                instance.admin_api_url AS instance_admin_api_url,
                 instance.status AS instance_status, membership.role,
                 membership.status AS membership_status
          FROM users AS u
@@ -168,6 +172,7 @@ authRouter.get("/session", adminSessionAuth, async (c) => {
       `SELECT u.id AS user_id, u.email, u.name,
               instance.id AS instance_id, instance.name AS instance_name,
               instance.slug AS instance_slug, instance.site_url AS instance_site_url,
+              instance.admin_api_url AS instance_admin_api_url,
               instance.status AS instance_status, membership.role,
               membership.status AS membership_status
        FROM users AS u

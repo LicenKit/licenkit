@@ -33,7 +33,8 @@ systemRouter.get("/status", async (c) => {
 
   const result = await c.env.DB
     .prepare(
-      `SELECT instance.name AS instance_name, instance.site_url,
+      `SELECT instance.name AS instance_name, instance.site_url AS customer_site_url,
+              instance.admin_api_url,
               bootstrap.completed_at AS initialized_at
        FROM deployment_bootstrap AS bootstrap
        JOIN instances AS instance ON instance.status = 'active'
@@ -43,23 +44,24 @@ systemRouter.get("/status", async (c) => {
     )
     .all<{
       instance_name: string;
-      site_url: string;
+      customer_site_url: string;
+      admin_api_url: string;
       initialized_at: string;
     }>();
   const settings = result.results[0];
   if (!settings) {
     throw inconsistentSetupState(setupState, { status_row_present: false });
   }
-  const appUrl = new URL(c.req.url).origin;
+  const adminApiUrl = settings.admin_api_url;
   c.header("Cache-Control", "no-store");
   return c.json({
     success: true,
     data: {
       initialized: true,
       instance_name: settings.instance_name,
-      app_url: appUrl,
-      site_url: settings.site_url,
-      api_base_url: `${appUrl}/api/v1`,
+      admin_api_url: adminApiUrl,
+      customer_site_url: settings.customer_site_url,
+      api_base_url: `${adminApiUrl}/api/v1`,
       initialized_at: settings.initialized_at,
       version: c.env.APP_VERSION || "1.0.0",
     },

@@ -73,7 +73,7 @@ pnpm build
 
 LicenKit 的生产部署只包含 Worker API、Scheduled Worker 和 `/admin` 管理控制台。根路径重定向到 `/admin/`；产品官网、购买结果页、Magic Link 页面和 Customer Portal 不由 LicenKit 提供，也不在仓库中保存前端示例源码。
 
-部署配置 `CUSTOMER_SITE_ORIGIN` 明确指定唯一可信 Customer Site Origin。Setup 要求显式填写 `site_url`，用于生成邮件中的 Magic Link，并要求其 Origin 与 `CUSTOMER_SITE_ORIGIN` 精确一致；它可以与 LicenKit Worker Origin 不同，但必须保持同协议、同可注册站点，才能使用 `SameSite=Lax` Customer Cookie。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP 本地开发。使用方站点通过绝对 API 地址并携带凭据访问 Customer API，Admin 入口仍由 Worker Origin 加 `/admin/` 派生，不需要单独的 Admin URL 配置。
+Setup 为每个 Instance 保存 `admin_api_url` 与 `customer_site_url`。前者是 LicenKit 管理后台和 API 的公开 Origin，Setup 页面默认读取当前 Worker Origin，服务端也要求两者完全一致；后者是用户自己的官网及 Customer Portal 基础地址，用于生成邮件中的 Magic Link。两者可以跨 Origin，但必须保持同协议、同可注册站点，才能使用 `SameSite=Lax` Customer Cookie。Customer CORS 按请求到达的 `admin_api_url` 找到 Instance，再只允许该 Instance 的 `customer_site_url` Origin，不再使用 Wrangler 全局变量。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP 本地开发。自部署只需把 Admin/API 域名绑定到对应 Worker，不显示 CNAME 或托管证书配置。
 
 根目录 `wrangler.jsonc` 是当前部署唯一的 Worker 配置来源。Wrangler 由根包直接依赖，因为它负责整个 LicenKit 部署的开发、迁移、构建和发布；`apps/server` 只负责 Worker 服务端源码及其测试。直接在根配置中填写数据库 ID、变量和环境，不再从其他目录选择或合并配置。根配置显式开启 Workers Observability，远程验收还必须在 Cloudflare Cron Events 与 Workers Logs 中确认调度真实触发。
 

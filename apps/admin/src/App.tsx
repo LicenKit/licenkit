@@ -43,11 +43,11 @@ export function App() {
   if (invitationPath) return <InvitationAcceptPage onAccepted={(accepted) => { setSession(accepted); setInitialized(true); setLoading(false) }} />;
 
   if (loading) {
-    return <main className="centered-page"><div className="loading-brand"><span className="brand-mark"><Loader2 className="size-6 animate-spin" /></span><strong>正在连接 LicenKit</strong><span>读取一次性 Setup 闩锁与管理员 Session</span></div></main>;
+    return <main className="centered-page"><div className="loading-brand"><span className="brand-mark"><Loader2 className="size-6 animate-spin" /></span><strong>正在连接 LicenKit</strong><span>正在检查系统初始化状态与安全会话...</span></div></main>;
   }
 
   if (bootstrapError || initialized === null) {
-    return <main className="centered-page"><section className="connection-error card"><ServerCrash className="size-8" /><h1>无法确认实例状态</h1><p>网络或服务端错误不能被当作“尚未初始化”。修复连接后重试。</p><ErrorPanel error={bootstrapError} /><Button onClick={() => void bootstrap()}><RefreshCw className="size-4" />重新连接</Button></section></main>;
+    return <main className="centered-page"><section className="connection-error card"><ServerCrash className="size-8" /><h1>无法连接到服务端</h1><p>未能与 LicenKit 后端建立安全连接，请检查服务运行状态或网络连接后重试。</p><ErrorPanel error={bootstrapError} /><Button onClick={() => void bootstrap()}><RefreshCw className="size-4" />重新连接</Button></section></main>;
   }
 
   if (!initialized) return <SetupPage onSetupSuccess={(result) => { setSession(result); setInitialized(true) }} />;

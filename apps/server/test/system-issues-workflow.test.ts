@@ -20,8 +20,8 @@ describe("System Issue manual handling workflow", () => {
   beforeEach(() => {
     testEnv = createTestEnv();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?, 'System Issue', 'system-issue', 'https://system-issue.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'System Issue', 'system-issue', 'https://system-issue.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run(INSTANCE_ID, FIRST_SEEN, FIRST_SEEN);
     testEnv.sqliteDb.prepare(
       `INSERT INTO users (

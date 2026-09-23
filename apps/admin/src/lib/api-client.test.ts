@@ -34,8 +34,9 @@ describe("Admin API JSON boundary", () => {
   });
 
   it("递归转换数组对象并保持已有 snake_case 字段稳定", () => {
-    expect(snakeize({ siteUrl: "https://example.test", setup_token: "secret", items: [{ productId: "prd_1" }] })).toEqual({
-      site_url: "https://example.test",
+    expect(snakeize({ customerSiteUrl: "https://example.test", adminApiUrl: "https://license.example.test", setup_token: "secret", items: [{ productId: "prd_1" }] })).toEqual({
+      customer_site_url: "https://example.test",
+      admin_api_url: "https://license.example.test",
       setup_token: "secret",
       items: [{ product_id: "prd_1" }],
     });

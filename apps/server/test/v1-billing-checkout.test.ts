@@ -72,8 +72,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     testEnv.env.DB = testEnv.d1;
     const db = testEnv.sqliteDb;
     db.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?, 'Billing V1', 'billing-v1', 'https://licenses.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Billing V1', 'billing-v1', 'https://licenses.example.test', 'https://admin.example.test', 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
@@ -606,12 +606,19 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
   it("selects only Instances with due Billing work and still reaches a late Instance", async () => {
     const db = testEnv.sqliteDb;
     const insertInstance = db.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'https://licenses.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'https://licenses.example.test', ?, 'active', ?, ?)`,
     );
     for (let index = 0; index < 105; index++) {
       const suffix = String(index).padStart(3, "0");
-      insertInstance.run(`acc_page_${suffix}`, `Page ${suffix}`, `page-${suffix}`, nowIso, nowIso);
+      insertInstance.run(
+        `acc_page_${suffix}`,
+        `Page ${suffix}`,
+        `page-${suffix}`,
+        `https://license-page-${suffix}.example.test`,
+        nowIso,
+        nowIso,
+      );
     }
     const lateInstanceId = "acc_page_104";
     const lateProviderId = "bpr_page_104";

@@ -58,20 +58,20 @@ describe("V1 Customer Session security boundaries", () => {
   beforeEach(async () => {
     testEnv = createTestEnv({
       CUSTOMER_RECENT_AUTH_SECONDS: 900,
-      CUSTOMER_SITE_ORIGIN,
     });
     const now = new Date();
     const nowIso = now.toISOString();
 
     for (const [instanceId, suffix] of [[INSTANCE_A, "a"], [INSTANCE_B, "b"]] as const) {
       testEnv.sqliteDb.prepare(
-        `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+        `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
       ).run(
         instanceId,
         `Customer Security ${suffix.toUpperCase()}`,
         `customer-security-${suffix}`,
         `${CUSTOMER_SITE_ORIGIN}/customer/${suffix}`,
+        suffix === "a" ? ORIGIN : "https://license-b.example.test",
         nowIso,
         nowIso,
       );

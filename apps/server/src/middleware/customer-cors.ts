@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from "hono";
-import { customerSiteOrigin } from "../config/customer-site";
+import { resolveCustomerSiteBoundary } from "../config/customer-site";
 import type { AppContext } from "../types";
 import { AppError } from "./error";
 import { validateCustomerSiteOrigin } from "./auth";
@@ -29,7 +29,10 @@ function applyCustomerCorsResponseHeaders(
 }
 
 export const customerCors: MiddlewareHandler<AppContext> = async (c, next) => {
-  const allowedOrigin = customerSiteOrigin(c.env);
+  const boundary = await resolveCustomerSiteBoundary(c.env.DB, c.req.url, c.env.ENVIRONMENT);
+  const allowedOrigin = boundary.customerSiteOrigin;
+  c.set("customerRequestInstanceId", boundary.instanceId);
+  c.set("customerSiteOrigin", boundary.customerSiteOrigin);
   const requestOrigin = c.req.header("origin");
 
   if (c.req.method === "OPTIONS") {

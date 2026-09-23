@@ -45,7 +45,8 @@ Content-Type: application/json
   "instance": {
     "name": "Tidest Licensing",
     "slug": "tidest",
-    "site_url": "https://license.tidest.app"
+    "admin_api_url": "https://license.tidest.app",
+    "customer_site_url": "https://tidest.app"
   }
 }
 ```

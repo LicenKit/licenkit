@@ -5,8 +5,11 @@ import type { AppContext } from "../types";
 import { hashPassword, timingSafeEqual } from "../infra/crypto";
 import { AppError, UnauthorizedError } from "../middleware/error";
 import { requireAdminAppOrigin, setupGuard } from "../middleware/auth";
-import { customerSiteOrigin } from "../config/customer-site";
-import { isSchemefulSameSite, schemefulSite } from "../config/trusted-url";
+import {
+  isSchemefulSameSite,
+  isTrustedUrlProtocolAllowed,
+  schemefulSite,
+} from "../config/trusted-url";
 import {
   prepareInitialDeployment,
   readDeploymentSetupState,
@@ -35,46 +38,73 @@ const SetupSchema = z.object({
   instance: z.object({
     name: z.string().trim().min(1).max(120),
     slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(63),
-    site_url: z.string().trim().url().max(2048),
+    customer_site_url: z.string().trim().url().max(2048),
+    admin_api_url: z.string().trim().url().max(2048),
   }).strict(),
 }).strict();
 
-function normalizeCustomerSiteUrl(
-  value: string,
-  configuredCustomerSiteOrigin: string,
-  appOrigin: string,
-): string {
+function parseSetupUrl(value: string, environment: string | undefined, code: string, label: string): URL {
   const url = new URL(value);
-  assertCustomerSiteSameSite(configuredCustomerSiteOrigin, appOrigin);
-  if (url.origin !== configuredCustomerSiteOrigin) {
+  if (!isTrustedUrlProtocolAllowed(url, environment)) {
     throw new AppError(
-      "SETUP_SITE_URL_ORIGIN_MISMATCH",
-      "Site URL must use the configured Customer Site Origin",
+      code,
+      `${label} must use HTTPS, except for non-production localhost or 127.0.0.1 HTTP`,
       400,
-      {
-        appOrigin,
-        customerSiteOrigin: configuredCustomerSiteOrigin,
-        siteOrigin: url.origin,
-      },
+      { protocol: url.protocol, hostname: url.hostname },
     );
   }
   if (url.username || url.password || url.search || url.hash) {
     throw new AppError(
-      "SETUP_SITE_URL_INVALID",
-      "Site URL cannot contain credentials, query parameters, or a fragment",
+      code,
+      `${label} cannot contain credentials, query parameters, or a fragment`,
       400,
     );
   }
+  return url;
+}
+
+function normalizeAdminApiUrl(
+  value: string,
+  requestOrigin: string,
+  environment: string | undefined,
+): string {
+  const url = parseSetupUrl(value, environment, "SETUP_ADMIN_API_URL_INVALID", "Admin/API URL");
+  if (url.pathname !== "/" || url.origin !== value) {
+    throw new AppError(
+      "SETUP_ADMIN_API_URL_INVALID",
+      "Admin/API URL must be an exact Origin without a path or trailing slash",
+      400,
+      { adminApiUrl: value, normalizedOrigin: url.origin },
+    );
+  }
+  if (url.origin !== requestOrigin) {
+    throw new AppError(
+      "SETUP_ADMIN_API_URL_ORIGIN_MISMATCH",
+      "Admin/API URL must match the Worker Origin used to access Setup",
+      400,
+      { adminApiOrigin: url.origin, requestOrigin },
+    );
+  }
+  return url.origin;
+}
+
+function normalizeCustomerSiteUrl(
+  value: string,
+  adminApiUrl: string,
+  environment: string | undefined,
+): string {
+  const url = parseSetupUrl(value, environment, "SETUP_CUSTOMER_SITE_URL_INVALID", "Customer Site URL");
+  assertCustomerSiteSameSite(url.origin, adminApiUrl);
   const path = url.pathname.replace(/\/+$/, "");
   return `${url.origin}${path === "" || path === "/" ? "" : path}`;
 }
 
 function assertCustomerSiteSameSite(
-  configuredCustomerSiteOrigin: string,
-  appOrigin: string,
+  customerSiteOrigin: string,
+  adminApiOrigin: string,
 ): void {
-  const customerOrigin = new URL(configuredCustomerSiteOrigin);
-  const apiOrigin = new URL(appOrigin);
+  const customerOrigin = new URL(customerSiteOrigin);
+  const apiOrigin = new URL(adminApiOrigin);
   if (isSchemefulSameSite(customerOrigin, apiOrigin)) return;
 
   throw new AppError(
@@ -82,8 +112,8 @@ function assertCustomerSiteSameSite(
     "Customer Site and LicenKit API must use the same schemeful site for SameSite=Lax Customer cookies",
     400,
     {
-      appOrigin,
-      customerSiteOrigin: configuredCustomerSiteOrigin,
+      adminApiOrigin,
+      customerSiteOrigin,
       appSite: schemefulSite(apiOrigin),
       customerSite: schemefulSite(customerOrigin),
     },
@@ -120,10 +150,6 @@ setupRouter.post(
   async (c) => {
     const input = VerifyTokenSchema.parse(await c.req.json());
     requireValidSetupToken(c.env.INITIAL_SETUP_TOKEN, input.setup_token);
-    assertCustomerSiteSameSite(
-      customerSiteOrigin(c.env),
-      new URL(c.req.url).origin,
-    );
     return c.json({ success: true, data: { valid: true } });
   },
 );
@@ -138,11 +164,16 @@ setupRouter.post(
 
     const now = new Date();
     const nowIso = now.toISOString();
-    const origin = new URL(c.req.url).origin;
-    const siteUrl = normalizeCustomerSiteUrl(
-      input.instance.site_url,
-      customerSiteOrigin(c.env),
-      origin,
+    const requestOrigin = new URL(c.req.url).origin;
+    const adminApiUrl = normalizeAdminApiUrl(
+      input.instance.admin_api_url,
+      requestOrigin,
+      c.env.ENVIRONMENT,
+    );
+    const customerSiteUrl = normalizeCustomerSiteUrl(
+      input.instance.customer_site_url,
+      adminApiUrl,
+      c.env.ENVIRONMENT,
     );
     const instanceId = `ins_${ulid().toLowerCase()}`;
     const userId = `usr_${ulid().toLowerCase()}`;
@@ -167,7 +198,8 @@ setupRouter.post(
           id: instanceId,
           name: input.instance.name,
           slug: input.instance.slug,
-          siteUrl,
+          customerSiteUrl,
+          adminApiUrl,
         },
         session: {
           id: sessionId,
@@ -185,7 +217,12 @@ setupRouter.post(
         action: "instance.setup_completed",
         resourceType: "instance",
         resourceId: instanceId,
-        details: { instance_id: instanceId, user_id: userId, site_url: siteUrl },
+        details: {
+          instance_id: instanceId,
+          user_id: userId,
+          customer_site_url: customerSiteUrl,
+          admin_api_url: adminApiUrl,
+        },
         requestId: c.get("requestId"),
         ip: requestIp(c),
         userAgent: c.req.header("user-agent"),
@@ -229,7 +266,8 @@ setupRouter.post(
             id: instanceId,
             name: input.instance.name,
             slug: input.instance.slug,
-            site_url: siteUrl,
+            customer_site_url: customerSiteUrl,
+            admin_api_url: adminApiUrl,
             status: "active",
           },
           membership: { role: "owner", status: "active" },

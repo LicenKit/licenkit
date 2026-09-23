@@ -27,21 +27,21 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (session: AdminS
     <main className="auth-layout">
       <section className="auth-story">
         <div className="brand-mark"><KeyRound className="size-6" /></div>
-        <p className="eyebrow">LicenKit V1</p>
-        <h1>把可信购买事实，转换为可执行的授权事实。</h1>
-        <p>管理产品发布、授权条款、客户、支付履约和通知投递。管理员会话与客户授权中心完全隔离。</p>
+        <p className="eyebrow">LicenKit</p>
+        <h1>安全、可靠的独立软件授权与商业化基础设施。</h1>
+        <p>统一管理软件发布、授权签发、设备激活、邮件通知及商业支付集成，提供企业级可信授权体系。</p>
         <div className="auth-principles">
-          <span><ShieldCheck className="size-4" /> 服务端 Session 与默认拒绝权限</span>
-          <span><ShieldCheck className="size-4" /> 原始错误与外部事件链路可诊断</span>
-          <span><ShieldCheck className="size-4" /> 授权条款签发后不可被模板编辑追溯修改</span>
+          <span><ShieldCheck className="size-4" /> 严格隔离管理端与客户访问边界</span>
+          <span><ShieldCheck className="size-4" /> 离线非对称签名与硬件安全绑定</span>
+          <span><ShieldCheck className="size-4" /> 支付渠道 Webhook 自动闭环履约</span>
         </div>
       </section>
       <section className="auth-panel">
         <form className="auth-card" onSubmit={submit}>
           <div>
             <p className="eyebrow">管理控制台</p>
-            <h2>登录管理端</h2>
-            <p>使用管理员邮箱和密码登录。当前自部署会自动进入唯一的 Instance。</p>
+            <h2>管理员登录</h2>
+            <p>请输入管理员邮箱和密码以进入控制台。</p>
           </div>
           <ErrorPanel error={error} />
           <Field label="管理员邮箱">
@@ -51,7 +51,7 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (session: AdminS
             <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
           </Field>
           <Button className="w-full" type="submit" loading={loading}>登录 <ArrowRight className="size-4" /></Button>
-          <p className="auth-footnote">购买者请使用客户授权中心的 Magic Link 登录，不使用管理员密码。</p>
+          <p className="auth-footnote">最终客户请前往客户门户通过邮箱安全链接登录，无需使用管理端账号。</p>
         </form>
       </section>
     </main>

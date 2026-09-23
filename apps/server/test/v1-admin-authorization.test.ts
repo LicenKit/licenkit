@@ -218,8 +218,8 @@ describe("V1 admin authorization and audit visibility", () => {
     testEnv = createTestEnv();
     const db = testEnv.sqliteDb;
     db.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES ('ins_authz', 'Authorization', 'authorization', 'https://authorization.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_authz', 'Authorization', 'authorization', 'https://authorization.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (
@@ -229,8 +229,8 @@ describe("V1 admin authorization and audit visibility", () => {
                  NULL, 0, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES ('ins_foreign', 'Foreign Instance', 'foreign-instance', 'https://foreign.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_foreign', 'Foreign Instance', 'foreign-instance', 'https://foreign.example.test', 'https://foreign-license.example.test', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (

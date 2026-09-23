@@ -40,24 +40,55 @@ export function ProfileView({ initialUser, onUserUpdated }: { initialUser: User;
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="全局身份" title="Profile" description="这里只管理当前 User 自己的身份资料。Instance Owner 不能从成员页面修改其他 User 的资料或密码。" action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>} />
+      <PageHeader
+        eyebrow="个人账号"
+        title="个人资料"
+        description="管理当前登录管理员的账户资料与安全凭据。"
+        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
+      />
       <ErrorPanel error={error} />
       {message ? <Notice tone="success"><strong>{message}</strong></Notice> : null}
       <div className="two-column">
         <Card>
-          <div className="card-header"><div><p className="eyebrow">Profile</p><h2>基本资料</h2><p>邮箱是当前全局登录身份，本版本只读。</p></div><UserRound className="size-5" /></div>
+          <div className="card-header">
+            <div>
+              <p className="eyebrow">基本信息</p>
+              <h2>个人信息</h2>
+              <p>登录邮箱为管理员账户唯一标识，不可在此处直接修改。</p>
+            </div>
+            <UserRound className="size-5" />
+          </div>
           <form className="form-stack" onSubmit={saveProfile}>
-            <Field label="显示名称"><Input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required /></Field>
-            <Field label="邮箱" hint="当前自部署不提供邮箱修改流程。"><Input type="email" value={user.email} readOnly disabled /></Field>
-            <div className="form-actions"><Button type="submit" loading={saving === "profile"}>保存显示名称</Button></div>
+            <Field label="显示名称">
+              <Input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required />
+            </Field>
+            <Field label="登录邮箱" hint="当前系统不支持在线更改管理员登录邮箱">
+              <Input type="email" value={user.email} readOnly disabled />
+            </Field>
+            <div className="form-actions">
+              <Button type="submit" loading={saving === "profile"}>保存个人信息</Button>
+            </div>
           </form>
         </Card>
         <Card>
-          <div className="card-header"><div><p className="eyebrow">Credentials</p><h2>修改密码</h2><p>修改成功后，除当前请求 Session 外的其他管理员 Session 都会失效。</p></div><KeyRound className="size-5" /></div>
+          <div className="card-header">
+            <div>
+              <p className="eyebrow">密码安全</p>
+              <h2>修改登录密码</h2>
+              <p>密码更新后，除当前浏览器外的其他登录会话将自动失效。</p>
+            </div>
+            <KeyRound className="size-5" />
+          </div>
           <form className="form-stack" onSubmit={changePassword}>
-            <Field label="当前密码"><Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required /></Field>
-            <Field label="新密码"><Input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required /></Field>
-            <div className="form-actions"><Button type="submit" loading={saving === "password"}>更新密码</Button></div>
+            <Field label="当前密码">
+              <Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required />
+            </Field>
+            <Field label="新密码" hint="长度不少于 12 位，建议组合使用大小写字母、数字及特殊符号">
+              <Input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required />
+            </Field>
+            <div className="form-actions">
+              <Button type="submit" loading={saving === "password"}>确认修改密码</Button>
+            </div>
           </form>
         </Card>
       </div>

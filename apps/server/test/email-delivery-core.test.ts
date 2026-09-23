@@ -37,8 +37,8 @@ describe("email-only Delivery core", () => {
     testEnv = createTestEnv({ STORAGE_ENCRYPTION_KEY_ID: "test-primary" });
     const nowIso = NOW.toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?, 'Core Instance', 'core-instance', 'https://site.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Core Instance', 'core-instance', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run(INSTANCE_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)

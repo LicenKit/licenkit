@@ -132,7 +132,6 @@ adminInvitationsRouter.post(
       env: c.env,
       instanceId: c.get("instanceId")!,
       actorUserId: c.get("userId")!,
-      adminOrigin: new URL(c.req.url).origin,
       email: input.email,
       role: input.role,
       request: requestContext(c),
@@ -168,7 +167,6 @@ adminInvitationsRouter.post(
       instanceId: c.get("instanceId")!,
       invitationId,
       actorUserId: c.get("userId")!,
-      adminOrigin: new URL(c.req.url).origin,
       request: requestContext(c),
     });
     return c.json({ success: true, data: invitation }, 201);

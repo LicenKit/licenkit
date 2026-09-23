@@ -62,7 +62,8 @@ export interface AcceptedInvitationSession {
     id: string;
     name: string;
     slug: string;
-    site_url: string;
+    customer_site_url: string;
+    admin_api_url: string;
     status: string;
   };
   membership: {
@@ -91,6 +92,7 @@ interface InstanceRow {
   name: string;
   slug: string;
   site_url: string;
+  admin_api_url: string;
   status: string;
 }
 
@@ -141,7 +143,7 @@ function response(row: InvitationRow, nowIso?: string): InvitationResponse {
 async function readInstance(db: D1Database, instanceId: string): Promise<InstanceRow> {
   const result = await db
     .prepare(
-      `SELECT id, name, slug, site_url, status
+      `SELECT id, name, slug, site_url, admin_api_url, status
        FROM instances WHERE id = ?1 AND status = 'active' LIMIT 1`,
     )
     .bind(instanceId)
@@ -378,7 +380,6 @@ export async function createInstanceInvitation(input: {
   env: { STORAGE_ENCRYPTION_KEY?: string; ENVIRONMENT?: string };
   instanceId: string;
   actorUserId: string;
-  adminOrigin: string;
   email: string;
   role: InstanceRole;
   request: InvitationRequestContext;
@@ -408,7 +409,7 @@ export async function createInstanceInvitation(input: {
     db: input.db,
     env: input.env,
     instance,
-    adminOrigin: input.adminOrigin,
+    adminOrigin: instance.admin_api_url,
     email,
     role: input.role,
     invitedByUserId: input.actorUserId,
@@ -528,7 +529,6 @@ export async function resendInstanceInvitation(input: {
   instanceId: string;
   invitationId: string;
   actorUserId: string;
-  adminOrigin: string;
   request: InvitationRequestContext;
 }): Promise<InvitationResponse> {
   const current = await readInvitation(input.db, input.instanceId, input.invitationId);
@@ -540,7 +540,7 @@ export async function resendInstanceInvitation(input: {
     db: input.db,
     env: input.env,
     instance,
-    adminOrigin: input.adminOrigin,
+    adminOrigin: instance.admin_api_url,
     email: current.email,
     role: current.role,
     invitedByUserId: input.actorUserId,
@@ -607,7 +607,8 @@ async function readAcceptanceCandidate(
               invitation.email AS invitation_email,
               invitation.role AS invitation_role,
               invitation.delivery_id,
-              instance.id, instance.name, instance.slug, instance.site_url, instance.status
+              instance.id, instance.name, instance.slug, instance.site_url,
+              instance.admin_api_url, instance.status
        FROM instance_invitations AS invitation
        JOIN instances AS instance
          ON instance.id = invitation.instance_id AND instance.status = 'active'
@@ -878,7 +879,8 @@ export async function acceptInstanceInvitation(input: {
       id: candidate.id,
       name: candidate.name,
       slug: candidate.slug,
-      site_url: candidate.site_url,
+      customer_site_url: candidate.site_url,
+      admin_api_url: candidate.admin_api_url,
       status: candidate.status,
     },
     membership: { role: candidate.invitation_role, status: "active" },

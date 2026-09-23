@@ -47,7 +47,7 @@ function downloadHtml(example: EmailProviderTemplateExample): void {
   URL.revokeObjectURL(objectUrl);
 }
 
-export function EmailSettingsView({ canManage }: { canManage: boolean }) {
+export function EmailSettingsView({ canManage, embedded = false }: { canManage: boolean; embedded?: boolean }) {
   const [contracts, setContracts] = useState<EmailTemplateContract[]>([]);
   const [integrations, setIntegrations] = useState<EmailIntegration[]>([]);
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<string | null>(null);
@@ -275,29 +275,31 @@ export function EmailSettingsView({ canManage }: { canManage: boolean }) {
 
   return (
     <div className="page-stack">
-      <PageHeader
-        eyebrow="系统设置"
-        title="邮件服务设置"
-        description="管理 Resend 发信通道、凭证轮换以及服务端预定义代码合同与 Provider 模板的映射关系。"
-        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
-      />
+      {!embedded ? (
+        <PageHeader
+          eyebrow="服务与通知"
+          title="邮件服务设置"
+          description="管理 Resend 发信通道连接、API 密钥轮换，以及业务通知模板与参数变量的映射配置。"
+          action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
+        />
+      ) : null}
       <ErrorPanel error={error} />
 
       <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">Provider connection</p>
-            <h2>Email Integration</h2>
-            <p>凭证和发件信息只定义当前发送配置；尚未成功的 Delivery 在每次发送时读取这里的最新值。</p>
+            <p className="eyebrow">发信服务商</p>
+            <h2>发信通道配置</h2>
+            <p>配置发信通道及发件人信息。新发出的业务邮件将始终使用这里的最新设置。</p>
           </div>
-          {canManage ? <Button onClick={openCreateIntegration}><Plus className="size-4" />连接 Provider</Button> : null}
+          {canManage ? <Button onClick={openCreateIntegration}><Plus className="size-4" />连接通道</Button> : null}
         </div>
         <Notice>
-          <strong>配置变化立即生效</strong>
-          <p>API Key、From、Reply-To 或 Binding 修改后，不需要 revision 迁移；下一次自动或人工发送直接使用最新配置。</p>
+          <strong>通道配置即时生效</strong>
+          <p>修改 API Key、发件人名称、邮箱或回复地址后全局即刻生效，无需繁琐迁移。</p>
         </Notice>
         {integrations.length === 0 ? (
-          <EmptyState title="尚未连接 Email Provider" description="连接 Resend 后，再为代码中预定义的邮件合同绑定 Provider 模板。" />
+          <EmptyState title="尚未连接发信服务商" description="连接 Resend 通道后，即可为各项业务通知绑定对应的远程邮件模板。" />
         ) : (
           <div className="card-grid">
             {integrations.map((integration) => (
@@ -311,19 +313,19 @@ export function EmailSettingsView({ canManage }: { canManage: boolean }) {
                 </header>
                 <div className="metric-grid compact">
                   <div>
-                    <span>From</span>
+                    <span>发件人 (From)</span>
                     <strong>{integration.defaultFromName ? `${integration.defaultFromName} <${integration.defaultFromEmail}>` : integration.defaultFromEmail}</strong>
                   </div>
                   <div>
-                    <span>Reply-To</span>
+                    <span>回复地址 (Reply-To)</span>
                     <strong>{integration.replyToEmail || "—"}</strong>
                   </div>
                   <div>
-                    <span>自动发送上限</span>
-                    <strong>{integration.maxAutomaticAttempts}</strong>
+                    <span>自动重试上限</span>
+                    <strong>{integration.maxAutomaticAttempts} 次</strong>
                   </div>
                   <div>
-                    <span>凭证</span>
+                    <span>API 密钥</span>
                     <strong>{integration.credentialConfigured ? "已配置" : "未配置"}</strong>
                   </div>
                 </div>
@@ -346,15 +348,15 @@ export function EmailSettingsView({ canManage }: { canManage: boolean }) {
       <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">Code-defined contract</p>
-            <h2>Template Binding</h2>
-            <p>{selectedIntegration ? `${selectedIntegration.name} · ${activeBindingCount}/${currentContracts.length} 个合同已启用` : "先选择一个 Email Integration。"}</p>
+            <p className="eyebrow">通知类型与模板</p>
+            <h2>模板与变量绑定</h2>
+            <p>{selectedIntegration ? `${selectedIntegration.name} · 已启用 ${activeBindingCount}/${currentContracts.length} 个通知模板` : "先选择一个发信通道。"}</p>
           </div>
           <Badge>{activeBindingCount}/{currentContracts.length} active</Badge>
         </div>
         <Notice tone="warning">
-          <strong>测试是即时操作，不是发送门禁</strong>
-          <p>测试会用代码合同中的示例变量真实调用 Provider，并把结果直接显示给当前操作人；结果不会写入数据库，也不会阻止之后修改配置。</p>
+          <strong>实时测试说明</strong>
+          <p>测试将使用示例数据实际调用发信服务商发送测试邮件，便于验证密钥可用性与模板语法是否正确。</p>
         </Notice>
         {!selectedIntegration ? (
           <EmptyState title="尚未选择 Email Provider" description="先连接或选择一个 Provider Integration。" />

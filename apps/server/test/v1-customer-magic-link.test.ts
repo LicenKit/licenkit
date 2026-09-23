@@ -32,13 +32,12 @@ describe("V1 Customer Magic Link request contract", () => {
       STORAGE_ENCRYPTION_KEY_ID: "test-primary",
       TURNSTILE_SECRET_KEY: "turnstile-secret",
       TURNSTILE_SITE_KEY: "turnstile-site-key",
-      CUSTOMER_SITE_ORIGIN,
     } as any);
     const now = new Date().toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, status, created_at, updated_at)
-       VALUES (?, 'Magic Link', 'magic', 'https://site.example.test/site', 'active', ?, ?)`
-    ).run(instanceId, now, now);
+      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Magic Link', 'magic', 'https://site.example.test/site', ?, 'active', ?, ?)`
+    ).run(instanceId, API_ORIGIN, now, now);
     testEnv.sqliteDb.prepare(
       `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
        VALUES (?, ?, 'buyer@example.test', 'Buyer', 'active', ?, ?)`
@@ -290,11 +289,10 @@ describe("V1 Customer Magic Link request contract", () => {
 
   it("runs the complete Magic Link prepare and dispatch flow on non-production localhost HTTP", async () => {
     const localOrigin = "http://localhost:4321";
-    testEnv.env.CUSTOMER_SITE_ORIGIN = localOrigin;
     testEnv.env.ENVIRONMENT = "development";
     testEnv.sqliteDb.prepare(
-      "UPDATE instances SET site_url = ? WHERE id = ?",
-    ).run(`${localOrigin}/site`, instanceId);
+      "UPDATE instances SET site_url = ?, admin_api_url = ? WHERE id = ?",
+    ).run(`${localOrigin}/site`, "http://localhost:8787", instanceId);
     await configureReadyEmail();
     const providerRequests: any[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -358,7 +356,6 @@ describe("V1 Customer Magic Link request contract", () => {
     configuredOrigin,
     environment,
   ) => {
-    testEnv.env.CUSTOMER_SITE_ORIGIN = configuredOrigin;
     testEnv.env.ENVIRONMENT = environment;
     testEnv.sqliteDb.prepare(
       "UPDATE instances SET site_url = ? WHERE id = ?",
@@ -379,7 +376,7 @@ describe("V1 Customer Magic Link request contract", () => {
     );
 
     expect(response.status).toBe(500);
-    expect((await response.json() as any).error.code).toBe("CUSTOMER_SITE_ORIGIN_INVALID");
+    expect((await response.json() as any).error.code).toBe("CUSTOMER_SITE_URL_INVALID");
     expect(challengeRows()).toEqual([]);
     expect(deliveryRows()).toEqual([]);
   });

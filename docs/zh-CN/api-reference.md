@@ -73,7 +73,7 @@ POST /api/v1/setup/verify-token
 POST /api/v1/setup
 ```
 
-Setup 使用三个独立页面：第一步只验证部署 Token；第二步收集首位 User 的显示名称、邮箱和密码；第三步收集首个 Instance 的名称、实例标识与 Site URL。前两步不写数据库，Token 只保存在当前页面内存，刷新或关闭后必须重新验证。
+Setup 使用三个独立页面：第一步只验证部署 Token；第二步收集首位 User 的显示名称、邮箱和密码；第三步收集首个 Instance 的名称、实例标识、LicenKit Admin/API 地址与 Customer Site 地址。前两步不写数据库，Token 只保存在当前页面内存，刷新或关闭后必须重新验证。
 
 第一步请求：
 
@@ -96,14 +96,15 @@ Setup 使用三个独立页面：第一步只验证部署 Token；第二步收�
   "instance": {
     "name": "Example Studio Licensing",
     "slug": "example-studio",
-    "site_url": "https://licenses.example.com"
+    "admin_api_url": "https://license.example.com",
+    "customer_site_url": "https://www.example.com"
   }
 }
 ```
 
 `setup_token` 与部署 Secret `INITIAL_SETUP_TOKEN` 常量时间比较，不进入 URL、日志、审计详情或错误回显。验证接口与最终提交都检查精确 Origin、Secret、`deployment_bootstrap` 未完成，以及 User、Instance、Membership 仍为空，并返回 `Cache-Control: no-store`。管理员密码执行与正常登录一致的长度校验和密码 KDF，只保存 Hash。
 
-`site_url` 由部署者显式填写，供邮件 Magic Link 和 Turnstile hostname 使用；其 Origin 必须与部署变量 `CUSTOMER_SITE_ORIGIN` 精确一致，且不能包含 credentials、query 或 fragment。`CUSTOMER_SITE_ORIGIN` 自身只能是规范 Origin，并且必须与 Setup 请求的 LicenKit API Origin 保持同协议、同可注册站点；Setup 在写入前拒绝跨站组合。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP，IPv6 loopback 当前不支持。Admin 地址固定由 Setup 请求 Origin 加 `/admin/` 派生，API 地址固定由该 Origin 加 `/api/v1` 派生，均不接受独立配置。
+`admin_api_url` 是 LicenKit 管理后台和 API 的规范 Origin。Setup 页面默认填入当前浏览器的 `window.location.origin`，服务端要求它与实际 Setup 请求 Origin 完全一致，不能包含路径、尾随斜杠、credentials、query 或 fragment。`customer_site_url` 是用户自己的官网或 Customer Portal 基础地址，供邮件 Magic Link 和 Turnstile hostname 使用，可以包含基础路径，但不能包含 credentials、query 或 fragment。两个地址可以跨 Origin，但必须保持同协议、同可注册站点；Setup 在写入前拒绝跨站组合。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP，IPv6 loopback 当前不支持。
 
 最终提交再次验证 Token 和全部输入，并在一个 D1 原子批次中创建 User、Instance、Owner Membership、Admin Session、`instance.setup_completed` 审计和固定 `deployment_bootstrap(singleton_key='deployment')` 完成记录。任一步失败全部回滚，并发请求只能有一个成功；失败批次只有重新读取到完成记录时才转换为 `SETUP_ALREADY_COMPLETED`，否则保留原始错误。批次提交后才设置 Session Cookie；响应中断不回滚已经完成的 Setup，管理员可正常登录重建 Session。
 
@@ -139,20 +140,20 @@ POST /api/v1/admin/invitations/:invitationId/resend
 POST /api/v1/invitations/accept
 ```
 
-`GET /admin/instance` 对四种 active 角色开放，只读返回当前 Instance 的名称、实例标识、Site URL 和状态。当前自部署不提供 Instance 状态修改接口；`suspended/archived` 的修改主体属于未来 SaaS 控制面。
+`GET /admin/instance` 对四种 active 角色开放，只读返回当前 Instance 的名称、实例标识、`admin_api_url`、`customer_site_url` 和状态。当前自部署不提供 Instance 状态修改接口；`suspended/archived` 的修改主体属于未来 SaaS 控制面。
 
 Profile 只操作当前 User：显示名称可修改，邮箱只读，不存在修改邮箱 API。修改密码必须验证当前密码，并在同一个原子写入中替换密码 Hash、写 identity 审计并撤销该 User 除当前请求外的其他 Admin Session；撤销对该 User 所属的全部 Instance 生效。
 
 Members 与 Invitation 只允许 active Owner 管理。Owner 可以邀请邮箱、调整 Membership 角色、暂停、恢复或软移除 Membership，但不能修改其他 User 的显示名称、邮箱、密码或全局 Session。Membership 状态为 `active/disabled/removed`；`removed` 重新加入必须接受新邀请。最后一个 active Owner 的降级、暂停或移除由数据库不变量拒绝并返回 `LAST_ACTIVE_OWNER_REQUIRED`。
 
-邀请接受页固定为 LicenKit Admin Origin 下的 `/admin/invitations/accept#token=...`，不能使用 Customer `site_url`。Token 只在页面内存保管，页面立即清理 Fragment，GET 和邮件扫描器不能消费；用户明确操作后才 POST。接受前不创建占位 User 或 Membership。新邮箱由受邀者设置密码；已有 User 必须先通过有效 Admin Session 或等价邮箱密码认证。接受或撤销的并发终态由 D1 Trigger 在原子批次内抛错，失败方不能留下 User、Membership、Session、Delivery 或审计副作用。
+邀请接受页固定为 LicenKit `admin_api_url` 下的 `/admin/invitations/accept#token=...`，不能使用 Customer `customer_site_url`。Token 只在页面内存保管，页面立即清理 Fragment，GET 和邮件扫描器不能消费；用户明确操作后才 POST。接受前不创建占位 User 或 Membership。新邮箱由受邀者设置密码；已有 User 必须先通过有效 Admin Session 或等价邮箱密码认证。接受或撤销的并发终态由 D1 Trigger 在原子批次内抛错，失败方不能留下 User、Membership、Session、Delivery 或审计副作用。
 
 登录、Session 查询、Setup 成功与 Invitation 接受都返回同一上下文形状：
 
 ```json
 {
   "user": { "id": "usr_01...", "name": "Alex", "email": "alex@example.com" },
-  "instance": { "id": "ins_01...", "slug": "example-studio", "name": "Example Studio", "site_url": "https://licenses.example.com", "status": "active" },
+  "instance": { "id": "ins_01...", "slug": "example-studio", "name": "Example Studio", "admin_api_url": "https://license.example.com", "customer_site_url": "https://www.example.com", "status": "active" },
   "membership": { "role": "owner", "status": "active" },
   "expires_at": "2026-09-28T10:00:00Z"
 }
@@ -631,7 +632,7 @@ POST /api/v1/customer/auth/magic-link/consume
 
 服务端对 Token 计算哈希，并在同一 D1 原子批次中写入 `consumed_at` 和与该 Challenge 唯一绑定的 Customer Session。Challenge 的一次性终态必须由数据库约束或 Trigger 在争用失败时直接抛错并回滚整个批次，不能在批次提交后检查条件更新的 `0` 行结果。并发消费最多一个请求成功；失败方不得留下 Session、审计、Delivery 更新或其他副作用。
 
-服务端先以 `instance_slug` 找到 Instance，再用 `instance_id + token_hash` 查询 Challenge。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie、Instance Cookie 和 CSRF Cookie；三者都不设置 `Domain`。响应正文同时返回 `csrf_token`，服务端只保存 Session 与 CSRF Token 的 Hash。后续会话按 `instance_id + session_token_hash` 查询：跨 Origin 请求要求 Origin 精确等于 `CUSTOMER_SITE_ORIGIN`；浏览器普通同 Origin GET 允许缺少 Origin，但请求 URL Origin 必须与该配置相同。状态写入始终要求精确 Origin、`X-CSRF-Token` Header、CSRF Cookie 和当前 Session Hash 四者一致。只有最终 2xx 会 best-effort 更新 `last_seen_at`；更新失败记录 `CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED`，但保留已完成的业务响应，3xx/4xx 不更新。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
+服务端先以当前请求的 Admin/API Origin 找到 Instance，再要求请求中的 `instance_slug` 属于该 Instance，随后用 `instance_id + token_hash` 查询 Challenge。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie、Instance Cookie 和 CSRF Cookie；三者都不设置 `Domain`。响应正文同时返回 `csrf_token`，服务端只保存 Session 与 CSRF Token 的 Hash。后续会话按 `instance_id + session_token_hash` 查询：跨 Origin 请求要求 Origin 精确等于该 Instance 的 `customer_site_url` Origin；浏览器普通同 Origin GET 允许缺少 Origin，但请求 URL Origin 必须与它相同。状态写入始终要求精确 Origin、`X-CSRF-Token` Header、CSRF Cookie 和当前 Session Hash 四者一致。只有最终 2xx 会 best-effort 更新 `last_seen_at`；更新失败记录 `CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED`，但保留已完成的业务响应，3xx/4xx 不更新。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
 
 ```text
 GET  /api/v1/customer/auth/csrf-token

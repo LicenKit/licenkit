@@ -1,7 +1,51 @@
-import { useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { Component, useEffect, useId, useRef, type ButtonHTMLAttributes, type ErrorInfo, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { AlertCircle, CheckCircle2, Info, Loader2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { ApiError, formatApiError } from "../lib/api-client";
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallbackTitle?: string;
+  onReset?: () => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  override state: ErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("[LicenKit Admin] View rendering crashed:", error, errorInfo);
+  }
+
+  reset = () => {
+    this.setState({ hasError: false, error: null });
+    this.props.onReset?.();
+  };
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="card" style={{ margin: "1.5rem 0", padding: "1.5rem" }}>
+          <ErrorPanel error={this.state.error} title={this.props.fallbackTitle || "页面加载出现异常"} />
+          <div style={{ marginTop: "1rem" }}>
+            <Button variant="secondary" onClick={this.reset}>
+              重试加载
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export function Button({ className, variant = "primary", loading, children, disabled, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost"; loading?: boolean }) {
   return (
@@ -194,6 +238,81 @@ export function formatDate(value?: string | null): string {
 
 export function CopyValue({ value, label = "复制" }: { value: string; label?: string }) {
   return <Button type="button" variant="secondary" onClick={() => void navigator.clipboard.writeText(value)}>{label}</Button>;
+}
+
+export function formatDurationSeconds(seconds?: number | null): string {
+  if (seconds === undefined || seconds === null) return "—";
+  if (seconds === 0) return "0 秒";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+
+  if (days > 0 && hours === 0 && minutes === 0 && remainingSeconds === 0) {
+    return `${days} 天 (${seconds} 秒)`;
+  }
+  if (hours > 0 && days === 0 && minutes === 0 && remainingSeconds === 0) {
+    return `${hours} 小时 (${seconds} 秒)`;
+  }
+  if (minutes > 0 && days === 0 && hours === 0 && remainingSeconds === 0) {
+    return `${minutes} 分钟 (${seconds} 秒)`;
+  }
+  return `${seconds} 秒`;
+}
+
+export function ConfirmModal({
+  open,
+  title,
+  description,
+  confirmLabel,
+  confirmText,
+  cancelLabel = "取消",
+  variant,
+  danger = false,
+  loading = false,
+  onConfirm,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  description?: ReactNode;
+  confirmLabel?: string;
+  confirmText?: string;
+  cancelLabel?: string;
+  variant?: "primary" | "danger";
+  danger?: boolean;
+  loading?: boolean;
+  onConfirm: () => void | Promise<void>;
+  onClose: () => void;
+  children?: ReactNode;
+}) {
+  const resolvedVariant = variant ?? (danger ? "danger" : "primary");
+  const resolvedConfirmLabel = confirmText ?? confirmLabel ?? "确认";
+  return (
+    <Modal open={open} onClose={onClose} title={title}>
+      <div className="form-stack">
+        {description ? (
+          typeof description === "string" ? (
+            <p className="field-hint" style={{ fontSize: "0.85rem", color: "var(--muted)", lineHeight: 1.6 }}>
+              {description}
+            </p>
+          ) : (
+            description
+          )
+        ) : null}
+        {children}
+        <div className="form-actions">
+          <Button variant="secondary" type="button" onClick={onClose} disabled={loading}>
+            {cancelLabel}
+          </Button>
+          <Button variant={resolvedVariant} type="button" loading={loading} onClick={() => void onConfirm()}>
+            {resolvedConfirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
 }
 
 export function Drawer({

@@ -68,7 +68,13 @@ export async function readDeploymentSetupState(db: D1Database): Promise<Deployme
 export interface InitialDeploymentInput {
   db: D1Database;
   user: { id: string; name: string; email: string; passwordHash: string };
-  instance: { id: string; name: string; slug: string; siteUrl: string };
+  instance: {
+    id: string;
+    name: string;
+    slug: string;
+    customerSiteUrl: string;
+    adminApiUrl: string;
+  };
   session: {
     id: string;
     sessionTokenHash: string;
@@ -93,13 +99,14 @@ export function prepareInitialDeployment(input: InitialDeploymentInput): D1Prepa
     ),
     input.db.prepare(
       `INSERT INTO instances (
-         id, name, slug, site_url, status, created_at, updated_at
-       ) VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)`,
+         id, name, slug, site_url, admin_api_url, status, created_at, updated_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6)`,
     ).bind(
       input.instance.id,
       input.instance.name,
       input.instance.slug,
-      input.instance.siteUrl,
+      input.instance.customerSiteUrl,
+      input.instance.adminApiUrl,
       input.now,
     ),
     input.db.prepare(

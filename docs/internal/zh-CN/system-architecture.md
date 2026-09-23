@@ -38,7 +38,7 @@ Cloudflare Cron ─> scheduled() ───────────────�
                                               └─ Email Provider API
 ```
 
-Admin 与 API 同源部署。Customer Site 可以由使用方在同站的另一个 Origin 独立实现和托管，通过 `CUSTOMER_SITE_ORIGIN` 建立精确 CORS 与 Origin 边界，只通过公开 API 交互，不能直接读取 D1 或持有服务端 Secret。
+Admin 与 API 同源部署。Customer Site 可以由使用方在同站的另一个 Origin 独立实现和托管。两者作为 `instances.admin_api_url` 与 `instances.site_url` 保存；Worker 先按请求 Origin 解析 Instance，再用该 Instance 的 Customer Site Origin 建立精确 CORS 边界。Customer Site 只通过公开 API 交互，不能直接读取 D1 或持有服务端 Secret。
 
 ## 3. 模块职责
 
@@ -152,15 +152,16 @@ Session Cookie
 ### 4.2 Customer 请求
 
 ```text
-跨 Origin 请求：Origin == CUSTOMER_SITE_ORIGIN
-同 Origin GET：请求 URL Origin == CUSTOMER_SITE_ORIGIN
+请求 URL Origin == instances.admin_api_url -> Instance
+跨 Origin 请求：Origin == Origin(instances.site_url)
+同 Origin GET：请求 URL Origin == Origin(instances.site_url)
   -> API Host 的 Customer Session/Instance Cookie
   -> Instance
   -> Customer Session Token Hash
   -> instance_id + customer_id
 ```
 
-跨 Origin Customer Auth、读取和写入接口都先验证精确 Customer Site Origin；浏览器普通同 Origin GET 不携带 Origin，因此仅在请求 URL Origin 与 `CUSTOMER_SITE_ORIGIN` 相同时允许缺少该 Header。写请求始终要求 Origin，并继续校验 HttpOnly CSRF Cookie、`X-CSRF-Token` 和 Session Hash；页面只从 Magic Link 消费响应或受 Session 保护的 CSRF Bootstrap 接口取得 Token。只有返回 2xx 的 Customer Session 请求 best-effort 更新 `last_seen_at`；遥测写入失败记录独立错误链路但不覆盖业务响应，重定向、业务错误、鉴权或 CSRF 失败不会更新。
+跨 Origin Customer Auth、读取和写入接口都先验证请求 Host 对应的 Instance，再验证该 Instance 的精确 Customer Site Origin；浏览器普通同 Origin GET 不携带 Origin，因此仅在请求 URL Origin 与 Customer Site Origin 相同时允许缺少该 Header。写请求始终要求 Origin，并继续校验 HttpOnly CSRF Cookie、`X-CSRF-Token` 和 Session Hash；页面只从 Magic Link 消费响应或受 Session 保护的 CSRF Bootstrap 接口取得 Token。只有返回 2xx 的 Customer Session 请求 best-effort 更新 `last_seen_at`；遥测写入失败记录独立错误链路但不覆盖业务响应，重定向、业务错误、鉴权或 CSRF 失败不会更新。
 
 Customer Session 不与 Admin Session 混用。
 
@@ -186,7 +187,7 @@ User、Instance、Owner Membership、Session、审计和 Bootstrap 固定单例�
 
 终态更新必须按 Invitation 主键触发数据库守卫。Invitation、Membership、可选 User/Session、Delivery 处理和审计原子提交；影响 0 行不是事务失败机制。
 
-Invitation URL 使用创建/重发请求中已通过精确校验的 Admin Origin，不能使用 Customer `site_url`。写入 Delivery 前，邮件合同严格比较该 Origin；变量随后以绑定 `instance_id + table + row_id + field` 的 AES-GCM Envelope 保存。Scheduled Worker 没有浏览器请求 Origin，因此解密时依赖 Envelope 认证证明变量来自已校验的持久化 Delivery，并重新校验 HTTPS、无 credentials/query、固定 Admin 路径与 Token 形状，但不执行无法获得依据的第二次 Origin 比对。
+Invitation URL 使用 Instance 的 `admin_api_url`，不能使用 Customer `site_url`。写入 Delivery 前，邮件合同严格比较该 Origin；变量随后以绑定 `instance_id + table + row_id + field` 的 AES-GCM Envelope 保存。Scheduled Worker 没有浏览器请求 Origin，因此解密时依赖 Envelope 认证证明变量来自已校验的持久化 Delivery，并重新校验 HTTPS、无 credentials/query、固定 Admin 路径与 Token 形状，但不执行无法获得依据的第二次 Origin 比对。
 
 ### 5.4 Customer Magic Link
 
@@ -251,13 +252,13 @@ System Issue 是聚合视图，不覆盖业务对象的原始错误。管理员�
 ### 10.1 Deployment 配置
 
 - Worker、D1、Assets、Cron 和 Observability：根 `wrangler.jsonc`；
-- Customer 页面安全边界：根 `wrangler.jsonc` 中的 `CUSTOMER_SITE_ORIGIN`；
+- Admin/API 与 Customer Site 安全边界：Setup 写入的 Instance 级 URL；
 - Setup/Encryption/Turnstile 等 Secret：Cloudflare Secrets；
 - 初始 migration：`apps/server/drizzle/0000_v1_initial.sql`。
 
 ### 10.2 Instance 配置
 
-- `instances`：名称、Slug、Site URL、只读状态；
+- `instances`：名称、Slug、Admin/API URL、Customer Site URL、只读状态；
 - Billing/Email 凭据：Admin 写入后加密存储；
 - Product：支付环境、宽限期、试用；
 - Plan：授权条款快照。

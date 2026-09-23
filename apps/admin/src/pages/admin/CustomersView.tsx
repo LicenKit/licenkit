@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
-  Mail,
   RefreshCw,
   Search,
   ShieldOff,
@@ -12,6 +11,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmModal,
   Drawer,
   EmptyState,
   ErrorPanel,
@@ -42,6 +42,10 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
   // 编辑 Modal
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState({ name: "", email: "" });
+
+  // 确认对话框状态
+  const [confirmToggleStatus, setConfirmToggleStatus] = useState(false);
+  const [confirmRevokeSessions, setConfirmRevokeSessions] = useState(false);
 
   const selected = customers.find((customer) => customer.id === selectedId) ?? null;
 
@@ -109,24 +113,14 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
     }
   }
 
-  async function toggleStatus() {
+  async function handleToggleStatus() {
     if (!selected) return;
-    const action = selected.status === "active" ? "禁用" : "启用";
-    if (
-      !window.confirm(
-        `${action}客户“${selected.email}”？${
-          selected.status === "active"
-            ? "未消费 Magic Link 和现有 Customer Session 会被吊销，但 License 不会自动暂停。"
-            : ""
-        }`,
-      )
-    )
-      return;
     setSaving(true);
     setError(null);
     try {
       if (selected.status === "active") await api.admin.customers.disable(selected.id);
       else await api.admin.customers.enable(selected.id);
+      setConfirmToggleStatus(false);
       await load();
     } catch (caught) {
       setError(caught);
@@ -135,12 +129,13 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
     }
   }
 
-  async function revokeSessions() {
-    if (!selected || !window.confirm("吊销该客户的全部 Customer Session 和未消费 Magic Link？")) return;
+  async function handleRevokeSessions() {
+    if (!selected) return;
     setSaving(true);
     setError(null);
     try {
       await api.admin.customers.revokeSessions(selected.id);
+      setConfirmRevokeSessions(false);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -151,9 +146,9 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="购买者身份"
-        title="Customer"
-        description="Customer 与管理员 User 是两套独立身份。由支付履约或手动签发自动建立，支持全宽表格与抽屉查看详情。"
+        eyebrow="客户身份"
+        title="客户管理"
+        description="管理通过在线购买或手动签发建立的客户档案，支持查看名下授权、更新联系邮箱及会话安全控制。"
         action={
           <Button variant="secondary" onClick={() => void load()} loading={loading}>
             <RefreshCw className="size-4" />刷新
@@ -266,7 +261,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">Customer Overview</p>
+                  <p className="eyebrow">客户概要</p>
                   <h2>{selected.name || selected.email}</h2>
                   <p className="mono">{selected.id}</p>
                 </div>
@@ -278,7 +273,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                   <strong>{selected.email}</strong>
                 </div>
                 <div>
-                  <span>名下 License</span>
+                  <span>名下授权数</span>
                   <strong>{licenses.length}</strong>
                 </div>
                 <div>
@@ -290,32 +285,31 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                   <strong>{formatDate(selected.updatedAt)}</strong>
                 </div>
               </div>
-              <Notice>
-                <Mail className="size-4" />
-                <strong>邮箱修改边界</strong>
+              <Notice tone="info">
+                <strong>联系邮箱安全说明</strong>
                 <p>
-                  客户授权中心不提供自助改邮箱。管理员修改邮箱时，服务端会吊销旧 Challenge 与 Session，但不会自动暂停 License。
+                  修改客户主邮箱后，系统将自动失效原邮箱的登录令牌与活动会话；名下已激活的有效授权不受影响。
                 </p>
               </Notice>
               {canManage ? (
                 <div className="button-row wrap">
                   <Button variant="secondary" onClick={() => setEditOpen(true)}>
-                    编辑联系身份
+                    编辑联系信息
                   </Button>
-                  <Button variant="secondary" loading={saving} onClick={() => void revokeSessions()}>
-                    <ShieldOff className="size-4" />吊销客户会话
+                  <Button variant="secondary" loading={saving} onClick={() => setConfirmRevokeSessions(true)}>
+                    <ShieldOff className="size-4" />吊销活动会话
                   </Button>
                   <Button
                     variant={selected.status === "active" ? "danger" : "secondary"}
                     loading={saving}
-                    onClick={() => void toggleStatus()}
+                    onClick={() => setConfirmToggleStatus(true)}
                   >
                     {selected.status === "active" ? (
                       <ShieldOff className="size-4" />
                     ) : (
                       <UserRoundCheck className="size-4" />
                     )}
-                    {selected.status === "active" ? "禁用 Customer" : "启用 Customer"}
+                    {selected.status === "active" ? "禁用客户" : "启用客户"}
                   </Button>
                 </div>
               ) : null}
@@ -324,23 +318,23 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">Ownership</p>
-                  <h2>名下 License</h2>
-                  <p>License 通过稳定 Customer ID 归属，不以邮箱作为主键。</p>
+                  <p className="eyebrow">授权归属</p>
+                  <h2>名下授权</h2>
+                  <p>查看此客户账号拥有的所有软件授权及其有效状态。</p>
                 </div>
                 <Badge>{licenses.length}</Badge>
               </div>
               {licensesLoading ? (
-                <LoadingState label="正在读取名下 License" />
+                <LoadingState label="正在读取名下授权" />
               ) : licenses.length === 0 ? (
-                <EmptyState title="暂无 License" description="该 Customer 当前没有授权记录。" />
+                <EmptyState title="暂无授权记录" description="该客户当前名下没有关联的软件授权。" />
               ) : (
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>Product</th>
-                        <th>模型与续期</th>
+                        <th>产品</th>
+                        <th>授权模型与续期</th>
                         <th>状态</th>
                         <th>到期时间</th>
                       </tr>
@@ -353,7 +347,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                             <small className="mono">{license.id}</small>
                           </td>
                           <td>
-                            <span>{license.licenseModel}</span>
+                            <span>{license.licenseModel === "subscription" ? "定期订阅" : "永久授权"}</span>
                             <small>{license.renewalMode}</small>
                           </td>
                           <td>
@@ -379,21 +373,23 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
       <Modal
         open={editOpen}
         onClose={() => setEditOpen(false)}
-        title="编辑 Customer 联系身份"
-        description="目标邮箱必须在当前 Instance 内唯一；不会自动合并 Customer。"
+        title="编辑客户联系信息"
+        description="修改客户的姓名与主要联系邮箱。邮箱在系统内需保持唯一。"
       >
         <form className="form-stack" onSubmit={save}>
-          <Field label="姓名">
+          <Field label="客户姓名">
             <Input
               value={form.name}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
+              placeholder="例如：张三 / Acme Inc."
             />
           </Field>
-          <Field label="邮箱">
+          <Field label="联系邮箱">
             <Input
               type="email"
               value={form.email}
               onChange={(event) => setForm({ ...form, email: event.target.value })}
+              placeholder="customer@example.com"
               required
             />
           </Field>
@@ -402,11 +398,39 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
               取消
             </Button>
             <Button type="submit" loading={saving}>
-              保存并吊销旧会话
+              保存修改
             </Button>
           </div>
         </form>
       </Modal>
+
+      {/* 吊销会话确认 */}
+      <ConfirmModal
+        open={confirmRevokeSessions}
+        onClose={() => setConfirmRevokeSessions(false)}
+        onConfirm={() => void handleRevokeSessions()}
+        loading={saving}
+        title="吊销客户活动会话"
+        description={`确定吊销客户“${selected?.email || ""}”当前的所有有效登录会话与未使用的登录链接？客户下次需重新通过邮箱验证登录。`}
+        confirmText="确认吊销会话"
+        danger
+      />
+
+      {/* 禁用/启用确认 */}
+      <ConfirmModal
+        open={confirmToggleStatus}
+        onClose={() => setConfirmToggleStatus(false)}
+        onConfirm={() => void handleToggleStatus()}
+        loading={saving}
+        title={selected?.status === "active" ? "禁用客户账号" : "启用客户账号"}
+        description={
+          selected?.status === "active"
+            ? `确定禁用客户“${selected?.email || ""}”？禁用后客户将无法登录自助门户，现存活动会话将失效。已签发授权本身不会自动暂停。`
+            : `确定重新启用客户“${selected?.email || ""}”？启用后客户可重新接收登录凭证并访问门户。`
+        }
+        confirmText={selected?.status === "active" ? "确认禁用" : "确认启用"}
+        danger={selected?.status === "active"}
+      />
     </div>
   );
 }

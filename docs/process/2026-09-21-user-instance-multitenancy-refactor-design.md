@@ -214,8 +214,8 @@ SaaS：  Deployment 1 ─── N Instance
 | --- | --- | --- |
 | `instance_name` | 由 `instances.name` 取代 | 是实例身份 |
 | `site_url` | 由 `instances.site_url` 取代 | 是实例的 Customer Site 地址 |
-| `app_url` | 不再持久化 | 自部署 Admin/API Origin 从当前受信请求 Origin 得到 |
-| `api_base_url` | 不再持久化 | 从当前受信请求 Origin 加 `/api/v1` 派生 |
+| `app_url` | 由 `instances.admin_api_url` 取代 | 是实例的 LicenKit Admin/API Origin |
+| `api_base_url` | 不再持久化 | 从 `instances.admin_api_url` 加 `/api/v1` 派生 |
 | `initialized_at` | 由 `deployment_bootstrap.completed_at` 取代 | Setup 完成是 Deployment 级一次性事实，不是 Instance 设置 |
 | `scheduler_last_success_at` | 删除 | 不参与业务判断，不再维护独立健康状态 |
 | `scheduler_last_duration_ms` | 删除 | 当前产品不需要持久化本轮调度耗时 |
@@ -289,13 +289,14 @@ User 只能通过自己的 Profile 流程修改显示名称和密码；当前邮
 | `name` | 非空 | 实例显示名称 |
 | `slug` | 非空、URL-safe、唯一 | 界面名称“实例标识” |
 | `site_url` | 非空 URL | 产品站与 Customer Portal 基础地址 |
+| `admin_api_url` | 非空、唯一规范 Origin | LicenKit 管理后台与 API 地址 |
 | `status` | `active/suspended/archived` | 实例状态 |
 | `created_at` | 非空时间 | 创建时间 |
 | `updated_at` | 非空时间 | 更新时间 |
 
 当前公开路由只携带实例标识，因此 `slug` 必须全局唯一。未来如果改为自定义域名或另一种路由合同，再单独调整唯一性，不能提前放宽。
 
-`site_url` 必须拒绝 credentials、query 和 fragment。自部署要求它的 Origin 与部署变量 `CUSTOMER_SITE_ORIGIN` 精确一致，可以与 Setup/Admin/API Origin 不同，但两者必须保持同协议、同可注册站点。Setup 在写入前按包含私有后缀的 Public Suffix List 判断该边界并拒绝跨站组合，不进入第三方 Cookie 模式。
+`site_url` 必须拒绝 credentials、query 和 fragment；公开 API 把它命名为 `customer_site_url`。`admin_api_url` 必须是规范 Origin，并与实际访问 Setup 的 Worker Origin 完全一致。两者可以跨 Origin，但必须保持同协议、同可注册站点。Setup 在写入前按包含私有后缀的 Public Suffix List 判断该边界并拒绝跨站组合，不进入第三方 Cookie 模式。
 
 当前自部署不提供 Instance 状态修改 API 或界面。Setup 创建的唯一 Instance 保持 `active`；管理端可以展示状态，但不能由 Instance Owner 将其改为 `suspended` 或 `archived`。这两个状态只作为未来 SaaS 控制面的预留合同，本次不定义修改主体、恢复入口或平台权限。
 
@@ -351,7 +352,7 @@ User 只能通过自己的 Profile 流程修改显示名称和密码；当前邮
 - 同一 Instance 和规范化邮箱最多存在一条未完成邀请；
 - Owner 创建邀请时，Invitation、它的 Email Delivery 和审计必须在同一 D1 原子批次持久化；如果当前 Instance 没有可用邮件配置，Delivery 进入 `waiting_configuration`，邀请仍保持 `pending`，界面明确展示未发送状态，不丢弃邀请事实；
 - 邀请使用 Instance 的 active Email Integration 与 `instance.member_invited@1` Template Binding 发送。Delivery 的 `send_expires_at` 等于 Invitation 的 `expires_at`，过期后不得继续发送；
-- 自部署邀请地址由通过 Admin Origin 校验的当前 LicenKit Origin 生成固定管理端路径 `/admin/invitations/accept#token=...`，不能使用 Customer `instances.site_url`；
+- 自部署邀请地址由 Instance 的 `admin_api_url` 生成固定管理端路径 `/admin/invitations/accept#token=...`，不能使用 Customer `instances.site_url`；
 - 邀请 Token 只保存 Hash，明文只存在于创建请求内存和加密的 Delivery 变量中，不返回给 Owner，不进入 URL Query、日志、审计或分析事件；
 - 邀请落地页从 URL Fragment 读取 Token 后立即使用 `history.replaceState` 清理地址栏；页面在 Token 存在期间不加载分析、广告或其他第三方资源，只有用户明确操作后的 POST 才能消费 Token；
 - 落地页只在当前页面内存中持有 Token，不写入 Cookie、Local Storage、Session Storage 或前端日志。已有 User 尚未登录时，在同一落地流程中完成邮箱和密码登录，登录成功后再用内存中的 Token 发起接受请求；不得把 Token 拼入登录 URL、跨页跳转参数或持久化存储。新 User 在同一落地流程中设置密码并接受邀请；
@@ -566,7 +567,8 @@ Content-Type: application/json
   "instance": {
     "name": "Tidest Licensing",
     "slug": "tidest",
-    "site_url": "https://tidest.app"
+    "admin_api_url": "https://license.tidest.app",
+    "customer_site_url": "https://tidest.app"
   }
 }
 ```
@@ -626,7 +628,7 @@ instanceRole
 
 Customer 属于 Instance。Customer Login Challenge、Customer Session 和 Cookie 中的业务选择器必须使用 `instance_id + token_hash` 查询，并重新检查 Instance 与 Customer 状态。
 
-Customer 页面 Origin 由 `CUSTOMER_SITE_ORIGIN` 明确配置。跨 Origin Customer Auth、读取和写入接口都要求请求 Origin 精确匹配；浏览器普通同 Origin GET 不携带 Origin，仅当请求 URL Origin 与配置完全相同时允许该 Header 缺失。写请求始终要求 Origin。仅 Customer API 返回 credentialed CORS。Session、Instance 与 CSRF Cookie 保持 API Host 的 `__Host-`、Secure、HttpOnly、SameSite=Lax 合同。Magic Link 消费响应返回 CSRF Token；页面刷新通过受 Session 与 Cookie Hash 保护的 Bootstrap 接口取回同一个 Token。只有最终返回 2xx 的请求 best-effort 更新 `last_seen_at`；遥测更新失败记录独立错误链路但不覆盖业务响应，重定向、业务错误、鉴权、Origin、CSRF 或最近认证失败不更新。
+Customer 页面 Origin 来自请求 Admin/API Origin 所匹配 Instance 的 `site_url`。跨 Origin Customer Auth、读取和写入接口都要求请求 Origin 精确匹配；浏览器普通同 Origin GET 不携带 Origin，仅当请求 URL Origin 与该 Customer Site Origin 完全相同时允许该 Header 缺失。写请求始终要求 Origin。仅 Customer API 返回 credentialed CORS。Session、Instance 与 CSRF Cookie 保持 API Host 的 `__Host-`、Secure、HttpOnly、SameSite=Lax 合同。Magic Link 消费响应返回 CSRF Token；页面刷新通过受 Session 与 Cookie Hash 保护的 Bootstrap 接口取回同一个 Token。只有最终返回 2xx 的请求 best-effort 更新 `last_seen_at`；遥测更新失败记录独立错误链路但不覆盖业务响应，重定向、业务错误、鉴权、Origin、CSRF 或最近认证失败不更新。
 
 一次性链接正式环境始终要求 HTTPS。为使本地配置与邮件链路一致，同一构造、prepare 和 dispatch 模块仅在 `ENVIRONMENT` 明确非 `production` 且 hostname 精确为 `localhost` 或 `127.0.0.1` 时允许 HTTP；普通域名、其他 `127/8` 地址与 IPv6 loopback 不放行。
 

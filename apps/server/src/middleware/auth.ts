@@ -5,7 +5,7 @@ import { AppError, ForbiddenError, UnauthorizedError } from "./error";
 import { sha256Hex, timingSafeEqual } from "../infra/crypto";
 import { readAdminCookies, readCustomerCookies } from "../services/identity/session";
 import { readDeploymentSetupState } from "../services/identity/deployment-provisioning";
-import { customerSiteOrigin } from "../config/customer-site";
+import { resolveCustomerSiteBoundary } from "../config/customer-site";
 
 interface AdminSessionRow {
   session_id: string;
@@ -115,7 +115,13 @@ export function validateCustomerSiteOrigin(
 }
 
 export const requireCustomerSiteOrigin: MiddlewareHandler<AppContext> = async (c, next) => {
-  const expectedOrigin = customerSiteOrigin(c.env);
+  let expectedOrigin = c.get("customerSiteOrigin");
+  if (!expectedOrigin) {
+    const boundary = await resolveCustomerSiteBoundary(c.env.DB, c.req.url, c.env.ENVIRONMENT);
+    c.set("customerRequestInstanceId", boundary.instanceId);
+    c.set("customerSiteOrigin", boundary.customerSiteOrigin);
+    expectedOrigin = boundary.customerSiteOrigin;
+  }
   const requestOrigin = c.req.header("origin");
   const requestUrlOrigin = new URL(c.req.url).origin;
 
@@ -213,6 +219,16 @@ export const customerSessionAuth: MiddlewareHandler<AppContext> = async (c, next
       .bind(cookies.instanceId, tokenHash, now)
   );
   if (!row) throw new UnauthorizedError("Customer session is invalid or expired");
+  let requestInstanceId = c.get("customerRequestInstanceId");
+  if (!requestInstanceId) {
+    const boundary = await resolveCustomerSiteBoundary(c.env.DB, c.req.url, c.env.ENVIRONMENT);
+    c.set("customerRequestInstanceId", boundary.instanceId);
+    c.set("customerSiteOrigin", boundary.customerSiteOrigin);
+    requestInstanceId = boundary.instanceId;
+  }
+  if (!requestInstanceId || !timingSafeEqual(row.instance_id, requestInstanceId)) {
+    throw new UnauthorizedError("Customer session does not belong to this Admin/API Origin");
+  }
 
   setContext(c, {
     instanceId: row.instance_id,

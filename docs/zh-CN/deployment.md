@@ -37,10 +37,10 @@ pnpm exec wrangler d1 create licenkit-db
 - D1 `database_name` 与 `database_id`；
 - Scheduled Trigger；
 - `observability.enabled=true`；
-- `ENVIRONMENT`、`APP_VERSION`、`CUSTOMER_SITE_ORIGIN` 和公开的 `TURNSTILE_SITE_KEY`；
+- `ENVIRONMENT`、`APP_VERSION` 和公开的 `TURNSTILE_SITE_KEY`；
 - Admin 静态资产目录仍为 `./dist`。
 
-`CUSTOMER_SITE_ORIGIN` 是唯一允许携带 Customer Cookie 调用 Customer API 的页面 Origin，必须使用规范的 Origin 字符串，不得包含 credentials、路径、Query 或 Fragment，并与 Setup 所使用的 LicenKit API Origin 保持同协议、同可注册站点。正式环境及普通域名必须使用 HTTPS，例如 `https://tidest.app`。仅当 `ENVIRONMENT` 明确不是 `production`，且 hostname 精确为 `localhost` 或 `127.0.0.1` 时，才允许 HTTP 本地开发，例如 `http://localhost:4321`；`127.0.0.2`、普通域名和 IPv6 loopback 不在例外内。Magic Link 与 Admin Invitation 的构造、邮件合同校验和调度重放使用同一规则。
+Admin/API 与 Customer Site 地址属于 Instance 数据，不写入 Wrangler。Setup 保存 `admin_api_url` 与 `customer_site_url`：前者必须是当前访问 Setup 的 Worker Origin，后者是用户自己的官网或 Customer Portal 基础地址。服务端按请求 Origin 找到 Instance，再从该 Instance 的 `customer_site_url` 得到唯一允许携带 Customer Cookie 的页面 Origin。两个地址可以跨 Origin，但必须保持同协议、同可注册站点。正式环境及普通域名必须使用 HTTPS；仅当 `ENVIRONMENT` 明确不是 `production`，且 hostname 精确为 `localhost` 或 `127.0.0.1` 时，才允许 HTTP 本地开发。
 
 `wrangler.jsonc` 不保存 Secret。测试和正式环境需要独立的 D1 与 Secret，但不应使用不同业务流程。
 
@@ -107,18 +107,17 @@ https://你的域名/admin/
 
 1. 只提交 `INITIAL_SETUP_TOKEN` 到 `POST /api/v1/setup/verify-token`；验证不写数据库，Token 只保存在当前页面内存，刷新后必须重新输入；
 2. 收集首位 User 的显示名称、邮箱和密码，不单独持久化；
-3. 收集首个 Instance 的名称、实例标识和 Site URL，最后一次性提交完整数据到 `POST /api/v1/setup`。
+3. 收集首个 Instance 的名称、实例标识、LicenKit Admin/API 地址和 Customer Site 地址，最后一次性提交完整数据到 `POST /api/v1/setup`。
 
 最终提交使用 `setup_token`、`user` 与 `instance` 三段 JSON。服务端重新验证 Token 和初始化状态，并在同一个 D1 原子批次中创建 User、Instance、Owner Membership、Admin Session、Setup 审计和固定 `deployment_bootstrap(singleton_key='deployment')` 完成记录；任一步失败全部回滚，并发提交只有一个成功。其中：
 
-- `appUrl` 从 Setup 请求的 Origin 自动确定；
-- Admin 固定为 `appUrl + /admin/`；
-- API 固定为 `appUrl + /api/v1`；
-- `siteUrl` 用于生成邮件中的 Magic Link，其 Origin 必须与部署变量 `CUSTOMER_SITE_ORIGIN` 精确一致，但允许与 `appUrl` 不同。
+- Setup 页面把当前 `window.location.origin` 默认填入 `adminApiUrl`；服务端要求它与实际 Setup Worker Origin 完全一致；
+- Admin 固定为 `adminApiUrl + /admin/`，API 固定为 `adminApiUrl + /api/v1`；
+- `customerSiteUrl` 是用户自己的官网地址，用于 Customer Portal、Magic Link 和 Turnstile hostname；它可以包含基础路径，但必须与 `adminApiUrl` 同协议、同可注册站点。
 
 Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮箱和密码登录，不提交 Instance 标识。确认 Owner 可以登录后，从部署环境移除 `INITIAL_SETUP_TOKEN`。
 
-管理端的 Instance 页面只读展示名称、实例标识、Site URL 和状态；当前自部署不提供状态修改、第二个 Instance 创建或切换入口。Profile 中邮箱只读；修改密码必须验证当前密码，并撤销该 User 除当前请求外的其他 Admin Session。Members 页面由 active Owner 管理 Invitation 与 Membership：邀请、改角色、暂停、恢复、软移除均不允许修改其他 User 的身份资料，最后一个 active Owner 不能被降级、暂停或移除。
+管理端的 Instance 页面只读展示名称、实例标识、LicenKit Admin/API 地址、Customer Site 地址和状态；当前自部署只要求把 Admin/API 域名绑定到对应 Worker，不显示 CNAME 或托管证书配置，也不提供状态修改、第二个 Instance 创建或切换入口。Profile 中邮箱只读；修改密码必须验证当前密码，并撤销该 User 除当前请求外的其他 Admin Session。Members 页面由 active Owner 管理 Invitation 与 Membership：邀请、改角色、暂停、恢复、软移除均不允许修改其他 User 的身份资料，最后一个 active Owner 不能被降级、暂停或移除。
 
 ## 7. 外部服务配置
 
