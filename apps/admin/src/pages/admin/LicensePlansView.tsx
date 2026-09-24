@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Archive, FileClock, Layers3, Plus, RefreshCw } from "lucide-react";
+import { Archive, FileClock, Layers3, Pencil, Plus, RefreshCw } from "lucide-react";
 import { api, type CredentialMode, type LicenseModel, type LicensePlan, type Product } from "../../lib/api-client";
 import {
   Button,
@@ -17,6 +17,7 @@ import {
   StatusBadge,
   formatDurationSeconds,
 } from "../../components/ui";
+import { useI18n } from "../../lib/i18n";
 
 const emptyForm = {
   productId: "", name: "", licenseModel: "perpetual" as LicenseModel, credentialMode: "opaque" as CredentialMode,
@@ -27,6 +28,7 @@ const emptyForm = {
 export const MIN_SIGNED_TOKEN_TTL_SECONDS = 1;
 
 export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
+  const { t } = useI18n();
   const [plans, setPlans] = useState<LicensePlan[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -34,8 +36,10 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [editForm, setEditForm] = useState(emptyForm);
   const selected = plans.find((plan) => plan.id === selectedId) ?? null;
 
   async function load() {
@@ -48,6 +52,23 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
     } catch (caught) { setError(caught) } finally { setLoading(false) }
   }
   useEffect(() => { void load() }, []);
+
+  function openEditModal() {
+    if (!selected) return;
+    setEditForm({
+      productId: selected.productId,
+      name: selected.name,
+      licenseModel: selected.licenseModel,
+      credentialMode: selected.credentialMode,
+      maxActivations: String(selected.maxActivations),
+      features: selected.features.join(", "),
+      updateWindowSeconds: selected.updateWindowSeconds !== null && selected.updateWindowSeconds !== undefined ? String(selected.updateWindowSeconds) : "",
+      defaultTermSeconds: selected.defaultTermSeconds !== null && selected.defaultTermSeconds !== undefined ? String(selected.defaultTermSeconds) : "",
+      signedTokenTtlSeconds: String(selected.signedTokenTtlSeconds || 2592000),
+      paymentGraceSeconds: selected.paymentGraceSeconds !== undefined && selected.paymentGraceSeconds !== null ? String(selected.paymentGraceSeconds) : "",
+    });
+    setEditModalOpen(true);
+  }
 
   async function create(event: FormEvent) {
     event.preventDefault(); setSaving(true); setError(null);
@@ -64,6 +85,40 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
     } catch (caught) { setError(caught) } finally { setSaving(false) }
   }
 
+  async function updatePlan(event: FormEvent) {
+    event.preventDefault();
+    if (!selected) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.admin.licensePlans.update(selected.id, {
+        name: editForm.name.trim(),
+        licenseModel: editForm.licenseModel,
+        credentialMode: editForm.credentialMode,
+        maxActivations: Number(editForm.maxActivations),
+        features: editForm.features.split(",").map((item) => item.trim()).filter(Boolean),
+        updateWindowSeconds: editForm.licenseModel === "perpetual"
+          ? (editForm.updateWindowSeconds ? Number(editForm.updateWindowSeconds) : null)
+          : null,
+        defaultTermSeconds: editForm.licenseModel === "fixed_term"
+          ? Number(editForm.defaultTermSeconds)
+          : null,
+        signedTokenTtlSeconds: editForm.credentialMode === "signed"
+          ? Number(editForm.signedTokenTtlSeconds)
+          : 0,
+        paymentGraceSeconds: editForm.licenseModel === "subscription" && editForm.paymentGraceSeconds !== ""
+          ? Number(editForm.paymentGraceSeconds)
+          : 0,
+      });
+      setEditModalOpen(false);
+      await load();
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleConfirmArchive() {
     if (!selected) return;
     setSaving(true); setError(null);
@@ -74,30 +129,36 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
     } catch (caught) { setError(caught) } finally { setSaving(false) }
   }
 
+  const modelLabel = (model: LicenseModel) => {
+    if (model === "perpetual") return t.licensePlans.modelPerpetual;
+    if (model === "fixed_term") return t.licensePlans.modelFixedTerm;
+    return t.licensePlans.modelSubscription;
+  };
+
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="授权目录"
-        title="授权方案"
-        description="授权方案是签发模板，定义了授权生命周期、激活上限与凭证模式。后续对方案的修改不会变更已签发的历史授权条款。"
+        eyebrow={t.licensePlans.eyebrow}
+        title={t.licensePlans.title}
+        description={t.licensePlans.description}
         action={
           <div className="button-row">
             <Button variant="secondary" loading={loading} onClick={() => void load()}>
-              <RefreshCw className="size-4" />刷新
+              <RefreshCw className="size-4" />{t.common.refresh}
             </Button>
             {canWrite ? (
               <Button onClick={() => setModalOpen(true)}>
-                <Plus className="size-4" />新建授权方案
+                <Plus className="size-4" />{t.licensePlans.newPlan}
               </Button>
             ) : null}
           </div>
         }
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
       {loading && plans.length === 0 ? <LoadingState /> : plans.length === 0 ? (
         <EmptyState
-          title="暂无授权方案"
-          description="请先选择产品，再配置对应的授权模型、有效期限与凭证签发能力。"
+          title={t.licensePlans.emptyTitle}
+          description={t.licensePlans.emptyDesc}
         />
       ) : (
         <div className="master-detail">
@@ -112,10 +173,10 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
                 <div>
                   <strong>{plan.name}</strong>
                   <small>
-                    {plan.licenseModel === "perpetual" ? "永久买断" : plan.licenseModel === "fixed_term" ? "固定期限" : "周期订阅"} · 第 {plan.revision} 版
+                    {modelLabel(plan.licenseModel)} · {t.licensePlans.revision(plan.revision)}
                   </small>
                 </div>
-                <StatusBadge status={plan.status} label={plan.status === "active" ? "生效中" : "已归档"} />
+                <StatusBadge status={plan.status} label={plan.status === "active" ? t.common.statusActive : t.common.statusArchived} />
               </button>
             ))}
           </aside>
@@ -124,49 +185,52 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
               <Card>
                 <div className="card-header">
                   <div>
-                    <p className="eyebrow">方案详情 · 第 {selected.revision} 版</p>
+                    <p className="eyebrow">{t.licensePlans.detailEyebrow} · {t.licensePlans.revision(selected.revision)}</p>
                     <h2>{selected.name}</h2>
                     <p>{products.find((product) => product.id === selected.productId)?.name || selected.productId}</p>
                   </div>
-                  <StatusBadge status={selected.status} label={selected.status === "active" ? "生效中" : "已归档"} />
+                  <StatusBadge status={selected.status} label={selected.status === "active" ? t.common.statusActive : t.common.statusArchived} />
                 </div>
                 <div className="metric-grid compact">
                   <div>
-                    <span>授权模型</span>
-                    <strong>{selected.licenseModel === "perpetual" ? "永久买断制" : selected.licenseModel === "fixed_term" ? "固定期限" : "周期订阅制"}</strong>
+                    <span>{t.licensePlans.fieldModel}</span>
+                    <strong>{modelLabel(selected.licenseModel)}</strong>
                   </div>
                   <div>
-                    <span>凭证签名模式</span>
-                    <strong>{selected.credentialMode === "signed" ? "在线激活 + 离线签名凭证" : "仅在线机器码激活"}</strong>
+                    <span>{t.licensePlans.fieldCredentialMode}</span>
+                    <strong>{selected.credentialMode === "signed" ? t.licensePlans.credentialSigned : t.licensePlans.credentialOpaque}</strong>
                   </div>
                   <div>
-                    <span>最大激活设备数</span>
-                    <strong>{selected.maxActivations} 台</strong>
+                    <span>{t.licensePlans.maxActivationsLabel}</span>
+                    <strong>{t.licensePlans.devicesCount(selected.maxActivations)}</strong>
                   </div>
                   <div>
-                    <span>扣费宽限期</span>
+                    <span>{t.licensePlans.graceSecondsLabel}</span>
                     <strong>{formatDurationSeconds(selected.paymentGraceSeconds)}</strong>
                   </div>
                   <div>
-                    <span>版本更新权益期</span>
-                    <strong>{selected.updateWindowSeconds === null ? "永久全版本更新" : formatDurationSeconds(selected.updateWindowSeconds)}</strong>
+                    <span>{t.licensePlans.updateWindowLabel}</span>
+                    <strong>{selected.updateWindowSeconds === null ? t.licensePlans.updateWindowForever : formatDurationSeconds(selected.updateWindowSeconds)}</strong>
                   </div>
                   <div>
-                    <span>离线凭证有效期</span>
+                    <span>{t.licensePlans.tokenTtlLabel}</span>
                     <strong>{formatDurationSeconds(selected.signedTokenTtlSeconds)}</strong>
                   </div>
                 </div>
                 <div className="tag-list">
-                  {selected.features.length ? selected.features.map((feature) => <span key={feature}>{feature}</span>) : <span>无附加特定功能</span>}
+                  {selected.features.length ? selected.features.map((feature) => <span key={feature}>{feature}</span>) : <span>{t.licensePlans.noFeatures}</span>}
                 </div>
                 <Notice>
-                  <strong>修改影响范围</strong>
-                  <p>在此修改或产生新版本，仅对后续新签发的授权生效；已售出的存量授权条款将保持固化不变。</p>
+                  <strong>{t.licensePlans.revisionNoticeTitle}</strong>
+                  <p>{t.licensePlans.revisionNoticeDesc}</p>
                 </Notice>
                 {canWrite && selected.status === "active" ? (
-                  <div className="button-row">
+                  <div className="button-row wrap">
+                    <Button variant="secondary" onClick={openEditModal}>
+                      <Pencil className="size-4" />{t.licensePlans.btnEditPlan}
+                    </Button>
                     <Button variant="danger" loading={saving} onClick={() => setArchiveConfirmOpen(true)}>
-                      <Archive className="size-4" />归档授权方案
+                      <Archive className="size-4" />{t.licensePlans.btnArchivePlan}
                     </Button>
                   </div>
                 ) : null}
@@ -174,8 +238,8 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
               <Card>
                 <div className="card-header">
                   <div>
-                    <p className="eyebrow">业务规则</p>
-                    <h2>规则说明</h2>
+                    <p className="eyebrow">{t.licensePlans.rulesEyebrow}</p>
+                    <h2>{t.licensePlans.rulesTitle}</h2>
                   </div>
                   <FileClock className="size-5" />
                 </div>
@@ -186,76 +250,131 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
         </div>
       )}
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="新建授权方案" description="定义新授权方案的签发规则。此操作不会直接签发授权。" wide>
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={t.licensePlans.modalCreateTitle} description={t.licensePlans.modalCreateDesc} wide>
         <form className="form-stack" onSubmit={create}>
           <div className="form-grid">
-            <Field label="所属产品">
+            <Field label={t.licensePlans.fieldSelectProduct}>
               <Select value={form.productId} onChange={(event) => setForm({ ...form, productId: event.target.value })} required>
-                <option value="" disabled>选择产品</option>
+                <option value="" disabled>{t.licensePlans.fieldSelectProductDefault}</option>
                 {products.filter((item) => item.status === "active").map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
               </Select>
             </Field>
-            <Field label="方案名称">
-              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：专业版（年度）" required />
+            <Field label={t.licensePlans.fieldName}>
+              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={t.licensePlans.fieldNamePlaceholder} required />
             </Field>
           </div>
           <div className="form-grid">
-            <Field label="授权模型">
+            <Field label={t.licensePlans.fieldModel}>
               <Select value={form.licenseModel} onChange={(event) => setForm({ ...form, licenseModel: event.target.value as LicenseModel })}>
-                <option value="perpetual">永久买断制</option>
-                <option value="fixed_term">固定期限</option>
-                <option value="subscription">周期订阅制</option>
+                <option value="perpetual">{t.licensePlans.modelPerpetual}</option>
+                <option value="fixed_term">{t.licensePlans.modelFixedTerm}</option>
+                <option value="subscription">{t.licensePlans.modelSubscription}</option>
               </Select>
             </Field>
-            <Field label="凭证模式">
+            <Field label={t.licensePlans.fieldCredentialMode}>
               <Select value={form.credentialMode} onChange={(event) => setForm({ ...form, credentialMode: event.target.value as CredentialMode })}>
-                <option value="opaque">仅在线机器码激活</option>
-                <option value="signed">在线激活 + 离线签名凭证</option>
+                <option value="opaque">{t.licensePlans.credentialOpaque}</option>
+                <option value="signed">{t.licensePlans.credentialSigned}</option>
               </Select>
             </Field>
           </div>
           <div className="form-grid">
-            <Field label="最多激活设备数">
+            <Field label={t.licensePlans.fieldMaxActivations}>
               <Input type="number" min="1" value={form.maxActivations} onChange={(event) => setForm({ ...form, maxActivations: event.target.value })} required />
             </Field>
-            <Field label="功能特性列表" hint="用英文逗号分隔，如 pro_export,batch">
+            <Field label={t.licensePlans.fieldFeatures} hint={t.licensePlans.fieldFeaturesHint}>
               <Input value={form.features} onChange={(event) => setForm({ ...form, features: event.target.value })} placeholder="pro_export,batch" />
             </Field>
           </div>
           {form.licenseModel === "perpetual" ? (
-            <Field label="版本更新权益期（秒）" hint="买断后可免费更新软件版本的时长（秒）。留空表示永久享受未来所有版本更新；参考：1 年 = 31536000">
-              <Input type="number" min="1" value={form.updateWindowSeconds} onChange={(event) => setForm({ ...form, updateWindowSeconds: event.target.value })} placeholder="留空表示永久更新权益" />
+            <Field label={t.licensePlans.fieldUpdateWindow} hint={t.licensePlans.fieldUpdateWindowHint}>
+              <Input type="number" min="1" value={form.updateWindowSeconds} onChange={(event) => setForm({ ...form, updateWindowSeconds: event.target.value })} placeholder={t.licensePlans.placeholderUpdateWindow} />
             </Field>
           ) : null}
           {form.licenseModel === "fixed_term" ? (
-            <Field label="默认固定有效期（秒）" hint="授权生效时长（秒）。参考：30 天 = 2592000，1 年 = 31536000">
-              <Input type="number" min="1" value={form.defaultTermSeconds} onChange={(event) => setForm({ ...form, defaultTermSeconds: event.target.value })} placeholder="例如：2592000 (30天)" required />
+            <Field label={t.licensePlans.fieldDefaultTerm} hint={t.licensePlans.fieldDefaultTermHint}>
+              <Input type="number" min="1" value={form.defaultTermSeconds} onChange={(event) => setForm({ ...form, defaultTermSeconds: event.target.value })} placeholder={t.licensePlans.placeholderTermSeconds} required />
             </Field>
           ) : null}
           {form.licenseModel === "subscription" ? (
-            <Field label="订阅扣费宽限期（秒）" hint="订阅扣费失败后的缓冲宽限时长（秒）。缓冲期内客户端仍可正常校验；参考：3 天 = 259200">
-              <Input type="number" min="0" value={form.paymentGraceSeconds} onChange={(event) => setForm({ ...form, paymentGraceSeconds: event.target.value })} placeholder="例如：259200 (3天)" />
+            <Field label={t.licensePlans.fieldPaymentGrace} hint={t.licensePlans.fieldPaymentGraceHint}>
+              <Input type="number" min="0" value={form.paymentGraceSeconds} onChange={(event) => setForm({ ...form, paymentGraceSeconds: event.target.value })} placeholder={t.licensePlans.placeholderGraceSeconds} />
             </Field>
           ) : null}
           {form.credentialMode === "signed" ? (
-            <Field label="离线凭证有效期 TTL（秒）" hint="离线签名凭证有效时长（秒）。客户端需在此期限内联网同步；参考：30 天 = 2592000">
+            <Field label={t.licensePlans.fieldTokenTtl} hint={t.licensePlans.fieldTokenTtlHint}>
               <Input type="number" min={MIN_SIGNED_TOKEN_TTL_SECONDS} value={form.signedTokenTtlSeconds} onChange={(event) => setForm({ ...form, signedTokenTtlSeconds: event.target.value })} required />
             </Field>
           ) : null}
           <div className="form-actions">
-            <Button variant="secondary" type="button" onClick={() => setModalOpen(false)}>取消</Button>
-            <Button loading={saving} type="submit">创建授权方案</Button>
+            <Button variant="secondary" type="button" onClick={() => setModalOpen(false)}>{t.common.cancel}</Button>
+            <Button loading={saving} type="submit">{t.licensePlans.btnCreatePlan}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title={t.licensePlans.modalEditTitle((selected?.revision ?? 1) + 1)} description={t.licensePlans.modalEditDesc} wide>
+        <form className="form-stack" onSubmit={updatePlan}>
+          <div className="form-grid">
+            <Field label={t.licensePlans.fieldName}>
+              <Input value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} required />
+            </Field>
+            <Field label={t.licensePlans.fieldModel}>
+              <Select value={editForm.licenseModel} onChange={(event) => setEditForm({ ...editForm, licenseModel: event.target.value as LicenseModel })}>
+                <option value="perpetual">{t.licensePlans.modelPerpetual}</option>
+                <option value="fixed_term">{t.licensePlans.modelFixedTerm}</option>
+                <option value="subscription">{t.licensePlans.modelSubscription}</option>
+              </Select>
+            </Field>
+          </div>
+          <div className="form-grid">
+            <Field label={t.licensePlans.fieldCredentialMode}>
+              <Select value={editForm.credentialMode} onChange={(event) => setEditForm({ ...editForm, credentialMode: event.target.value as CredentialMode })}>
+                <option value="opaque">{t.licensePlans.credentialOpaque}</option>
+                <option value="signed">{t.licensePlans.credentialSigned}</option>
+              </Select>
+            </Field>
+            <Field label={t.licensePlans.fieldMaxActivations}>
+              <Input type="number" min="1" value={editForm.maxActivations} onChange={(event) => setEditForm({ ...editForm, maxActivations: event.target.value })} required />
+            </Field>
+          </div>
+          <Field label={t.licensePlans.fieldFeatures} hint={t.licensePlans.fieldFeaturesHint}>
+            <Input value={editForm.features} onChange={(event) => setEditForm({ ...editForm, features: event.target.value })} placeholder="pro_export,batch" />
+          </Field>
+          {editForm.licenseModel === "perpetual" ? (
+            <Field label={t.licensePlans.fieldUpdateWindow} hint={t.licensePlans.fieldUpdateWindowHint}>
+              <Input type="number" min="1" value={editForm.updateWindowSeconds} onChange={(event) => setEditForm({ ...editForm, updateWindowSeconds: event.target.value })} placeholder={t.licensePlans.placeholderUpdateWindow} />
+            </Field>
+          ) : null}
+          {editForm.licenseModel === "fixed_term" ? (
+            <Field label={t.licensePlans.fieldDefaultTerm} hint={t.licensePlans.fieldDefaultTermHint}>
+              <Input type="number" min="1" value={editForm.defaultTermSeconds} onChange={(event) => setEditForm({ ...editForm, defaultTermSeconds: event.target.value })} placeholder={t.licensePlans.placeholderTermSeconds} required />
+            </Field>
+          ) : null}
+          {editForm.licenseModel === "subscription" ? (
+            <Field label={t.licensePlans.fieldPaymentGrace} hint={t.licensePlans.fieldPaymentGraceHint}>
+              <Input type="number" min="0" value={editForm.paymentGraceSeconds} onChange={(event) => setEditForm({ ...editForm, paymentGraceSeconds: event.target.value })} placeholder={t.licensePlans.placeholderGraceSeconds} />
+            </Field>
+          ) : null}
+          {editForm.credentialMode === "signed" ? (
+            <Field label={t.licensePlans.fieldTokenTtl} hint={t.licensePlans.fieldTokenTtlHint}>
+              <Input type="number" min={MIN_SIGNED_TOKEN_TTL_SECONDS} value={editForm.signedTokenTtlSeconds} onChange={(event) => setEditForm({ ...editForm, signedTokenTtlSeconds: event.target.value })} required />
+            </Field>
+          ) : null}
+          <div className="form-actions">
+            <Button variant="secondary" type="button" onClick={() => setEditModalOpen(false)}>{t.common.cancel}</Button>
+            <Button loading={saving} type="submit">{t.licensePlans.btnSaveNewRevision}</Button>
           </div>
         </form>
       </Modal>
 
       <ConfirmModal
         open={archiveConfirmOpen}
-        title="归档授权方案"
-        description={`确定归档授权方案“${selected?.name}”？归档后该方案将无法继续签发新授权，但已签发的历史授权条款不受任何影响。`}
-        confirmLabel="确认归档"
+        title={t.licensePlans.archiveConfirmTitle}
+        description={t.licensePlans.archiveConfirmDesc(selected?.name || "")}
+        confirmLabel={t.licensePlans.archiveConfirmBtn}
         variant="danger"
         loading={saving}
         onConfirm={handleConfirmArchive}
@@ -266,26 +385,26 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
 }
 
 function PlanExplanation({ plan }: { plan: LicensePlan }) {
+  const { t } = useI18n();
   if (plan.licenseModel === "perpetual") {
     return (
       <p className="explanation">
-        永久买断授权不设过期时间。
         {plan.updateWindowSeconds === null
-          ? "该方案支持使用与升级所有未来发布的软件版本。"
-          : `签发后享有 ${formatDurationSeconds(plan.updateWindowSeconds)} 内发布的版本更新权益，到期后仍可永久使用历史已支持的版本。`}
+          ? t.licensePlans.rulesExplanationPerpetualForever
+          : t.licensePlans.rulesExplanationPerpetualWindow(formatDurationSeconds(plan.updateWindowSeconds))}
       </p>
     );
   }
   if (plan.licenseModel === "fixed_term") {
     return (
       <p className="explanation">
-        固定期限授权。签发时按指定期限（{formatDurationSeconds(plan.defaultTermSeconds)}）设定到期时间，到期后授权终止且不支持自动续期。
+        {t.licensePlans.rulesExplanationFixedTerm(formatDurationSeconds(plan.defaultTermSeconds))}
       </p>
     );
   }
   return (
     <p className="explanation">
-      周期订阅授权。手动签发需指定单期到期时间；通过 Paddle 支付履约的授权将根据订阅扣费结果自动维护续期状态。
+      {t.licensePlans.rulesExplanationSubscription}
     </p>
   );
 }

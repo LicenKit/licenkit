@@ -148,7 +148,7 @@ export function DashboardPage({
             <X className="size-5" />
           </button>
         </header>
-        <nav className="sidebar-nav" aria-label="主导航">
+        <nav className="sidebar-nav" aria-label={t.nav.mainNav}>
           {nav.map((group) => (
             <div className="nav-group" key={group.label}>
               <span className="nav-group-label">{group.label}</span>

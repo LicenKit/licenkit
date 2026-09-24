@@ -112,6 +112,16 @@ describe("i18n module", () => {
         "topbar",
         "settings",
         "auth",
+        "invitationAccept",
+        "overview",
+        "products",
+        "licensePlans",
+        "licenses",
+        "customers",
+        "billing",
+        "email",
+        "operations",
+        "members",
       ];
 
       for (const ns of namespaces) {

@@ -1,12 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Archive, Box, CalendarPlus, FlaskConical, PackagePlus, Plus, RefreshCw } from "lucide-react";
 import { api, type BillingEnvironment, type Product, type ProductRelease } from "../../lib/api-client";
-import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, Textarea, formatDate } from "../../components/ui";
+import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, Textarea } from "../../components/ui";
+import { useI18n } from "../../lib/i18n";
 
 const emptyProduct = { slug: "", name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationSeconds: "", trialFeatures: "" };
 const emptyRelease = { version: "", platform: "", description: "", downloadUrl: "", artifactSha256: "", releasedAt: "" };
 
 export function ProductsView({ canWrite }: { canWrite: boolean }) {
+  const { t, formatDate } = useI18n();
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [releases, setReleases] = useState<ProductRelease[]>([]);
@@ -77,28 +79,28 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="授权目录"
-        title="产品与发布"
-        description="管理软件产品的定义与官方版本发布记录。登记的版本用于客户端更新校验与版本权益判定。"
+        eyebrow={t.products.eyebrow}
+        title={t.products.title}
+        description={t.products.description}
         action={
           <div className="button-row">
             <Button variant="secondary" onClick={() => void loadProducts()} loading={loading}>
-              <RefreshCw className="size-4" />刷新
+              <RefreshCw className="size-4" />{t.common.refresh}
             </Button>
             {canWrite ? (
               <Button onClick={() => setProductModal(true)}>
-                <Plus className="size-4" />新建产品
+                <Plus className="size-4" />{t.products.newProduct}
               </Button>
             ) : null}
           </div>
         }
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
       {loading && products.length === 0 ? <LoadingState /> : products.length === 0 ? (
         <EmptyState
-          title="暂无产品"
-          description="创建产品后即可登记发布版本，并配置对应的授权方案。"
-          action={canWrite ? <Button onClick={() => setProductModal(true)}>创建第一个产品</Button> : undefined}
+          title={t.products.emptyTitle}
+          description={t.products.emptyDesc}
+          action={canWrite ? <Button onClick={() => setProductModal(true)}>{t.products.createFirstProduct}</Button> : undefined}
         />
       ) : (
         <div className="master-detail">
@@ -111,7 +113,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
               >
                 <span className="item-icon"><Box className="size-4" /></span>
                 <div><strong>{product.name}</strong><small>/{product.slug}</small></div>
-                <StatusBadge status={product.status} label={product.status === "active" ? "正常" : "已归档"} />
+                <StatusBadge status={product.status} label={product.status === "active" ? t.products.statusActive : t.products.statusArchived} />
               </button>
             ))}
           </aside>
@@ -120,28 +122,28 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
               <Card>
                 <div className="card-header">
                   <div>
-                    <p className="eyebrow">产品详情</p>
+                    <p className="eyebrow">{t.products.detailEyebrow}</p>
                     <h2>{selected.name}</h2>
-                    <p>{selected.description || "暂无产品说明"}</p>
+                    <p>{selected.description || t.products.noDescription}</p>
                   </div>
-                  <StatusBadge status={selected.status} label={selected.status === "active" ? "正常" : "已归档"} />
+                  <StatusBadge status={selected.status} label={selected.status === "active" ? t.products.statusActive : t.products.statusArchived} />
                 </div>
                 <div className="metric-grid compact">
-                  <div><span>公开标识 (slug)</span><strong>/{selected.slug}</strong></div>
-                  <div><span>收款环境</span><strong>{selected.billingEnvironment || "未开放公开收款"}</strong></div>
-                  <div><span>设备试用</span><strong>{selected.trial?.enabled ? (selected.trial.durationSeconds ? `${Math.round(selected.trial.durationSeconds / 86400)} 天` : "已启用") : "未启用"}</strong></div>
-                  <div><span>已登记版本</span><strong>{releases.length} 个</strong></div>
+                  <div><span>{t.products.slugLabel}</span><strong>/{selected.slug}</strong></div>
+                  <div><span>{t.products.billingEnvLabel}</span><strong>{selected.billingEnvironment || t.products.billingEnvNone}</strong></div>
+                  <div><span>{t.products.trialLabel}</span><strong>{selected.trial?.enabled ? (selected.trial.durationSeconds ? t.products.trialDays(Math.round(selected.trial.durationSeconds / 86400)) : t.products.trialEnabled) : t.products.trialDisabled}</strong></div>
+                  <div><span>{t.products.tableColReleasedAt}</span><strong>{t.products.releasesCount(releases.length)}</strong></div>
                 </div>
                 {selected.trial?.enabled ? (
                   <Notice>
-                    <strong>设备级在线试用功能</strong>
-                    <p>试用功能白名单：{selected.trial.features.join(", ") || "全部功能"}。客户设备激活试用后即可在指定期限内使用。</p>
+                    <strong>{t.products.trialNoticeTitle}</strong>
+                    <p>{t.products.trialNoticeDesc(selected.trial.features.join(", ") || t.products.allFeatures)}</p>
                   </Notice>
                 ) : null}
                 {canWrite && selected.status === "active" ? (
                   <div className="button-row">
                     <Button variant="danger" onClick={() => setArchiveConfirmOpen(true)} loading={saving}>
-                      <Archive className="size-4" />归档产品
+                      <Archive className="size-4" />{t.products.archiveProduct}
                     </Button>
                   </div>
                 ) : null}
@@ -150,27 +152,27 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
               <Card>
                 <div className="card-header">
                   <div>
-                    <p className="eyebrow">版本发布</p>
-                    <h2>版本发布</h2>
-                    <p>版本号、架构平台、发布时间与 SHA-256 哈希创建后不可原地修改，用于客户端升级权益校验。</p>
+                    <p className="eyebrow">{t.products.releasesEyebrow}</p>
+                    <h2>{t.products.releasesTitle}</h2>
+                    <p>{t.products.releasesDesc}</p>
                   </div>
                   {canWrite ? (
                     <Button onClick={() => setReleaseModal(true)}>
-                      <CalendarPlus className="size-4" />登记新版本
+                      <CalendarPlus className="size-4" />{t.products.newRelease}
                     </Button>
                   ) : null}
                 </div>
                 {releases.length === 0 ? (
-                  <EmptyState title="暂无发布记录" description="在此登记软件的发布版本，客户端更新校验只接受此处登记的受信版本。" />
+                  <EmptyState title={t.products.releasesEmptyTitle} description={t.products.releasesEmptyDesc} />
                 ) : (
                   <div className="table-wrap">
                     <table>
                       <thead>
                         <tr>
-                          <th>版本 / 平台</th>
-                          <th>发布时间</th>
-                          <th>SHA-256 哈希</th>
-                          <th>下载</th>
+                          <th>{t.products.tableColVersionPlatform}</th>
+                          <th>{t.products.tableColReleasedAt}</th>
+                          <th>{t.products.tableColSha256}</th>
+                          <th>{t.products.tableColDownload}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -179,7 +181,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
                             <td><strong>{release.version}</strong><small>{release.platform}</small></td>
                             <td>{formatDate(release.releasedAt)}</td>
                             <td><code>{release.artifactSha256.slice(0, 16)}…</code></td>
-                            <td>{release.downloadUrl ? <a href={release.downloadUrl} target="_blank" rel="noreferrer">下载地址</a> : "—"}</td>
+                            <td>{release.downloadUrl ? <a href={release.downloadUrl} target="_blank" rel="noreferrer">{t.products.downloadLink}</a> : "—"}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -192,63 +194,63 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
         </div>
       )}
 
-      <Modal open={productModal} onClose={() => setProductModal(false)} title="新建产品" description="收款环境可先保持为空；后续绑定生效定价或签发正式授权后环境将被锁定。">
+      <Modal open={productModal} onClose={() => setProductModal(false)} title={t.products.modalCreateTitle} description={t.products.modalCreateDesc}>
         <form className="form-stack" onSubmit={createProduct}>
           <div className="form-grid">
-            <Field label="产品名称"><Input value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} required /></Field>
-            <Field label="公开标识 (slug)"><Input value={productForm.slug} onChange={(event) => setProductForm({ ...productForm, slug: event.target.value.toLowerCase() })} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="my-app" required /></Field>
+            <Field label={t.products.fieldName}><Input value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} required /></Field>
+            <Field label={t.products.fieldSlug}><Input value={productForm.slug} onChange={(event) => setProductForm({ ...productForm, slug: event.target.value.toLowerCase() })} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="my-app" required /></Field>
           </div>
-          <Field label="说明"><Textarea value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} rows={3} placeholder="简要说明软件产品定位..." /></Field>
-          <Field label="公开收款环境">
+          <Field label={t.products.fieldDesc}><Textarea value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} rows={3} placeholder={t.products.fieldDescPlaceholder} /></Field>
+          <Field label={t.products.fieldBillingEnv}>
             <Select value={productForm.billingEnvironment} onChange={(event) => setProductForm({ ...productForm, billingEnvironment: event.target.value as BillingEnvironment | "" })}>
-              <option value="">不开放公开收款</option>
-              <option value="sandbox">Sandbox (沙箱测试)</option>
-              <option value="live">Live (生产环境)</option>
+              <option value="">{t.products.billingEnvOptionNone}</option>
+              <option value="sandbox">{t.products.billingEnvOptionSandbox}</option>
+              <option value="live">{t.products.billingEnvOptionLive}</option>
             </Select>
           </Field>
           <label className="check-row">
             <input type="checkbox" checked={productForm.trialEnabled} onChange={(event) => setProductForm({ ...productForm, trialEnabled: event.target.checked })} />
             <FlaskConical className="size-4" />
             <span>
-              <strong>启用设备在线试用</strong>
-              <small>允许设备在不绑定支付方式的情况下在线领取临时试用凭证，需在线验签。</small>
+              <strong>{t.products.fieldTrialCheck}</strong>
+              <small>{t.products.fieldTrialCheckHint}</small>
             </span>
           </label>
           {productForm.trialEnabled ? (
             <div className="form-grid">
-              <Field label="试用时长（秒）" hint="设备试用的有效秒数。参考：7 天 = 604800"><Input type="number" min="1" value={productForm.trialDurationSeconds} onChange={(event) => setProductForm({ ...productForm, trialDurationSeconds: event.target.value })} placeholder="604800 (7天)" required /></Field>
-              <Field label="试用功能白名单" hint="用英文逗号分隔"><Input value={productForm.trialFeatures} onChange={(event) => setProductForm({ ...productForm, trialFeatures: event.target.value })} placeholder="pro_export,batch" /></Field>
+              <Field label={t.products.fieldTrialDuration} hint={t.products.fieldTrialDurationHint}><Input type="number" min="1" value={productForm.trialDurationSeconds} onChange={(event) => setProductForm({ ...productForm, trialDurationSeconds: event.target.value })} placeholder={t.products.placeholderTrialDuration} required /></Field>
+              <Field label={t.products.fieldTrialFeatures} hint={t.products.fieldTrialFeaturesHint}><Input value={productForm.trialFeatures} onChange={(event) => setProductForm({ ...productForm, trialFeatures: event.target.value })} placeholder="pro_export,batch" /></Field>
             </div>
           ) : null}
           <div className="form-actions">
-            <Button variant="secondary" type="button" onClick={() => setProductModal(false)}>取消</Button>
-            <Button type="submit" loading={saving}><PackagePlus className="size-4" />创建产品</Button>
+            <Button variant="secondary" type="button" onClick={() => setProductModal(false)}>{t.common.cancel}</Button>
+            <Button type="submit" loading={saving}><PackagePlus className="size-4" />{t.products.btnCreateProduct}</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={releaseModal} onClose={() => setReleaseModal(false)} title="登记新版本" description="新编译的安装包或更新哈希需创建新版本，创建后不可修改。">
+      <Modal open={releaseModal} onClose={() => setReleaseModal(false)} title={t.products.modalReleaseTitle} description={t.products.modalReleaseDesc}>
         <form className="form-stack" onSubmit={createRelease}>
           <div className="form-grid">
-            <Field label="版本号"><Input value={releaseForm.version} onChange={(event) => setReleaseForm({ ...releaseForm, version: event.target.value })} placeholder="1.0.0" required /></Field>
-            <Field label="适用平台与架构"><Input value={releaseForm.platform} onChange={(event) => setReleaseForm({ ...releaseForm, platform: event.target.value })} placeholder="macos-universal" required /></Field>
+            <Field label={t.products.fieldVersion}><Input value={releaseForm.version} onChange={(event) => setReleaseForm({ ...releaseForm, version: event.target.value })} placeholder="1.0.0" required /></Field>
+            <Field label={t.products.fieldPlatform}><Input value={releaseForm.platform} onChange={(event) => setReleaseForm({ ...releaseForm, platform: event.target.value })} placeholder="macos-universal" required /></Field>
           </div>
-          <Field label="安装包 SHA-256 哈希"><Input value={releaseForm.artifactSha256} onChange={(event) => setReleaseForm({ ...releaseForm, artifactSha256: event.target.value })} pattern="[a-fA-F0-9]{64}" placeholder="64 位十六进制哈希" required /></Field>
-          <Field label="发布时间"><Input type="datetime-local" value={releaseForm.releasedAt} onChange={(event) => setReleaseForm({ ...releaseForm, releasedAt: event.target.value })} required /></Field>
-          <Field label="下载地址（可选）"><Input type="url" value={releaseForm.downloadUrl} onChange={(event) => setReleaseForm({ ...releaseForm, downloadUrl: event.target.value })} placeholder="https://..." /></Field>
-          <Field label="版本更新说明"><Textarea value={releaseForm.description} onChange={(event) => setReleaseForm({ ...releaseForm, description: event.target.value })} rows={3} placeholder="简要描述此版本更新内容..." /></Field>
+          <Field label={t.products.fieldSha256}><Input value={releaseForm.artifactSha256} onChange={(event) => setReleaseForm({ ...releaseForm, artifactSha256: event.target.value })} pattern="[a-fA-F0-9]{64}" placeholder={t.products.placeholderSha256} required /></Field>
+          <Field label={t.products.fieldReleasedAt}><Input type="datetime-local" value={releaseForm.releasedAt} onChange={(event) => setReleaseForm({ ...releaseForm, releasedAt: event.target.value })} required /></Field>
+          <Field label={t.products.fieldDownloadUrl}><Input type="url" value={releaseForm.downloadUrl} onChange={(event) => setReleaseForm({ ...releaseForm, downloadUrl: event.target.value })} placeholder="https://..." /></Field>
+          <Field label={t.products.fieldReleaseNotes}><Textarea value={releaseForm.description} onChange={(event) => setReleaseForm({ ...releaseForm, description: event.target.value })} rows={3} placeholder={t.products.fieldReleaseNotesPlaceholder} /></Field>
           <div className="form-actions">
-            <Button variant="secondary" type="button" onClick={() => setReleaseModal(false)}>取消</Button>
-            <Button type="submit" loading={saving}>登记版本</Button>
+            <Button variant="secondary" type="button" onClick={() => setReleaseModal(false)}>{t.common.cancel}</Button>
+            <Button type="submit" loading={saving}>{t.products.btnCreateRelease}</Button>
           </div>
         </form>
       </Modal>
 
       <ConfirmModal
         open={archiveConfirmOpen}
-        title="归档产品"
-        description={`确定归档产品“${selected?.name}”？归档后该产品将无法继续签发新授权或创建新定价，已售出的存量授权及激活不受任何影响。`}
-        confirmLabel="确认归档"
+        title={t.products.archiveConfirmTitle}
+        description={t.products.archiveConfirmDesc(selected?.name || "")}
+        confirmLabel={t.products.archiveConfirmBtn}
         variant="danger"
         loading={saving}
         onConfirm={handleConfirmArchive}

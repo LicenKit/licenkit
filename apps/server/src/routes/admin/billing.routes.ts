@@ -664,16 +664,29 @@ async function assertOfferMapping(
 async function listBillingRows(c: any, table: string, orderColumn: string): Promise<Response> {
   const requestedLimit = Number(c.req.query("limit") ?? 50);
   const requestedOffset = Number(c.req.query("offset") ?? 0);
+  const status = c.req.query("status") as string | undefined;
   if (!Number.isInteger(requestedLimit) || !Number.isInteger(requestedOffset)) {
     throw new AppError("VALIDATION_ERROR", "limit and offset must be integers.", 400);
   }
   const limit = Math.min(100, Math.max(1, requestedLimit));
   const offset = Math.max(0, requestedOffset);
   const allowed = new Set(["billing_customers", "billing_subscriptions", "inbound_events", "billing_adjustments"]);
-  if (!allowed.has(table)) throw new Error("Unsupported billing table");
-  const result = await (c.env.DB as D1Database).prepare(
-    `SELECT * FROM ${table} WHERE instance_id = ?1 ORDER BY ${orderColumn} DESC LIMIT ?2 OFFSET ?3`,
-  ).bind(instanceId(c), limit, offset).all<Record<string, unknown>>();
+  const statuses: string[] = typeof status === "string" ? status.split(",").map((s: string) => s.trim()).filter(Boolean) : [];
+  let result;
+  if (statuses.length === 1) {
+    result = await (c.env.DB as D1Database).prepare(
+      `SELECT * FROM ${table} WHERE instance_id = ?1 AND status = ?2 ORDER BY ${orderColumn} DESC LIMIT ?3 OFFSET ?4`,
+    ).bind(instanceId(c), statuses[0], limit, offset).all<Record<string, unknown>>();
+  } else if (statuses.length > 1) {
+    const placeholders = statuses.map((_: string, i: number) => `?${i + 2}`).join(", ");
+    result = await (c.env.DB as D1Database).prepare(
+      `SELECT * FROM ${table} WHERE instance_id = ?1 AND status IN (${placeholders}) ORDER BY ${orderColumn} DESC LIMIT ?${statuses.length + 2} OFFSET ?${statuses.length + 3}`,
+    ).bind(instanceId(c), ...statuses, limit, offset).all<Record<string, unknown>>();
+  } else {
+    result = await (c.env.DB as D1Database).prepare(
+      `SELECT * FROM ${table} WHERE instance_id = ?1 ORDER BY ${orderColumn} DESC LIMIT ?2 OFFSET ?3`,
+    ).bind(instanceId(c), limit, offset).all<Record<string, unknown>>();
+  }
   const items = result.results.map((row: Record<string, unknown>) => {
     const copy = { ...row };
     delete copy.payload_ciphertext;

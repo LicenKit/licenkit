@@ -1,16 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { MailPlus, RefreshCw, RotateCw, UserMinus } from "lucide-react";
 import { api, type InstanceInvitation, type InstanceMember, type MembershipStatus, type Role } from "../../lib/api-client";
-import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, PageHeader, Select, StatusBadge, formatDate } from "../../components/ui";
-
-const roles: { key: Role; label: string }[] = [
-  { key: "owner", label: "所有者 (Owner)" },
-  { key: "admin", label: "管理员 (Admin)" },
-  { key: "member", label: "协作成员 (Member)" },
-  { key: "viewer", label: "只读访客 (Viewer)" },
-];
+import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, PageHeader, Select, StatusBadge } from "../../components/ui";
+import { useI18n } from "../../lib/i18n/I18nContext";
 
 export function MembersView({ currentUserId, canManage }: { currentUserId: string; canManage: boolean }) {
+  const { t, formatDate } = useI18n();
   const [members, setMembers] = useState<InstanceMember[]>([]);
   const [invitations, setInvitations] = useState<InstanceInvitation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,6 +17,13 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
   // 确认对话框状态
   const [revokingInvitation, setRevokingInvitation] = useState<InstanceInvitation | null>(null);
   const [removingMember, setRemovingMember] = useState<InstanceMember | null>(null);
+
+  const roles: { key: Role; label: string }[] = [
+    { key: "owner", label: t.members.roleOwner },
+    { key: "admin", label: t.members.roleAdmin },
+    { key: "member", label: t.members.roleMember },
+    { key: "viewer", label: t.members.roleViewer },
+  ];
 
   async function load() {
     setLoading(true); setError(null);
@@ -78,46 +80,46 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="团队与协作"
-        title="团队成员"
-        description="管理当前实例的成员账号与角色权限，支持发起邀请及状态管理。"
+        eyebrow={t.members.eyebrow}
+        title={t.members.title}
+        description={t.members.description}
         action={
           <div className="button-row">
             <Button variant="secondary" loading={loading} onClick={() => void load()}>
-              <RefreshCw className="size-4" />刷新
+              <RefreshCw className="size-4" />{t.common.refresh}
             </Button>
             {canManage ? (
               <Button onClick={() => setInviteOpen(true)}>
-                <MailPlus className="size-4" />邀请成员
+                <MailPlus className="size-4" />{t.members.inviteMember}
               </Button>
             ) : null}
           </div>
         }
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
       {loading && members.length + invitations.length === 0 ? <LoadingState /> : (
         <>
           <Card>
             <div className="card-header">
               <div>
-                <p className="eyebrow">实例成员</p>
-                <h2>已加入成员</h2>
-                <p>实例所有者 (Owner) 可配置成员角色、暂停或移除成员访问权限。</p>
+                <p className="eyebrow">{t.members.membersEyebrow}</p>
+                <h2>{t.members.membersTitle}</h2>
+                <p>{t.members.membersDesc}</p>
               </div>
               <Badge>{members.length}</Badge>
             </div>
             {members.length === 0 ? (
-              <EmptyState title="暂无成员" description="实例所有者应在此处展示。" />
+              <EmptyState title={t.members.membersEmptyTitle} description={t.members.membersEmptyDesc} />
             ) : (
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>成员姓名 / 邮箱</th>
-                      <th>角色权限</th>
-                      <th>状态</th>
-                      <th>加入时间</th>
-                      <th>操作</th>
+                      <th>{t.members.tableColMember}</th>
+                      <th>{t.members.tableColRole}</th>
+                      <th>{t.members.tableColStatus}</th>
+                      <th>{t.members.tableColJoinedAt}</th>
+                      <th>{t.members.tableColActions}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -126,13 +128,13 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
                       return (
                         <tr key={member.userId}>
                           <td>
-                            <strong>{member.user.name}{isCurrent ? "（当前用户）" : ""}</strong>
+                            <strong>{member.user.name}{isCurrent ? t.members.currentUserSuffix : ""}</strong>
                             <small>{member.user.email}</small>
                           </td>
                           <td>
                             {canManage ? (
                               <Select
-                                aria-label={`${member.user.email} 的角色`}
+                                aria-label={t.members.memberRoleAriaLabel(member.user.email)}
                                 value={member.role}
                                 disabled={savingId === member.userId || member.status === "removed"}
                                 onChange={(event) => void updateMember(member, { role: event.target.value as Role })}
@@ -156,7 +158,7 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
                                     loading={savingId === member.userId}
                                     onClick={() => void updateMember(member, { status: "disabled" })}
                                   >
-                                    暂停
+                                    {t.members.btnSuspend}
                                   </Button>
                                 ) : (
                                   <Button
@@ -164,7 +166,7 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
                                     loading={savingId === member.userId}
                                     onClick={() => void updateMember(member, { status: "active" })}
                                   >
-                                    恢复
+                                    {t.members.btnResume}
                                   </Button>
                                 )}
                                 <Button
@@ -172,11 +174,11 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
                                   loading={savingId === member.userId}
                                   onClick={() => setRemovingMember(member)}
                                 >
-                                  <UserMinus className="size-4" />移除
+                                  <UserMinus className="size-4" />{t.members.btnRemoveMember}
                                 </Button>
                               </div>
                             ) : member.status === "removed" ? (
-                              <small>已移除（需重新邀请）</small>
+                              <small>{t.members.memberRemovedHint}</small>
                             ) : null}
                           </td>
                         </tr>
@@ -191,25 +193,25 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
           <Card>
             <div className="card-header">
               <div>
-                <p className="eyebrow">邀请记录</p>
-                <h2>待加入邀请</h2>
-                <p>通过邮件发送的实例邀请。重新发送将作废旧邀请链接并生成新的安全链接。</p>
+                <p className="eyebrow">{t.members.invitationsEyebrow}</p>
+                <h2>{t.members.invitationsSectionTitle}</h2>
+                <p>{t.members.invitationsSectionDesc}</p>
               </div>
               <Badge>{invitations.length}</Badge>
             </div>
             {invitations.length === 0 ? (
-              <EmptyState title="暂无待加入邀请" description="可以通过上方“邀请成员”按钮向团队成员发送邀请邮件。" />
+              <EmptyState title={t.members.invitationsEmptyTitle} description={t.members.invitationsEmptyDesc} />
             ) : (
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>受邀邮箱</th>
-                      <th>分配角色</th>
-                      <th>状态</th>
-                      <th>邮件投递</th>
-                      <th>链接有效期</th>
-                      <th>操作</th>
+                      <th>{t.members.tableColInvitedEmail}</th>
+                      <th>{t.members.tableColInvitedRole}</th>
+                      <th>{t.members.tableColStatus}</th>
+                      <th>{t.members.tableColEmailDelivery}</th>
+                      <th>{t.members.tableColExpiresAt}</th>
+                      <th>{t.members.tableColActions}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -231,14 +233,14 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
                                 loading={savingId === invitation.id}
                                 onClick={() => void resendInvitation(invitation)}
                               >
-                                <RotateCw className="size-4" />重发
+                                <RotateCw className="size-4" />{t.members.btnResend}
                               </Button>
                               <Button
                                 variant="danger"
                                 loading={savingId === invitation.id}
                                 onClick={() => setRevokingInvitation(invitation)}
                               >
-                                撤销
+                                {t.members.btnRevokeInvitation}
                               </Button>
                             </div>
                           ) : null}
@@ -253,9 +255,9 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
         </>
       )}
 
-      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="邀请新成员" description="受邀人将收到邀请邮件，通过邮件安全链接自行设置密码并加入当前实例。">
+      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title={t.members.modalInviteTitle} description={t.members.modalInviteDesc}>
         <form className="form-stack" onSubmit={invite}>
-          <Field label="成员邮箱">
+          <Field label={t.members.fieldEmail}>
             <Input
               type="email"
               value={inviteForm.email}
@@ -265,7 +267,7 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
               required
             />
           </Field>
-          <Field label="分配角色">
+          <Field label={t.members.fieldRole}>
             <Select
               value={inviteForm.role}
               onChange={(event) => setInviteForm({ ...inviteForm, role: event.target.value as Role })}
@@ -276,8 +278,8 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
             </Select>
           </Field>
           <div className="form-actions">
-            <Button variant="secondary" type="button" onClick={() => setInviteOpen(false)}>取消</Button>
-            <Button type="submit" loading={savingId === "invite"}>发送邀请</Button>
+            <Button variant="secondary" type="button" onClick={() => setInviteOpen(false)}>{t.common.cancel}</Button>
+            <Button type="submit" loading={savingId === "invite"}>{t.members.btnCreateInvite}</Button>
           </div>
         </form>
       </Modal>
@@ -288,9 +290,9 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
         onClose={() => setRevokingInvitation(null)}
         onConfirm={() => void handleRevokeInvitation()}
         loading={savingId === revokingInvitation?.id}
-        title="撤销成员邀请"
-        description={`确定撤销发给 ${revokingInvitation?.email || ""} 的邀请链接？撤销后该链接将立即失效。`}
-        confirmText="确认撤销"
+        title={t.members.modalRevokeConfirmTitle}
+        description={t.members.modalRevokeConfirmDesc(revokingInvitation?.email || "")}
+        confirmText={t.members.modalRevokeConfirmBtn}
         danger
       />
 
@@ -300,9 +302,9 @@ export function MembersView({ currentUserId, canManage }: { currentUserId: strin
         onClose={() => setRemovingMember(null)}
         onConfirm={() => void handleRemoveMember()}
         loading={savingId === removingMember?.userId}
-        title="移除团队成员"
-        description={`确定从当前实例移除成员 ${removingMember?.user.email || ""}？移除后该成员将无法访问本实例，重新加入需要重新发送邀请。`}
-        confirmText="确认移除"
+        title={t.members.modalRemoveMemberTitle}
+        description={t.members.modalRemoveMemberDesc(removingMember?.user.email || "")}
+        confirmText={t.members.modalRemoveMemberBtn}
         danger
       />
     </div>

@@ -49,7 +49,7 @@ export function InstanceView({ initialInstance }: { initialInstance: Instance })
           </Button>
         }
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
       {loading && !instance.id ? (
         <LoadingState />
       ) : (

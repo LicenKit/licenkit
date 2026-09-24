@@ -107,7 +107,7 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
     return (
       <SetupLayout step={step} title={t.setup.step1Title} description={t.setup.step1Description}>
         <form className="setup-card setup-card-compact" onSubmit={verifyToken}>
-          <ErrorPanel error={error} />
+          <ErrorPanel error={error} onClose={() => setError(null)} floating={false} />
           <Notice tone="info">
             <strong>{t.setup.step1NoticeTitle}</strong>
             <p>{t.setup.step1NoticeBody}</p>
@@ -146,7 +146,7 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
     return (
       <SetupLayout step={step} title={t.setup.step2Title} description={t.setup.step2Description}>
         <form className="setup-card setup-card-compact" onSubmit={collectUser}>
-          <ErrorPanel error={error} />
+          <ErrorPanel error={error} onClose={() => setError(null)} floating={false} />
           <div className="form-section">
             <div className="form-section-title">
               <UserRound className="size-5" />
@@ -210,7 +210,7 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
   return (
     <SetupLayout step={step} title={t.setup.step3Title} description={t.setup.step3Description}>
       <form className="setup-card setup-card-compact" onSubmit={completeSetup}>
-        <ErrorPanel error={error} />
+        <ErrorPanel error={error} onClose={() => setError(null)} floating={false} />
         <div className="form-section">
           <div className="form-section-title">
             <Building2 className="size-5" />

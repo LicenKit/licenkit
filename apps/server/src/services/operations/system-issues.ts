@@ -53,16 +53,27 @@ export function prepareSystemIssueUpsert(input: {
 export async function listSystemIssues(input: {
   db: D1Database;
   instanceId: string;
+  status?: string;
 }): Promise<{ items: Array<Record<string, unknown>> }> {
-  const result = await input.db.prepare(
-    `SELECT id, category, source_type, source_id, operation, error_code,
-            error_detail_json, status, occurrence_count, first_seen_at, last_seen_at,
-            processed_at, processed_by_user_id
-     FROM system_issues
-     WHERE instance_id = ?1
-     ORDER BY last_seen_at DESC, id DESC
-     LIMIT 200`,
-  ).bind(input.instanceId).all<Record<string, any>>();
+  const result = input.status
+    ? await input.db.prepare(
+        `SELECT id, category, source_type, source_id, operation, error_code,
+                error_detail_json, status, occurrence_count, first_seen_at, last_seen_at,
+                processed_at, processed_by_user_id
+         FROM system_issues
+         WHERE instance_id = ?1 AND status = ?2
+         ORDER BY last_seen_at DESC, id DESC
+         LIMIT 200`,
+      ).bind(input.instanceId, input.status).all<Record<string, any>>()
+    : await input.db.prepare(
+        `SELECT id, category, source_type, source_id, operation, error_code,
+                error_detail_json, status, occurrence_count, first_seen_at, last_seen_at,
+                processed_at, processed_by_user_id
+         FROM system_issues
+         WHERE instance_id = ?1
+         ORDER BY last_seen_at DESC, id DESC
+         LIMIT 200`,
+      ).bind(input.instanceId).all<Record<string, any>>();
   return {
     items: result.results.map((row) => ({
       id: row.id,

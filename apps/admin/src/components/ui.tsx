@@ -1,8 +1,9 @@
-import { Component, useEffect, useId, useRef, type ButtonHTMLAttributes, type ErrorInfo, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { Component, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ErrorInfo, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { createPortal } from "react-dom";
 import { AlertCircle, CheckCircle2, Info, Loader2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { ApiError, formatApiError } from "../lib/api-client";
-import { getCurrentLocale } from "../lib/i18n";
+import { useI18n, getCurrentLocale, dictionaries, type SupportedLocale } from "../lib/i18n";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -36,7 +37,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       const isEn = getCurrentLocale() === "en-US";
       return (
         <div className="card" style={{ margin: "1.5rem 0", padding: "1.5rem" }}>
-          <ErrorPanel error={this.state.error} title={this.props.fallbackTitle || (isEn ? "Failed to load view" : "页面加载出现异常")} />
+          <ErrorPanel error={this.state.error} title={this.props.fallbackTitle || (isEn ? "Failed to load view" : "页面加载出现异常")} floating={false} />
           <div style={{ marginTop: "1rem" }}>
             <Button variant="secondary" onClick={this.reset}>
               {isEn ? "Retry" : "重试加载"}
@@ -183,9 +184,7 @@ export function Modal({ open, title, description, children, onClose, wide = fals
             <h2 id={titleId}>{title}</h2>
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">
-            <X className="size-5" />
-          </button>
+          <ModalCloseButton onClose={onClose} />
         </header>
         <div className="modal-body">{children}</div>
       </section>
@@ -193,26 +192,86 @@ export function Modal({ open, title, description, children, onClose, wide = fals
   );
 }
 
-export function ErrorPanel({ error, title = "请求失败" }: { error: unknown; title?: string }) {
-  if (!error) return null;
+function ModalCloseButton({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
+  return (
+    <button className="icon-button" type="button" onClick={onClose} aria-label={t.common.close}>
+      <X className="size-5" />
+    </button>
+  );
+}
+
+export interface ErrorPanelProps {
+  error: unknown;
+  title?: string;
+  onClose?: () => void;
+  floating?: boolean;
+}
+
+export function ErrorPanel({ error, title, onClose, floating = true }: ErrorPanelProps) {
+  const { t } = useI18n();
+  const [dismissedError, setDismissedError] = useState<unknown>(null);
+  const [prevError, setPrevError] = useState<unknown>(error);
+
+  if (prevError !== error) {
+    setPrevError(error);
+    setDismissedError(null);
+  }
+
+  if (!error || error === dismissedError) return null;
+  const panelTitle = title ?? t.common.unknownError;
   const apiError = error instanceof ApiError ? error : null;
   const codedError = error instanceof Error && "code" in error && typeof error.code === "string" ? error : null;
   const details = apiError?.details ?? (codedError && "details" in codedError ? codedError.details : undefined);
   const message = apiError ? formatApiError(apiError) : codedError ? `${codedError.code}: ${codedError.message}` : formatApiError(error);
-  return (
-    <div className="notice notice-error" role="alert">
+
+  const handleClose = () => {
+    setDismissedError(error);
+    onClose?.();
+  };
+
+  const content = (
+    <>
       <AlertCircle className="size-5 shrink-0" />
       <div className="min-w-0">
-        <strong>{title}</strong>
+        <strong>{panelTitle}</strong>
         <p>{message}</p>
         {details !== undefined ? (
           <details>
-            <summary>查看原始错误详情</summary>
+            <summary>{t.common.viewRawError}</summary>
             <pre>{safeJson(details)}</pre>
           </details>
         ) : null}
         {apiError ? <p className="diagnostic-line">HTTP {apiError.status} · {apiError.method} {apiError.path}</p> : null}
       </div>
+      <button
+        type="button"
+        className={floating ? "floating-error-close" : "notice-close"}
+        onClick={handleClose}
+        aria-label={t.common.close}
+      >
+        <X className="size-4" />
+      </button>
+    </>
+  );
+
+  if (floating) {
+    const portalElement = (
+      <div className="floating-error-portal">
+        <div className="floating-error-panel" role="alert">
+          {content}
+        </div>
+      </div>
+    );
+    if (typeof document !== "undefined" && document.body) {
+      return createPortal(portalElement, document.body);
+    }
+    return portalElement;
+  }
+
+  return (
+    <div className="notice notice-error has-close" role="alert">
+      {content}
     </div>
   );
 }
@@ -222,8 +281,9 @@ export function Notice({ children, tone = "info" }: { children: ReactNode; tone?
   return <div className={clsx("notice", `notice-${tone}`)} role={tone === "success" ? "status" : undefined} aria-live={tone === "success" ? "polite" : undefined}><Icon className="size-5 shrink-0" /><div>{children}</div></div>;
 }
 
-export function LoadingState({ label = "正在加载" }: { label?: string }) {
-  return <div className="state-panel" role="status" aria-live="polite"><Loader2 aria-hidden="true" className="size-5 animate-spin" /><span>{label}</span></div>;
+export function LoadingState({ label }: { label?: string }) {
+  const { t } = useI18n();
+  return <div className="state-panel" role="status" aria-live="polite"><Loader2 aria-hidden="true" className="size-5 animate-spin" /><span>{label ?? t.common.loading}</span></div>;
 }
 
 export function EmptyState({ title, description, action }: { title: string; description: string; action?: ReactNode }) {
@@ -245,28 +305,32 @@ export function formatDate(value?: string | null, locale?: string): string {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(targetLocale, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-export function CopyValue({ value, label = "复制" }: { value: string; label?: string }) {
-  return <Button type="button" variant="secondary" onClick={() => void navigator.clipboard.writeText(value)}>{label}</Button>;
+export function CopyValue({ value, label }: { value: string; label?: string }) {
+  const { t } = useI18n();
+  return <Button type="button" variant="secondary" onClick={() => void navigator.clipboard.writeText(value)}>{label ?? t.common.copy}</Button>;
 }
 
-export function formatDurationSeconds(seconds?: number | null): string {
+export function formatDurationSeconds(seconds?: number | null, locale?: string): string {
   if (seconds === undefined || seconds === null) return "—";
-  if (seconds === 0) return "0 秒";
+  const targetLocale = (locale || getCurrentLocale()) as SupportedLocale;
+  const dict = dictionaries[targetLocale] || dictionaries["zh-CN"];
+  const d = dict.common.duration;
+  if (seconds === 0) return d.seconds(0);
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const remainingSeconds = seconds % 60;
 
   if (days > 0 && hours === 0 && minutes === 0 && remainingSeconds === 0) {
-    return `${days} 天 (${seconds} 秒)`;
+    return d.days(days, seconds);
   }
   if (hours > 0 && days === 0 && minutes === 0 && remainingSeconds === 0) {
-    return `${hours} 小时 (${seconds} 秒)`;
+    return d.hours(hours, seconds);
   }
   if (minutes > 0 && days === 0 && hours === 0 && remainingSeconds === 0) {
-    return `${minutes} 分钟 (${seconds} 秒)`;
+    return d.minutes(minutes, seconds);
   }
-  return `${seconds} 秒`;
+  return d.seconds(seconds);
 }
 
 export function ConfirmModal({
@@ -275,7 +339,7 @@ export function ConfirmModal({
   description,
   confirmLabel,
   confirmText,
-  cancelLabel = "取消",
+  cancelLabel,
   variant,
   danger = false,
   loading = false,
@@ -296,8 +360,10 @@ export function ConfirmModal({
   onClose: () => void;
   children?: ReactNode;
 }) {
+  const { t } = useI18n();
   const resolvedVariant = variant ?? (danger ? "danger" : "primary");
-  const resolvedConfirmLabel = confirmText ?? confirmLabel ?? "确认";
+  const resolvedCancelLabel = cancelLabel ?? t.common.cancel;
+  const resolvedConfirmLabel = confirmText ?? confirmLabel ?? t.common.confirm;
   return (
     <Modal open={open} onClose={onClose} title={title}>
       <div className="form-stack">
@@ -313,7 +379,7 @@ export function ConfirmModal({
         {children}
         <div className="form-actions">
           <Button variant="secondary" type="button" onClick={onClose} disabled={loading}>
-            {cancelLabel}
+            {resolvedCancelLabel}
           </Button>
           <Button variant={resolvedVariant} type="button" loading={loading} onClick={() => void onConfirm()}>
             {resolvedConfirmLabel}
@@ -397,13 +463,20 @@ export function Drawer({
             <h2 id={titleId}>{title}</h2>
             {description ? <div id={descriptionId} className="drawer-description">{description}</div> : null}
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">
-            <X className="size-5" />
-          </button>
+          <DrawerCloseButton onClose={onClose} />
         </header>
         <div className="drawer-body">{children}</div>
       </aside>
     </div>
+  );
+}
+
+function DrawerCloseButton({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
+  return (
+    <button className="icon-button" type="button" onClick={onClose} aria-label={t.common.close}>
+      <X className="size-5" />
+    </button>
   );
 }
 
@@ -420,13 +493,14 @@ export function PaginationBar({
   onPageChange: (page: number) => void;
   loading?: boolean;
 }) {
+  const { t } = useI18n();
   if (totalPages <= 1 && (totalItems === undefined || totalItems <= 0)) return null;
 
   return (
     <div className="pagination-bar">
       <div className="pagination-info">
-        <span>第 <strong>{page}</strong> / <strong>{Math.max(1, totalPages)}</strong> 页</span>
-        {totalItems !== undefined ? <span className="pagination-total">（共 {totalItems} 条）</span> : null}
+        <span>{t.common.pagination.pageInfo(page, Math.max(1, totalPages))}</span>
+        {totalItems !== undefined ? <span className="pagination-total">（{t.common.pagination.totalItems(totalItems)}）</span> : null}
       </div>
       <div className="button-row">
         <Button
@@ -434,14 +508,14 @@ export function PaginationBar({
           disabled={page <= 1 || loading}
           onClick={() => onPageChange(page - 1)}
         >
-          上一页
+          {t.common.pagination.prev}
         </Button>
         <Button
           variant="secondary"
           disabled={page >= totalPages || loading}
           onClick={() => onPageChange(page + 1)}
         >
-          下一页
+          {t.common.pagination.next}
         </Button>
       </div>
     </div>

@@ -18,14 +18,65 @@ function mutationGuards() {
 }
 
 adminCustomersRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
-  const result = await c.env.DB
+  const queryInput = z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    status: z.enum(["active", "disabled"]).optional(),
+    query: z.string().optional(),
+  }).strict().parse(c.req.query());
+
+  const page = Math.max(1, Number.parseInt(queryInput.page ?? "1", 10) || 1);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(queryInput.limit ?? "20", 10) || 20));
+  const offset = (page - 1) * limit;
+
+  const instanceId = c.get("instanceId")!;
+  const conditions: string[] = ["instance_id = ?1"];
+  const bindings: unknown[] = [instanceId];
+  let bindIndex = 2;
+
+  if (queryInput.status) {
+    conditions.push(`status = ?${bindIndex++}`);
+    bindings.push(queryInput.status);
+  }
+
+  const search = queryInput.query?.trim();
+  if (search) {
+    conditions.push(`(email LIKE ?${bindIndex} OR name LIKE ?${bindIndex} OR id = ?${bindIndex + 1})`);
+    bindings.push(`%${search}%`, search);
+    bindIndex += 2;
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const countResult = await c.env.DB
+    .prepare(`SELECT COUNT(*) AS total FROM customers WHERE ${whereClause}`)
+    .bind(...bindings)
+    .all<{ total: number }>();
+  const totalItems = Number(countResult.results[0]?.total ?? 0);
+
+  const itemsResult = await c.env.DB
     .prepare(
       `SELECT id, email, name, status, created_at, updated_at
-       FROM customers WHERE instance_id = ?1 ORDER BY created_at DESC`
+       FROM customers
+       WHERE ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ?${bindIndex++} OFFSET ?${bindIndex++}`
     )
-    .bind(c.get("instanceId")!)
+    .bind(...bindings, limit, offset)
     .all();
-  return c.json({ success: true, data: { items: result.results } });
+
+  return c.json({
+    success: true,
+    data: {
+      items: itemsResult.results,
+      pagination: {
+        page,
+        limit,
+        total: totalItems,
+        total_pages: Math.ceil(totalItems / limit),
+      },
+    },
+  });
 });
 
 adminCustomersRouter.get("/:customerId", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {

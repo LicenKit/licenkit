@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   RefreshCw,
   Search,
@@ -21,12 +21,14 @@ import {
   Modal,
   Notice,
   PageHeader,
+  PaginationBar,
   Select,
   StatusBadge,
-  formatDate,
 } from "../../components/ui";
+import { useI18n } from "../../lib/i18n";
 
 export function CustomersView({ canManage }: { canManage: boolean }) {
+  const { t, formatDate } = useI18n();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [licenses, setLicenses] = useState<License[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -35,7 +37,10 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  // 过滤状态
+  // 服务端分页与过滤状态
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
 
@@ -49,12 +54,26 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
 
   const selected = customers.find((customer) => customer.id === selectedId) ?? null;
 
-  async function load() {
+  async function load(targetPage = page) {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.admin.customers.list({ limit: 100 });
+      const result = await api.admin.customers.list({
+        page: targetPage,
+        limit: 20,
+        status: statusFilter || undefined,
+        query: searchQuery.trim() || undefined,
+      });
       setCustomers(result.items);
+      if (result.pagination) {
+        setPage(result.pagination.page);
+        setTotalPages(result.pagination.totalPages);
+        setTotalItems(result.pagination.total);
+      } else {
+        setPage(targetPage);
+        setTotalPages(1);
+        setTotalItems(result.items.length);
+      }
     } catch (caught) {
       setError(caught);
     } finally {
@@ -63,8 +82,13 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
   }
 
   useEffect(() => {
-    void load();
-  }, []);
+    void load(1);
+  }, [statusFilter]);
+
+  function handleSearchSubmit(event: FormEvent) {
+    event.preventDefault();
+    void load(1);
+  }
 
   useEffect(() => {
     if (!selected) {
@@ -80,20 +104,6 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
       .finally(() => setLicensesLoading(false));
   }, [selectedId, selected?.updatedAt]);
 
-  const filteredCustomers = useMemo(() => {
-    return customers.filter((c) => {
-      if (statusFilter && c.status !== statusFilter) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        const matchesEmail = c.email.toLowerCase().includes(q);
-        const matchesName = c.name?.toLowerCase().includes(q) ?? false;
-        const matchesId = c.id.toLowerCase().includes(q);
-        if (!matchesEmail && !matchesName && !matchesId) return false;
-      }
-      return true;
-    });
-  }, [customers, statusFilter, searchQuery]);
-
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!selected) return;
@@ -105,7 +115,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
         email: form.email.trim(),
       });
       setEditOpen(false);
-      await load();
+      await load(page);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -121,7 +131,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
       if (selected.status === "active") await api.admin.customers.disable(selected.id);
       else await api.admin.customers.enable(selected.id);
       setConfirmToggleStatus(false);
-      await load();
+      await load(page);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -146,105 +156,121 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="客户身份"
-        title="客户管理"
-        description="管理通过在线购买或手动签发建立的客户档案，支持查看名下授权、更新联系邮箱及登录状态控制。"
+        eyebrow={t.customers.eyebrow}
+        title={t.customers.title}
+        description={t.customers.description}
         action={
-          <Button variant="secondary" onClick={() => void load()} loading={loading}>
-            <RefreshCw className="size-4" />刷新
+          <Button variant="secondary" onClick={() => void load(page)} loading={loading}>
+            <RefreshCw className="size-4" />{t.common.refresh}
           </Button>
         }
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
 
       <Card>
         {/* 顶部过滤栏 */}
         <div className="filter-bar">
-          <div className="filter-group">
+          <form className="filter-group" onSubmit={handleSearchSubmit}>
             <div className="filter-search">
               <Input
-                placeholder="按邮箱、姓名或 Customer ID 搜索..."
+                placeholder={t.customers.filterSearchPlaceholder}
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
             </div>
+            <Button variant="secondary" type="submit">
+              <Search className="size-4" />{t.common.actions}
+            </Button>
+          </form>
+
+          <div className="filter-group">
             <Select
               className="filter-select"
-              aria-label="按状态过滤"
+              aria-label={t.customers.filterAllStatuses}
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
             >
-              <option value="">全部状态</option>
-              <option value="active">正常</option>
-              <option value="disabled">已禁用</option>
+              <option value="">{t.customers.filterAllStatuses}</option>
+              <option value="active">{t.customers.filterStatusActive}</option>
+              <option value="disabled">{t.customers.filterStatusDisabled}</option>
             </Select>
           </div>
-          <Badge>{filteredCustomers.length} 位客户</Badge>
+          <Badge>{t.customers.totalCustomersCount(totalItems)}</Badge>
         </div>
 
         {loading && customers.length === 0 ? (
-          <LoadingState label="正在加载客户数据" />
-        ) : filteredCustomers.length === 0 ? (
+          <LoadingState />
+        ) : customers.length === 0 ? (
           <EmptyState
-            title={customers.length === 0 ? "暂无客户档案" : "未找到匹配的客户"}
-            description={customers.length === 0 ? "当发生首次在线购买或手动签发授权时，系统将自动建立客户档案。" : "请尝试更换搜索关键字或清除过滤条件。"}
+            title={totalItems === 0 && !searchQuery && !statusFilter ? t.customers.emptyTitleInitial : t.customers.emptyTitleSearch}
+            description={totalItems === 0 && !searchQuery && !statusFilter ? t.customers.emptyDescInitial : t.customers.emptyDescSearch}
           />
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>客户</th>
-                  <th>联系邮箱</th>
-                  <th>状态</th>
-                  <th>创建时间</th>
-                  <th>最近更新</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCustomers.map((customer) => (
-                  <tr
-                    key={customer.id}
-                    className="clickable-row"
-                    onClick={() => setSelectedId(customer.id)}
-                  >
-                    <td>
-                      <div className="button-row">
-                        <span className="avatar">
-                          <UserRound className="size-4" />
-                        </span>
-                        <div>
-                          <strong>{customer.name || customer.email}</strong>
-                          <small className="mono">{customer.id}</small>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <span>{customer.email}</span>
-                    </td>
-                    <td>
-                      <StatusBadge status={customer.status} />
-                    </td>
-                    <td>
-                      <span>{formatDate(customer.createdAt)}</span>
-                    </td>
-                    <td>
-                      <span>{formatDate(customer.updatedAt)}</span>
-                    </td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        variant="ghost"
-                        onClick={() => setSelectedId(customer.id)}
-                      >
-                        详情
-                      </Button>
-                    </td>
+          <>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t.customers.tableColCustomer}</th>
+                    <th>{t.customers.tableColEmail}</th>
+                    <th>{t.customers.tableColStatus}</th>
+                    <th>{t.customers.tableColCreatedAt}</th>
+                    <th>{t.customers.tableColUpdatedAt}</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {customers.map((customer) => (
+                    <tr
+                      key={customer.id}
+                      className="clickable-row"
+                      onClick={() => setSelectedId(customer.id)}
+                    >
+                      <td>
+                        <div className="button-row">
+                          <span className="avatar">
+                            <UserRound className="size-4" />
+                          </span>
+                          <div>
+                            <strong>{customer.name || customer.email}</strong>
+                            <small className="mono">{customer.id}</small>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span>{customer.email}</span>
+                      </td>
+                      <td>
+                        <StatusBadge status={customer.status} />
+                      </td>
+                      <td>
+                        <span>{formatDate(customer.createdAt)}</span>
+                      </td>
+                      <td>
+                        <span>{formatDate(customer.updatedAt)}</span>
+                      </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          variant="ghost"
+                          onClick={() => setSelectedId(customer.id)}
+                        >
+                          {t.common.details}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <PaginationBar
+              page={page}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              onPageChange={(newPage) => void load(newPage)}
+              loading={loading}
+            />
+          </>
         )}
       </Card>
 
@@ -252,8 +278,8 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
       <Drawer
         open={Boolean(selectedId)}
         onClose={() => setSelectedId(null)}
-        title={selected?.name || selected?.email || "客户详情"}
-        description={selected ? `客户编号：${selected.id}` : undefined}
+        title={selected?.name || selected?.email || t.customers.drawerTitle}
+        description={selected ? `${t.customers.detailId}：${selected.id}` : undefined}
         wide
       >
         {selected ? (
@@ -261,7 +287,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">客户概要</p>
+                  <p className="eyebrow">{t.customers.drawerEyebrow}</p>
                   <h2>{selected.name || selected.email}</h2>
                   <p className="mono">{selected.id}</p>
                 </div>
@@ -269,35 +295,29 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
               </div>
               <div className="metric-grid compact">
                 <div>
-                  <span>联系邮箱</span>
+                  <span>{t.customers.detailEmail}</span>
                   <strong>{selected.email}</strong>
                 </div>
                 <div>
-                  <span>名下授权数</span>
+                  <span>{t.customers.detailLicensesCount}</span>
                   <strong>{licenses.length}</strong>
                 </div>
                 <div>
-                  <span>创建时间</span>
+                  <span>{t.customers.tableColCreatedAt}</span>
                   <strong>{formatDate(selected.createdAt)}</strong>
                 </div>
                 <div>
-                  <span>最近更新</span>
+                  <span>{t.customers.tableColUpdatedAt}</span>
                   <strong>{formatDate(selected.updatedAt)}</strong>
                 </div>
               </div>
-              <Notice tone="info">
-                <strong>联系邮箱安全说明</strong>
-                <p>
-                  修改客户主邮箱后，原邮箱的所有登录状态将立即失效；名下已激活的有效授权不受影响。
-                </p>
-              </Notice>
               {canManage ? (
                 <div className="button-row wrap">
                   <Button variant="secondary" onClick={() => setEditOpen(true)}>
-                    编辑联系信息
+                    {t.customers.btnEditCustomer}
                   </Button>
                   <Button variant="secondary" loading={saving} onClick={() => setConfirmRevokeSessions(true)}>
-                    <ShieldOff className="size-4" />强制退出登录
+                    <ShieldOff className="size-4" />{t.customers.btnRevokeSessions}
                   </Button>
                   <Button
                     variant={selected.status === "active" ? "danger" : "secondary"}
@@ -309,7 +329,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                     ) : (
                       <UserRoundCheck className="size-4" />
                     )}
-                    {selected.status === "active" ? "禁用客户" : "启用客户"}
+                    {selected.status === "active" ? t.customers.btnDisableCustomer : t.customers.btnEnableCustomer}
                   </Button>
                 </div>
               ) : null}
@@ -318,25 +338,25 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">授权归属</p>
-                  <h2>名下授权</h2>
-                  <p>查看此客户账号拥有的所有软件授权及其有效状态。</p>
+                  <p className="eyebrow">{t.customers.licensesSectionTitle}</p>
+                  <h2>{t.customers.licensesSectionTitle}</h2>
+                  <p>{t.customers.licensesSectionDesc}</p>
                 </div>
                 <Badge>{licenses.length}</Badge>
               </div>
               {licensesLoading ? (
-                <LoadingState label="正在读取名下授权" />
+                <LoadingState />
               ) : licenses.length === 0 ? (
-                <EmptyState title="暂无授权记录" description="该客户当前名下没有关联的软件授权。" />
+                <EmptyState title={t.customers.licensesEmptyTitle} description={t.customers.licensesEmptyDesc} />
               ) : (
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>产品</th>
-                        <th>授权模型与续期</th>
-                        <th>状态</th>
-                        <th>到期时间</th>
+                        <th>{t.licenses.tableColProductPlan}</th>
+                        <th>{t.licensePlans.fieldModel}</th>
+                        <th>{t.licenses.tableColStatus}</th>
+                        <th>{t.licenses.tableColExpiresAt}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -347,8 +367,8 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                             <small className="mono">{license.id}</small>
                           </td>
                           <td>
-                            <span>{license.licenseModel === "perpetual" ? "永久买断" : license.licenseModel === "fixed_term" ? "固定期限" : "周期订阅"}</span>
-                            <small>{license.renewalMode === "billing" ? "自动续费" : "手动续期"}</small>
+                            <span>{license.licenseModel === "perpetual" ? t.licensePlans.modelPerpetual : license.licenseModel === "fixed_term" ? t.licensePlans.modelFixedTerm : t.licensePlans.modelSubscription}</span>
+                            <small>{license.renewalMode === "billing" ? "Paddle" : "Manual"}</small>
                           </td>
                           <td>
                             <StatusBadge status={license.status} />
@@ -365,7 +385,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
             </Card>
           </div>
         ) : (
-          <LoadingState label="正在加载客户详情" />
+          <LoadingState />
         )}
       </Drawer>
 
@@ -373,18 +393,18 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
       <Modal
         open={editOpen}
         onClose={() => setEditOpen(false)}
-        title="编辑客户联系信息"
-        description="修改客户的姓名与主要联系邮箱。邮箱在系统内需保持唯一。"
+        title={t.customers.modalEditTitle}
+        description={t.customers.modalEditDesc}
       >
         <form className="form-stack" onSubmit={save}>
-          <Field label="客户姓名">
+          <Field label={t.customers.fieldName}>
             <Input
               value={form.name}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
-              placeholder="例如：张三 / Acme Inc."
+              placeholder="Name..."
             />
           </Field>
-          <Field label="联系邮箱">
+          <Field label={t.customers.fieldEmail}>
             <Input
               type="email"
               value={form.email}
@@ -395,10 +415,10 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
           </Field>
           <div className="form-actions">
             <Button variant="secondary" type="button" onClick={() => setEditOpen(false)}>
-              取消
+              {t.common.cancel}
             </Button>
             <Button type="submit" loading={saving}>
-              保存修改
+              {t.common.save}
             </Button>
           </div>
         </form>
@@ -410,9 +430,9 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
         onClose={() => setConfirmRevokeSessions(false)}
         onConfirm={() => void handleRevokeSessions()}
         loading={saving}
-        title="强制退出客户登录"
-        description={`确定强制退出客户“${selected?.email || ""}”的所有登录状态并失效未使用的登录链接？客户下次需重新通过邮箱验证登录。`}
-        confirmText="确认退出登录"
+        title={t.customers.modalRevokeSessionsTitle}
+        description={t.customers.modalRevokeSessionsDesc(selected?.email || "")}
+        confirmText={t.customers.btnRevokeSessions}
         danger
       />
 
@@ -422,13 +442,9 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
         onClose={() => setConfirmToggleStatus(false)}
         onConfirm={() => void handleToggleStatus()}
         loading={saving}
-        title={selected?.status === "active" ? "禁用客户账号" : "启用客户账号"}
-        description={
-          selected?.status === "active"
-            ? `确定禁用客户“${selected?.email || ""}”？禁用后客户将无法登录自助门户，现存登录状态将立即失效。已签发授权本身不会自动暂停。`
-            : `确定重新启用客户“${selected?.email || ""}”？启用后客户可重新接收登录凭证并访问门户。`
-        }
-        confirmText={selected?.status === "active" ? "确认禁用" : "确认启用"}
+        title={t.customers.modalToggleStatusTitle(selected?.status === "active" ? "disable" : "enable")}
+        description={t.customers.modalToggleStatusDesc(selected?.status === "active" ? "disable" : "enable", selected?.email || "")}
+        confirmText={selected?.status === "active" ? t.customers.btnDisableCustomer : t.customers.btnEnableCustomer}
         danger={selected?.status === "active"}
       />
     </div>

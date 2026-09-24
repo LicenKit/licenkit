@@ -63,7 +63,7 @@ export function App() {
           <ServerCrash className="size-8" />
           <h1>{t.auth.connectionFailedTitle}</h1>
           <p>{t.auth.connectionFailedDescription}</p>
-          <ErrorPanel error={bootstrapError} />
+          <ErrorPanel error={bootstrapError} floating={false} />
           <Button onClick={() => void bootstrap()}>
             <RefreshCw className="size-4" />{t.auth.reconnectButton}
           </Button>

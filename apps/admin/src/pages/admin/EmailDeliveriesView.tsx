@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Ban, RefreshCw, Search } from "lucide-react";
 import {
   api,
@@ -20,33 +20,24 @@ import {
   ConfirmModal,
   EmptyState,
   ErrorPanel,
-  Field,
   Input,
   LoadingState,
   Notice,
-  PageHeader,
+  PaginationBar,
   Select,
   StatusBadge,
-  formatDate,
   safeJson,
 } from "../../components/ui";
-
-const STATUS_OPTIONS: Array<{ label: string; value: DeliveryStatus | "all" }> = [
-  { label: "全部状态", value: "all" },
-  { label: "等待配置", value: "waiting_configuration" },
-  { label: "待发送", value: "pending" },
-  { label: "处理中", value: "processing" },
-  { label: "重试排队", value: "retry_scheduled" },
-  { label: "已送达", value: "accepted" },
-  { label: "失败", value: "failed" },
-  { label: "已取消", value: "cancelled" },
-  { label: "已过期", value: "expired" },
-];
+import { useI18n } from "../../lib/i18n";
 
 export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
+  const { t, formatDate } = useI18n();
   const [deliveries, setDeliveries] = useState<EmailDelivery[]>([]);
   const [statusFilter, setStatusFilter] = useState<DeliveryStatus | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -54,13 +45,39 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
   const [retryConfirmTarget, setRetryConfirmTarget] = useState<{ delivery: EmailDelivery; duplicate: boolean } | null>(null);
   const [cancelConfirmTarget, setCancelConfirmTarget] = useState<EmailDelivery | null>(null);
 
-  async function load(selectedStatus = statusFilter) {
+  const statusOptions: Array<{ label: string; value: DeliveryStatus | "all" }> = [
+    { label: t.email.filterAllStatuses, value: "all" },
+    { label: t.email.statusWaitingConfig, value: "waiting_configuration" },
+    { label: t.email.statusPending, value: "pending" },
+    { label: t.email.statusProcessing, value: "processing" },
+    { label: t.email.statusRetryScheduled, value: "retry_scheduled" },
+    { label: t.email.statusAccepted, value: "accepted" },
+    { label: t.email.statusFailed, value: "failed" },
+    { label: t.email.statusCancelled, value: "cancelled" },
+    { label: t.email.statusExpired, value: "expired" },
+  ];
+
+  async function load(targetPage = page, selectedStatus = statusFilter) {
     setLoading(true);
     setError(null);
     try {
       const queryStatus = selectedStatus === "all" ? undefined : selectedStatus;
-      const result = await api.admin.emailDeliveries.list(queryStatus);
+      const result = await api.admin.emailDeliveries.list({
+        page: targetPage,
+        limit: 20,
+        status: queryStatus,
+        query: searchQuery.trim() || undefined,
+      });
       setDeliveries(result.items);
+      if (result.pagination) {
+        setPage(result.pagination.page);
+        setTotalPages(result.pagination.totalPages);
+        setTotalItems(result.pagination.total);
+      } else {
+        setPage(targetPage);
+        setTotalPages(1);
+        setTotalItems(result.items.length);
+      }
     } catch (caught) {
       setError(caught);
     } finally {
@@ -69,21 +86,13 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
   }
 
   useEffect(() => {
-    void load(statusFilter);
+    void load(1, statusFilter);
   }, [statusFilter]);
 
-  const filteredDeliveries = useMemo(() => {
-    if (!searchQuery.trim()) return deliveries;
-    const q = searchQuery.trim().toLowerCase();
-    return deliveries.filter((item) => {
-      return (
-        item.id.toLowerCase().includes(q) ||
-        item.recipientEmail.toLowerCase().includes(q) ||
-        (item.providerMessageId?.toLowerCase().includes(q) ?? false) ||
-        item.notificationType.toLowerCase().includes(q)
-      );
-    });
-  }, [deliveries, searchQuery]);
+  function handleSearchSubmit(event: FormEvent) {
+    event.preventDefault();
+    void load(1);
+  }
 
   async function handleConfirmRetry() {
     if (!retryConfirmTarget) return;
@@ -93,7 +102,7 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
     try {
       await api.admin.emailDeliveries.retry(delivery.id, duplicate);
       setRetryConfirmTarget(null);
-      await load();
+      await load(page);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -108,7 +117,7 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
     try {
       await api.admin.emailDeliveries.cancel(cancelConfirmTarget.id);
       setCancelConfirmTarget(null);
-      await load();
+      await load(page);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -118,166 +127,178 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
 
   return (
     <div className="page-stack">
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
 
       <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">邮件服务</p>
-            <h2>投递记录</h2>
-            <p>追踪系统外发邮件的处理进度、重发队列与最终投递结果。</p>
+            <p className="eyebrow">{t.email.deliveriesEyebrow}</p>
+            <h2>{t.email.deliveriesTitle}</h2>
+            <p>{t.email.deliveriesDesc}</p>
           </div>
           <div className="button-row">
-            <Button variant="secondary" loading={loading} onClick={() => void load()}>
-              <RefreshCw className="size-4" />刷新
+            <Button variant="secondary" loading={loading} onClick={() => void load(page)}>
+              <RefreshCw className="size-4" />{t.common.refresh}
             </Button>
           </div>
         </div>
 
         {deliveries.length > 0 ? (
           <Notice tone="info">
-            <strong>重发说明</strong>
-            <p>手动重发将使用当前通道配置重新发送。若上次发送结果未明，重发可能导致收件人收到重复邮件，请确认后操作。</p>
+            <strong>{t.email.resendNoticeTitle}</strong>
+            <p>{t.email.resendNoticeDesc}</p>
           </Notice>
         ) : null}
 
         {/* 顶部搜索与状态过滤栏 */}
         <div className="filter-bar">
-          <div className="filter-group">
+          <form className="filter-group" onSubmit={handleSearchSubmit}>
             <div className="filter-search">
               <Input
-                placeholder="搜索收件人邮箱或投递 ID..."
+                placeholder={t.email.filterSearchPlaceholder}
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
+              <Button type="submit" variant="secondary" aria-label={t.common.actions}>
+                <Search className="size-4" />
+              </Button>
             </div>
             <Select
               className="filter-select"
-              aria-label="按投递状态筛选"
+              aria-label={t.email.filterAllStatuses}
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as DeliveryStatus | "all")}
             >
-              {STATUS_OPTIONS.map((option) => (
+              {statusOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
               ))}
             </Select>
-          </div>
-          <Badge>{filteredDeliveries.length} 条记录</Badge>
+          </form>
+          <Badge>{t.email.totalDeliveriesCount(totalItems)}</Badge>
         </div>
 
         {loading && deliveries.length === 0 ? (
-          <LoadingState label="正在读取邮件投递记录" />
-        ) : filteredDeliveries.length === 0 ? (
+          <LoadingState />
+        ) : deliveries.length === 0 ? (
           <EmptyState
             title={
               searchQuery.trim()
-                ? "未找到匹配的投递记录"
+                ? t.email.emptyDeliveriesSearchTitle
                 : statusFilter === "all"
-                ? "暂无邮件投递记录"
-                : `暂无“${STATUS_OPTIONS.find((opt) => opt.value === statusFilter)?.label}”状态的记录`
+                ? t.email.emptyDeliveriesTitle
+                : t.email.emptyDeliveriesStatusTitle(statusOptions.find((opt) => opt.value === statusFilter)?.label || "")
             }
             description={
               searchQuery.trim()
-                ? "请尝试更换搜索关键字或清除过滤条件。"
-                : "签发授权码、发送验证链接或系统重置时产生的邮件将显示在此处。"
+                ? t.email.emptyDeliveriesSearchDesc
+                : t.email.emptyDeliveriesDesc
             }
           />
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>投递 ID</th>
-                  <th>收件人</th>
-                  <th>邮件类型</th>
-                  <th>投递状态</th>
-                  <th>重试次数</th>
-                  <th>时间</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredDeliveries.map((delivery) => (
-                  <tr key={delivery.id}>
-                    <td>
-                      <strong>{delivery.id}</strong>
-                      <small>{delivery.providerMessageId || "—"}</small>
-                    </td>
-                    <td>
-                      {deliveryRecipientLabel(delivery)}
-                      <small>{delivery.recipientEmail}</small>
-                    </td>
-                    <td>
-                      {delivery.notificationType}
-                      <small>v{delivery.contractVersion}</small>
-                    </td>
-                    <td>
-                      <StatusBadge status={delivery.status} label={deliveryStatusLabel(delivery.status)} />
-                      <small>{deliveryStatusExplanation(delivery.status)}</small>
-                    </td>
-                    <td>{delivery.attemptCount}</td>
-                    <td>
-                      {delivery.nextAttemptAt ? formatDate(delivery.nextAttemptAt) : formatDate(delivery.createdAt)}
-                      {delivery.sendExpiresAt && delivery.status !== "accepted" ? (
-                        <small>最晚发送 {formatDate(delivery.sendExpiresAt)}</small>
-                      ) : null}
-                      {delivery.variablesExpiresAt ? (
-                        <small>敏感内容保留至 {formatDate(delivery.variablesExpiresAt)}</small>
-                      ) : !delivery.sendExpiresAt && !["accepted", "expired", "cancelled"].includes(delivery.status) ? (
-                        <small>发送成功前保留内容</small>
-                      ) : null}
-                    </td>
-                    <td>
-                      <div className="button-row wrap">
-                        {canManage && canRetryDelivery(delivery) ? (
-                          <Button
-                            variant={mayDuplicateOnResend(delivery) ? "danger" : "secondary"}
-                            loading={saving}
-                            onClick={() => {
-                              const duplicate = mayDuplicateOnResend(delivery);
-                              if (duplicate) {
-                                setRetryConfirmTarget({ delivery, duplicate: true });
-                              } else {
-                                void api.admin.emailDeliveries.retry(delivery.id, false).then(() => load());
-                              }
-                            }}
-                          >
-                            <RefreshCw className="size-4" />
-                            {mayDuplicateOnResend(delivery) ? "核对后重发" : "重发"}
-                          </Button>
-                        ) : null}
-                        {canManage && canCancelDelivery(delivery) ? (
-                          <Button
-                            variant="danger"
-                            loading={saving}
-                            onClick={() => setCancelConfirmTarget(delivery)}
-                          >
-                            <Ban className="size-4" />取消发送
-                          </Button>
-                        ) : null}
-                      </div>
-                      {delivery.lastError ? (
-                        <details>
-                          <summary>诊断信息</summary>
-                          <pre>{safeJson(delivery.lastError)}</pre>
-                        </details>
-                      ) : null}
-                    </td>
+          <>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t.email.tableColId}</th>
+                    <th>{t.email.tableColRecipient}</th>
+                    <th>{t.email.tableColType}</th>
+                    <th>{t.email.tableColStatus}</th>
+                    <th>{t.email.tableColAttempts}</th>
+                    <th>{t.email.tableColTime}</th>
+                    <th>{t.email.tableColActions}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {deliveries.map((delivery) => (
+                    <tr key={delivery.id}>
+                      <td>
+                        <strong>{delivery.id}</strong>
+                        <small>{delivery.providerMessageId || "—"}</small>
+                      </td>
+                      <td>
+                        {deliveryRecipientLabel(delivery, t.email)}
+                        <small>{delivery.recipientEmail}</small>
+                      </td>
+                      <td>
+                        {delivery.notificationType}
+                        <small>v{delivery.contractVersion}</small>
+                      </td>
+                      <td>
+                        <StatusBadge status={delivery.status} label={deliveryStatusLabel(delivery.status, t.email)} />
+                        <small>{deliveryStatusExplanation(delivery.status, t.email)}</small>
+                      </td>
+                      <td>{delivery.attemptCount}</td>
+                      <td>
+                        {delivery.nextAttemptAt ? formatDate(delivery.nextAttemptAt) : formatDate(delivery.createdAt)}
+                        {delivery.sendExpiresAt && delivery.status !== "accepted" ? (
+                          <small>{t.email.latestSendTime(formatDate(delivery.sendExpiresAt))}</small>
+                        ) : null}
+                        {delivery.variablesExpiresAt ? (
+                          <small>{t.email.sensitiveRetainUntil(formatDate(delivery.variablesExpiresAt))}</small>
+                        ) : !delivery.sendExpiresAt && !["accepted", "expired", "cancelled"].includes(delivery.status) ? (
+                          <small>{t.email.sensitiveRetainPending}</small>
+                        ) : null}
+                      </td>
+                      <td>
+                        <div className="button-row wrap">
+                          {canManage && canRetryDelivery(delivery) ? (
+                            <Button
+                              variant={mayDuplicateOnResend(delivery) ? "danger" : "secondary"}
+                              loading={saving}
+                              onClick={() => {
+                                const duplicate = mayDuplicateOnResend(delivery);
+                                if (duplicate) {
+                                  setRetryConfirmTarget({ delivery, duplicate: true });
+                                } else {
+                                  void api.admin.emailDeliveries.retry(delivery.id, false).then(() => load(page));
+                                }
+                              }}
+                            >
+                              <RefreshCw className="size-4" />
+                              {mayDuplicateOnResend(delivery) ? t.email.btnRetryDuplicate : t.email.btnRetry}
+                            </Button>
+                          ) : null}
+                          {canManage && canCancelDelivery(delivery) ? (
+                            <Button
+                              variant="danger"
+                              loading={saving}
+                              onClick={() => setCancelConfirmTarget(delivery)}
+                            >
+                              <Ban className="size-4" />{t.email.btnCancelDelivery}
+                            </Button>
+                          ) : null}
+                        </div>
+                        {delivery.lastError ? (
+                          <details>
+                            <summary>{t.email.btnDiagnostics}</summary>
+                            <pre>{safeJson(delivery.lastError)}</pre>
+                          </details>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              page={page}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              onPageChange={(newPage) => void load(newPage)}
+              loading={loading}
+            />
+          </>
         )}
       </Card>
 
       <ConfirmModal
         open={Boolean(retryConfirmTarget)}
-        title="确认重发邮件"
-        description="上一次向发信服务商发送的请求结果未知。继续重发可能会导致客户收到重复邮件，是否确认使用当前通道配置强制重发？"
-        confirmLabel="确认继续重发"
+        title={t.email.confirmRetryTitle}
+        description={t.email.confirmRetryDesc}
+        confirmLabel={t.email.confirmRetryBtn}
         variant="danger"
         loading={saving}
         onConfirm={handleConfirmRetry}
@@ -286,9 +307,9 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
 
       <ConfirmModal
         open={Boolean(cancelConfirmTarget)}
-        title="取消外发邮件"
-        description={`确定取消发送该邮件（${cancelConfirmTarget?.recipientEmail}）？取消后系统将清理暂存的敏感数据，且该记录不能再次重发。`}
-        confirmLabel="确认取消发送"
+        title={t.email.confirmCancelTitle}
+        description={t.email.confirmCancelDesc(cancelConfirmTarget?.recipientEmail || "")}
+        confirmLabel={t.email.confirmCancelBtn}
         variant="danger"
         loading={saving}
         onConfirm={handleConfirmCancel}

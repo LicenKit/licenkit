@@ -40,11 +40,12 @@ import {
   Select,
   StatusBadge,
   Textarea,
-  formatDate,
   formatDurationSeconds,
 } from "../../components/ui";
+import { useI18n } from "../../lib/i18n";
 
 export function LicensesView({ canManage, canSupport }: { canManage: boolean; canSupport: boolean }) {
+  const { t, formatDate } = useI18n();
   const [licenses, setLicenses] = useState<License[]>([]);
   const [plans, setPlans] = useState<LicensePlan[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -289,36 +290,36 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="授权运营"
-        title="授权管理"
-        description="管理系统已签发的授权合同、激活设备、有效期限及安全生命周期状态。"
+        eyebrow={t.licenses.eyebrow}
+        title={t.licenses.title}
+        description={t.licenses.description}
         action={
           <div className="button-row">
             <Button variant="secondary" loading={loading} onClick={() => void loadLicenses(page)}>
-              <RefreshCw className="size-4" />刷新
+              <RefreshCw className="size-4" />{t.common.refresh}
             </Button>
             {canManage ? (
               <Button onClick={() => setIssueModal(true)}>
-                <Plus className="size-4" />手动签发
+                <Plus className="size-4" />{t.licenses.issueLicense}
               </Button>
             ) : null}
           </div>
         }
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
 
       {revealedKey ? (
         <div className="credential-reveal">
           <div>
-            <p className="eyebrow">仅显示一次</p>
-            <h2>注册码已生成</h2>
-            <p>通知状态：<StatusBadge status={resultDelivery?.status} /></p>
+            <p className="eyebrow">{t.licenses.modalOneTimeTitle}</p>
+            <h2>{t.licenses.modalOneTimeDesc}</h2>
+            <p>{t.licenses.tableColStatus}：<StatusBadge status={resultDelivery?.status} /></p>
           </div>
           <code>{revealedKey}</code>
           <Button variant="secondary" onClick={() => void navigator.clipboard.writeText(revealedKey)}>
-            <Copy className="size-4" />复制注册码
+            <Copy className="size-4" />{t.common.copy}
           </Button>
-          <Button variant="ghost" onClick={() => setOneTimeResult(null)}>我已保存</Button>
+          <Button variant="ghost" onClick={() => setOneTimeResult(null)}>{t.common.confirm}</Button>
         </div>
       ) : null}
 
@@ -328,24 +329,24 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
           <form className="filter-group" onSubmit={handleSearchSubmit}>
             <div className="filter-search">
               <Input
-                placeholder="搜索授权编号或客户..."
+                placeholder={t.licenses.filterSearchPlaceholder}
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
             </div>
             <Button variant="secondary" type="submit">
-              <Search className="size-4" />搜索
+              <Search className="size-4" />{t.common.actions}
             </Button>
           </form>
 
           <div className="filter-group">
             <Select
               className="filter-select"
-              aria-label="按产品过滤"
+              aria-label={t.licenses.filterAllProducts}
               value={filterProductId}
               onChange={(event) => setFilterProductId(event.target.value)}
             >
-              <option value="">全部产品</option>
+              <option value="">{t.licenses.filterAllProducts}</option>
               {products.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -353,25 +354,25 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
 
             <Select
               className="filter-select"
-              aria-label="按状态过滤"
+              aria-label={t.licenses.filterAllStatuses}
               value={filterStatus}
               onChange={(event) => setFilterStatus(event.target.value)}
             >
-              <option value="">全部状态</option>
-              <option value="active">生效中</option>
-              <option value="suspended">已暂停</option>
-              <option value="revoked">已吊销</option>
-              <option value="expired">已过期</option>
+              <option value="">{t.licenses.filterAllStatuses}</option>
+              <option value="active">{t.licenses.filterStatusActive}</option>
+              <option value="suspended">{t.licenses.filterStatusSuspended}</option>
+              <option value="revoked">{t.licenses.filterStatusRevoked}</option>
+              <option value="expired">{t.licenses.filterStatusExpired}</option>
             </Select>
           </div>
         </div>
 
         {loading && licenses.length === 0 ? (
-          <LoadingState label="正在加载授权数据" />
+          <LoadingState />
         ) : licenses.length === 0 ? (
           <EmptyState
-            title="未找到匹配的授权"
-            description="可以更换过滤条件重试，或点击右上角手动签发。"
+            title={t.licenses.emptyTitle}
+            description={t.licenses.emptyDesc}
           />
         ) : (
           <>
@@ -379,13 +380,13 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
               <table>
                 <thead>
                   <tr>
-                    <th>授权编号</th>
-                    <th>产品</th>
-                    <th>客户</th>
-                    <th>授权模型</th>
-                    <th>状态</th>
-                    <th>激活数</th>
-                    <th>到期时间</th>
+                    <th>{t.licenses.tableColLicense}</th>
+                    <th>{t.licenses.tableColProductPlan}</th>
+                    <th>{t.licenses.tableColCustomer}</th>
+                    <th>{t.licensePlans.fieldModel}</th>
+                    <th>{t.licenses.tableColStatus}</th>
+                    <th>{t.licenses.tableColActivations}</th>
+                    <th>{t.licenses.tableColExpiresAt}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -399,7 +400,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                       <td>
                         <strong>{license.id}</strong>
                         {license.isCheckoutVerification ? (
-                          <Badge tone="warning">沙盒结账验证</Badge>
+                          <Badge tone="warning">Sandbox</Badge>
                         ) : null}
                       </td>
                       <td>
@@ -409,8 +410,8 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                         <span>{license.customerEmail || license.customerId}</span>
                       </td>
                       <td>
-                        <span>{license.licenseModel === "perpetual" ? "永久买断" : license.licenseModel === "fixed_term" ? "固定期限" : "周期订阅"}</span>
-                        <small>{license.renewalMode === "billing" ? "自动续费" : "手动续期"}</small>
+                        <span>{license.licenseModel === "perpetual" ? t.licensePlans.modelPerpetual : license.licenseModel === "fixed_term" ? t.licensePlans.modelFixedTerm : t.licensePlans.modelSubscription}</span>
+                        <small>{license.renewalMode === "billing" ? "Paddle" : "Manual"}</small>
                       </td>
                       <td>
                         <StatusBadge status={license.status} />
@@ -426,7 +427,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                           variant="ghost"
                           onClick={() => setSelectedId(license.id)}
                         >
-                          详情
+                          {t.common.details}
                         </Button>
                       </td>
                     </tr>
@@ -450,8 +451,8 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
       <Drawer
         open={Boolean(selectedId)}
         onClose={() => setSelectedId(null)}
-        title={detail?.productName || detail?.productId || "授权详情"}
-        description={detail ? `授权编号：${detail.id}` : undefined}
+        title={detail?.productName || detail?.productId || t.licenses.drawerTitle}
+        description={detail ? `${t.licenses.tableColLicense}：${detail.id}` : undefined}
         wide
       >
         {detail ? (
@@ -459,67 +460,67 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">授权概要</p>
+                  <p className="eyebrow">{t.licenses.drawerEyebrow}</p>
                   <h2>{detail.productName || detail.productId}</h2>
                   <p className="mono">{detail.id}</p>
                 </div>
                 <div className="button-row">
                   <StatusBadge status={detail.status} />
-                  {detail.isCheckoutVerification ? <Badge tone="warning">沙盒结账验证</Badge> : null}
+                  {detail.isCheckoutVerification ? <Badge tone="warning">Sandbox</Badge> : null}
                 </div>
               </div>
               <div className="metric-grid compact">
-                <div><span>客户</span><strong>{detail.customerEmail || detail.customerId}</strong></div>
-                <div><span>授权模式 / 续期</span><strong>{detail.licenseModel === "perpetual" ? "永久买断" : detail.licenseModel === "fixed_term" ? "固定期限" : "周期订阅"} · {detail.renewalMode === "billing" ? "自动续费" : "手动续期"}</strong></div>
-                <div><span>到期时间</span><strong>{formatDate(detail.expiresAt)}</strong></div>
-                <div><span>更新权益截止</span><strong>{detail.updatesUntil ? formatDate(detail.updatesUntil) : "永久有效"}</strong></div>
-                <div><span>激活设备数</span><strong>{detail.activeActivations ?? activations.filter((item) => item.status === "active").length} / {detail.maxActivations ?? detail.terms?.maxActivations ?? "—"}</strong></div>
-                <div><span>首次通知状态</span><strong><StatusBadge status={detail.delivery?.status} /></strong></div>
+                <div><span>{t.licenses.tableColCustomer}</span><strong>{detail.customerEmail || detail.customerId}</strong></div>
+                <div><span>{t.licensePlans.fieldModel}</span><strong>{detail.licenseModel === "perpetual" ? t.licensePlans.modelPerpetual : detail.licenseModel === "fixed_term" ? t.licensePlans.modelFixedTerm : t.licensePlans.modelSubscription}</strong></div>
+                <div><span>{t.licenses.tableColExpiresAt}</span><strong>{formatDate(detail.expiresAt)}</strong></div>
+                <div><span>{t.licenses.detailUpdatesUntil}</span><strong>{detail.updatesUntil ? formatDate(detail.updatesUntil) : t.licenses.neverExpires}</strong></div>
+                <div><span>{t.licenses.detailActivations}</span><strong>{detail.activeActivations ?? activations.filter((item) => item.status === "active").length} / {detail.maxActivations ?? detail.terms?.maxActivations ?? "—"}</strong></div>
+                <div><span>{t.licenses.tableColStatus}</span><strong><StatusBadge status={detail.delivery?.status} /></strong></div>
               </div>
 
               <div className="terms-panel">
                 <div>
-                  <strong>生效条款</strong>
-                  <span>来源方案 {detail.licensePlanId || detail.terms?.sourceLicensePlanId || "—"} · 版本 {detail.planRevision ?? detail.terms?.sourceLicensePlanRevision ?? "—"}</span>
+                  <strong>{t.licenses.detailSectionGeneral}</strong>
+                  <span>{t.licenses.detailPlan} {detail.licensePlanId || detail.terms?.sourceLicensePlanId || "—"} · {t.licenses.detailPlanRevision(detail.planRevision ?? detail.terms?.sourceLicensePlanRevision ?? 1)}</span>
                 </div>
                 <dl>
-                  <div><dt>签名验证模式</dt><dd>{detail.credentialMode ?? detail.terms?.credentialMode ?? "—"}</dd></div>
-                  <div><dt>扣费宽限期</dt><dd>{formatDurationSeconds(detail.paymentGraceSeconds ?? detail.terms?.paymentGraceSeconds)}</dd></div>
-                  <div><dt>离线凭据有效期</dt><dd>{formatDurationSeconds(detail.signedTokenTtlSeconds ?? detail.terms?.signedTokenTtlSeconds)}</dd></div>
-                  <div><dt>功能特性开关</dt><dd>{(detail.features ?? detail.terms?.features ?? []).join(", ") || "未配置特殊特性"}</dd></div>
+                  <div><dt>{t.licensePlans.fieldCredentialMode}</dt><dd>{detail.credentialMode ?? detail.terms?.credentialMode ?? "—"}</dd></div>
+                  <div><dt>{t.licensePlans.graceSecondsLabel}</dt><dd>{formatDurationSeconds(detail.paymentGraceSeconds ?? detail.terms?.paymentGraceSeconds)}</dd></div>
+                  <div><dt>{t.licensePlans.tokenTtlLabel}</dt><dd>{formatDurationSeconds(detail.signedTokenTtlSeconds ?? detail.terms?.signedTokenTtlSeconds)}</dd></div>
+                  <div><dt>{t.licensePlans.fieldFeatures}</dt><dd>{(detail.features ?? detail.terms?.features ?? []).join(", ") || t.licensePlans.noFeatures}</dd></div>
                 </dl>
               </div>
 
               {canManage ? (
                 <div className="button-row wrap">
                   <Button variant="secondary" loading={saving} onClick={() => setConfirmRotate("recover")}>
-                    <RotateCw className="size-4" />重新生成注册码
+                    <RotateCw className="size-4" />{t.licenses.btnRotateKey}
                   </Button>
                   <Button variant="danger" loading={saving} onClick={() => setConfirmRotate("reset")}>
-                    <ShieldAlert className="size-4" />安全重置
+                    <ShieldAlert className="size-4" />{t.licenses.btnRotateKeyReset}
                   </Button>
                   {detail.status === "active" ? (
                     <Button variant="secondary" onClick={() => setStateActionModal({ action: "suspend", reason: "" })}>
-                      <PauseCircle className="size-4" />暂停授权
+                      <PauseCircle className="size-4" />{t.licenses.modalStateActionTitle("suspend")}
                     </Button>
                   ) : detail.status === "suspended" && !detail.isCheckoutVerification ? (
                     <Button variant="secondary" onClick={() => setStateActionModal({ action: "reinstate", reason: "" })}>
-                      <ShieldCheck className="size-4" />恢复授权
+                      <ShieldCheck className="size-4" />{t.licenses.modalStateActionTitle("reinstate")}
                     </Button>
                   ) : null}
                   {detail.status !== "revoked" ? (
                     <Button variant="danger" onClick={() => setStateActionModal({ action: "revoke", reason: "" })}>
-                      <Ban className="size-4" />吊销授权
+                      <Ban className="size-4" />{t.licenses.modalStateActionTitle("revoke")}
                     </Button>
                   ) : null}
                   {detail.licenseModel === "subscription" && detail.renewalMode === "manual" ? (
-                    <Button variant="secondary" onClick={() => setRenewModal({ expiresAt: "", reason: "管理员手动续期" })}>
-                      <TimerReset className="size-4" />手动续期
+                    <Button variant="secondary" onClick={() => setRenewModal({ expiresAt: "", reason: "" })}>
+                      <TimerReset className="size-4" />{t.licenses.btnRenew}
                     </Button>
                   ) : null}
                   {detail.licenseModel === "perpetual" ? (
-                    <Button variant="secondary" onClick={() => setExtendModal({ mode: "never", updatesUntil: "", reason: "延长版本更新权益" })}>
-                      延长更新权益
+                    <Button variant="secondary" onClick={() => setExtendModal({ mode: "never", updatesUntil: "", reason: "" })}>
+                      {t.licenses.btnExtendUpdates}
                     </Button>
                   ) : null}
                 </div>
@@ -529,30 +530,30 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">设备绑定</p>
-                  <h2>激活设备</h2>
-                  <p>管理此授权关联的客户端设备。吊销设备仅变更其激活状态，完整审计历史予以保留。</p>
+                  <p className="eyebrow">{t.licenses.activationsSectionTitle}</p>
+                  <h2>{t.licenses.activationsSectionTitle}</h2>
+                  <p>{t.licenses.activationsSectionDesc}</p>
                 </div>
                 <Badge>{activations.length}</Badge>
               </div>
               {activations.length === 0 ? (
-                <EmptyState title="暂无激活设备" description="客户端使用此授权的注册码激活后，将在此处展示绑定的设备信息。" />
+                <EmptyState title={t.licenses.activationsEmptyTitle} description={t.licenses.activationsEmptyDesc} />
               ) : (
                 <div className="stack-list">
                   {activations.map((activation) => (
                     <div className="stack-row" key={activation.id}>
                       <Laptop className="size-5" />
                       <div className="grow">
-                        <strong>{activation.name || "未命名设备"}</strong>
-                        <span>{activation.platform || "未知平台"} · 最近验证 {formatDate(activation.lastValidatedAt)}</span>
+                        <strong>{activation.name || activation.id}</strong>
+                        <span>{activation.platform || "—"} · {t.licenses.tableColLastSeenAt} {formatDate(activation.lastValidatedAt)}</span>
                       </div>
                       <StatusBadge status={activation.status} />
                       {canSupport && activation.status === "active" ? (
                         <Button
                           variant="secondary"
-                          onClick={() => setRevokeActivationTarget({ activation, reason: "管理员吊销设备激活" })}
+                          onClick={() => setRevokeActivationTarget({ activation, reason: "" })}
                         >
-                          吊销激活
+                          {t.licenses.btnRevokeActivation}
                         </Button>
                       ) : null}
                     </div>
@@ -562,25 +563,25 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
             </Card>
           </div>
         ) : (
-          <LoadingState label="正在加载授权详情" />
+          <LoadingState />
         )}
       </Drawer>
 
       {/* 手动签发 Modal */}
-      <Modal open={issueModal} onClose={() => setIssueModal(false)} title="手动签发授权" description="选择方案并输入客户邮箱。系统将自动建立客户档案并生成授权凭证。">
+      <Modal open={issueModal} onClose={() => setIssueModal(false)} title={t.licenses.modalIssueTitle} description={t.licenses.modalIssueDesc}>
         <form className="form-stack" onSubmit={issue}>
-          <Field label="授权方案">
+          <Field label={t.licenses.fieldSelectPlan}>
             <Select
               value={issueForm.licensePlanId}
               onChange={(event) => setIssueForm({ ...issueForm, licensePlanId: event.target.value })}
               required
             >
               {plans.filter((plan) => plan.status === "active").map((plan) => (
-                <option key={plan.id} value={plan.id}>{plan.name} · {plan.licenseModel === "subscription" ? "周期订阅" : plan.licenseModel === "fixed_term" ? "固定期限" : "永久买断"}</option>
+                <option key={plan.id} value={plan.id}>{plan.name} · {plan.licenseModel === "subscription" ? t.licensePlans.modelSubscription : plan.licenseModel === "fixed_term" ? t.licensePlans.modelFixedTerm : t.licensePlans.modelPerpetual}</option>
               ))}
             </Select>
           </Field>
-          <Field label="客户邮箱">
+          <Field label={t.licenses.fieldCustomerEmail}>
             <Input
               type="email"
               value={issueForm.customerEmail}
@@ -590,7 +591,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
             />
           </Field>
           {issuePlan?.licenseModel === "subscription" ? (
-            <Field label="本期到期时间" hint="手动订阅模式需指定首次计费周期的到期时间">
+            <Field label={t.licenses.fieldExpiresAt} hint={t.licenses.fieldExpiresAtHint}>
               <Input
                 type="datetime-local"
                 value={issueForm.expiresAt}
@@ -599,19 +600,9 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
               />
             </Field>
           ) : null}
-          {issuePlan?.licenseModel === "perpetual" ? (
-            <Notice>
-              <strong>永久授权模式</strong>
-              <p>永久授权无到期时间限制，版本更新权益由方案设定的更新期控制。</p>
-            </Notice>
-          ) : null}
-          <Notice tone="info">
-            <strong>邮件通知发信</strong>
-            <p>签发成功后将自动向客户邮箱发送包含注册码的通知邮件。若邮件发送失败，可在邮件中心查看并手动重试。</p>
-          </Notice>
           <div className="form-actions">
-            <Button variant="secondary" type="button" onClick={() => setIssueModal(false)}>取消</Button>
-            <Button type="submit" loading={saving}>确认签发</Button>
+            <Button variant="secondary" type="button" onClick={() => setIssueModal(false)}>{t.common.cancel}</Button>
+            <Button type="submit" loading={saving}>{t.licenses.btnIssueSubmit}</Button>
           </div>
         </form>
       </Modal>
@@ -620,39 +611,23 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
       <Modal
         open={Boolean(stateActionModal)}
         onClose={() => setStateActionModal(null)}
-        title={
-          stateActionModal?.action === "suspend"
-            ? "暂停授权"
-            : stateActionModal?.action === "reinstate"
-            ? "恢复授权"
-            : "吊销授权"
-        }
-        description={
-          stateActionModal?.action === "revoke"
-            ? "警告：吊销是终态且不可逆操作，不能作为临时暂停使用。"
-            : "请输入本次操作的原因记录。"
-        }
+        title={stateActionModal ? t.licenses.modalStateActionTitle(stateActionModal.action) : ""}
+        description={stateActionModal ? t.licenses.modalStateActionDesc(stateActionModal.action) : ""}
       >
         {stateActionModal ? (
           <form className="form-stack" onSubmit={executeStateAction}>
-            <Field label="操作原因" hint="必填，请简要说明调整原因（将记录在操作日志中）">
+            <Field label={t.licenses.fieldReason} hint={stateActionModal ? t.licenses.modalStateActionDesc(stateActionModal.action) : undefined}>
               <Textarea
                 value={stateActionModal.reason}
                 onChange={(event) => setStateActionModal({ ...stateActionModal, reason: event.target.value })}
-                placeholder="请输入详细原因..."
+                placeholder="Reason..."
                 required
               />
             </Field>
-            {stateActionModal.action === "revoke" ? (
-              <Notice tone="warning">
-                <strong>吊销影响</strong>
-                <p>吊销后该授权不可再次恢复使用，客户端鉴权将立即判定失败。</p>
-              </Notice>
-            ) : null}
             <div className="form-actions">
-              <Button variant="secondary" type="button" onClick={() => setStateActionModal(null)}>取消</Button>
+              <Button variant="secondary" type="button" onClick={() => setStateActionModal(null)}>{t.common.cancel}</Button>
               <Button variant={stateActionModal.action === "revoke" ? "danger" : "primary"} type="submit" loading={saving}>
-                确认{stateActionModal.action === "suspend" ? "暂停" : stateActionModal.action === "reinstate" ? "恢复" : "吊销"}
+                {t.licenses.modalStateActionTitle(stateActionModal.action)}
               </Button>
             </div>
           </form>
@@ -663,12 +638,12 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
       <Modal
         open={Boolean(renewModal)}
         onClose={() => setRenewModal(null)}
-        title="手动续期授权"
-        description="新到期时间必须晚于当前到期时间和当前系统时间。"
+        title={t.licenses.modalRenewTitle}
+        description={t.licenses.modalRenewDesc}
       >
         {renewModal ? (
           <form className="form-stack" onSubmit={executeRenew}>
-            <Field label="新到期时间" hint="请选择新的到期时间（按当前本地时间设置）">
+            <Field label={t.licenses.fieldExpiresAt}>
               <Input
                 type="datetime-local"
                 value={renewModal.expiresAt}
@@ -676,7 +651,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                 required
               />
             </Field>
-            <Field label="续期原因">
+            <Field label={t.licenses.fieldReason}>
               <Input
                 value={renewModal.reason}
                 onChange={(event) => setRenewModal({ ...renewModal, reason: event.target.value })}
@@ -684,8 +659,8 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
               />
             </Field>
             <div className="form-actions">
-              <Button variant="secondary" type="button" onClick={() => setRenewModal(null)}>取消</Button>
-              <Button type="submit" loading={saving}>确认续期</Button>
+              <Button variant="secondary" type="button" onClick={() => setRenewModal(null)}>{t.common.cancel}</Button>
+              <Button type="submit" loading={saving}>{t.common.confirm}</Button>
             </div>
           </form>
         ) : null}
@@ -695,22 +670,22 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
       <Modal
         open={Boolean(extendModal)}
         onClose={() => setExtendModal(null)}
-        title="延长版本更新权益"
-        description="修改永久授权允许更新软件版本的截止日期。"
+        title={t.licenses.modalExtendTitle}
+        description={t.licenses.modalExtendDesc}
       >
         {extendModal ? (
           <form className="form-stack" onSubmit={executeExtendUpdates}>
-            <Field label="更新权益模式">
+            <Field label={t.licenses.modalExtendTitle}>
               <Select
                 value={extendModal.mode}
                 onChange={(event) => setExtendModal({ ...extendModal, mode: event.target.value as "never" | "custom" })}
               >
-                <option value="never">永久享受未来所有版本更新</option>
-                <option value="custom">指定新的截止时间</option>
+                <option value="never">{t.licenses.extendModeNever}</option>
+                <option value="custom">{t.licenses.extendModeCustom}</option>
               </Select>
             </Field>
             {extendModal.mode === "custom" ? (
-              <Field label="新更新截止时间">
+              <Field label={t.licenses.detailUpdatesUntil}>
                 <Input
                   type="datetime-local"
                   value={extendModal.updatesUntil}
@@ -719,7 +694,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                 />
               </Field>
             ) : null}
-            <Field label="操作原因">
+            <Field label={t.licenses.fieldReason}>
               <Input
                 value={extendModal.reason}
                 onChange={(event) => setExtendModal({ ...extendModal, reason: event.target.value })}
@@ -727,8 +702,8 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
               />
             </Field>
             <div className="form-actions">
-              <Button variant="secondary" type="button" onClick={() => setExtendModal(null)}>取消</Button>
-              <Button type="submit" loading={saving}>更新权益</Button>
+              <Button variant="secondary" type="button" onClick={() => setExtendModal(null)}>{t.common.cancel}</Button>
+              <Button type="submit" loading={saving}>{t.common.confirm}</Button>
             </div>
           </form>
         ) : null}
@@ -738,12 +713,12 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
       <Modal
         open={Boolean(revokeActivationTarget)}
         onClose={() => setRevokeActivationTarget(null)}
-        title="吊销激活设备"
-        description={`确定吊销设备“${revokeActivationTarget?.activation.name || revokeActivationTarget?.activation.id}”？`}
+        title={t.licenses.modalRevokeActivationTitle}
+        description={revokeActivationTarget ? t.licenses.modalRevokeActivationDesc(revokeActivationTarget.activation.name || revokeActivationTarget.activation.id) : ""}
       >
         {revokeActivationTarget ? (
           <form className="form-stack" onSubmit={executeRevokeActivation}>
-            <Field label="吊销原因">
+            <Field label={t.licenses.fieldReason}>
               <Input
                 value={revokeActivationTarget.reason}
                 onChange={(event) => setRevokeActivationTarget({ ...revokeActivationTarget, reason: event.target.value })}
@@ -751,8 +726,8 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
               />
             </Field>
             <div className="form-actions">
-              <Button variant="secondary" type="button" onClick={() => setRevokeActivationTarget(null)}>取消</Button>
-              <Button variant="danger" type="submit" loading={saving}>确认吊销</Button>
+              <Button variant="secondary" type="button" onClick={() => setRevokeActivationTarget(null)}>{t.common.cancel}</Button>
+              <Button variant="danger" type="submit" loading={saving}>{t.licenses.btnRevokeActivation}</Button>
             </div>
           </form>
         ) : null}
@@ -763,13 +738,9 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
         onClose={() => setConfirmRotate(null)}
         onConfirm={() => void handleConfirmRotate()}
         loading={saving}
-        title={confirmRotate === "recover" ? "重新生成注册码" : "安全重置授权"}
-        description={
-          confirmRotate === "recover"
-            ? "确定为该客户重新生成注册码？新注册码将自动通过邮件发送给客户，旧注册码立即失效，当前已激活的有效设备不受影响。"
-            : "警告：安全重置将生成新注册码并立即吊销所有已激活的设备。客户需在各设备上重新进行激活绑定。"
-        }
-        confirmText={confirmRotate === "recover" ? "确认生成并发送" : "确认安全重置"}
+        title={confirmRotate ? t.licenses.modalRotateConfirmTitle(confirmRotate) : ""}
+        description={confirmRotate ? t.licenses.modalRotateConfirmDesc(confirmRotate) : ""}
+        confirmText={confirmRotate === "recover" ? t.licenses.btnRotateKey : t.licenses.btnRotateKeyReset}
         danger={confirmRotate === "reset"}
       />
     </div>

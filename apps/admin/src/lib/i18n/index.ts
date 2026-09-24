@@ -3,6 +3,7 @@ import { enUS } from "./en-US";
 import type { LocaleDictionary, LocalePreference, SupportedLocale } from "./types";
 
 export * from "./types";
+export * from "./I18nContext";
 export { zhCN } from "./zh-CN";
 export { enUS } from "./en-US";
 

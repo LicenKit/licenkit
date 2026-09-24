@@ -3,20 +3,22 @@ import { Mail, Send } from "lucide-react";
 import { PageHeader } from "../../components/ui";
 import { EmailDeliveriesView } from "./EmailDeliveriesView";
 import { EmailSettingsView } from "./EmailSettingsView";
+import { useI18n } from "../../lib/i18n";
 
 type EmailTab = "deliveries" | "settings";
 
 export function EmailHubView({ canManage }: { canManage: boolean }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<EmailTab>("deliveries");
 
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="服务与通知"
-        title="邮件中心"
-        description="统一管理系统外发邮件队列、投递状态排查，以及 Resend 发信通道和模板绑定配置。"
+        eyebrow={t.email.hubEyebrow}
+        title={t.email.hubTitle}
+        description={t.email.hubDesc}
       />
-      <div className="tabs" role="tablist" aria-label="邮件中心导航">
+      <div className="tabs" role="tablist" aria-label={t.email.hubTitle}>
         <button
           role="tab"
           aria-selected={tab === "deliveries"}
@@ -24,7 +26,7 @@ export function EmailHubView({ canManage }: { canManage: boolean }) {
           onClick={() => setTab("deliveries")}
         >
           <Send className="size-4 inline-block mr-1.5 align-middle" />
-          投递记录与队列
+          {t.email.tabDeliveries}
         </button>
         <button
           role="tab"
@@ -33,7 +35,7 @@ export function EmailHubView({ canManage }: { canManage: boolean }) {
           onClick={() => setTab("settings")}
         >
           <Mail className="size-4 inline-block mr-1.5 align-middle" />
-          通道与模板设置
+          {t.email.tabSettings}
         </button>
       </div>
 

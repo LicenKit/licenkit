@@ -57,7 +57,7 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (session: AdminS
             </div>
             <LanguageSwitcher />
           </div>
-          <ErrorPanel error={error} />
+          <ErrorPanel error={error} onClose={() => setError(null)} floating={false} />
           <Field label={t.auth.emailLabel}>
             <Input
               type="email"

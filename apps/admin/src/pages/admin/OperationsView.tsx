@@ -12,13 +12,14 @@ import {
   Modal,
   PageHeader,
   StatusBadge,
-  formatDate,
   safeJson,
 } from "../../components/ui";
+import { useI18n } from "../../lib/i18n/I18nContext";
 
 type Tab = "issues" | "events";
 
 export function OperationsView({ canManage, onIssuesChanged }: { canManage: boolean; onIssuesChanged?: () => void }) {
+  const { t, formatDate } = useI18n();
   const [tab, setTab] = useState<Tab>("issues");
   const [issues, setIssues] = useState<SystemIssue[]>([]);
   const [events, setEvents] = useState<InboundEvent[]>([]);
@@ -82,16 +83,16 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="运维监控"
-        title="系统运维与事件"
-        description="集中监控系统运行异常与外部 Webhook 入站事件。在排查并修复依赖后，可在此安全重试执行异常事件。"
-        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
+        eyebrow={t.operations.eyebrow}
+        title={t.operations.title}
+        description={t.operations.description}
+        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />{t.common.refresh}</Button>}
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
       <div className="tabs">
         {(["issues", "events"] as Tab[]).map((item) => (
           <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>
-            {item === "issues" ? "异常提示" : "入站事件"}
+            {item === "issues" ? t.operations.tabIssues : t.operations.tabEvents}
           </button>
         ))}
       </div>
@@ -101,28 +102,28 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
         <Card>
           <div className="card-header">
             <div>
-              <p className="eyebrow">运行异常排查</p>
-              <h2>异常提示</h2>
-              <p>问题解决后可标记为已处理。若同一异常后续再次发生，系统将自动恢复为待处理状态。</p>
+              <p className="eyebrow">{t.operations.issuesEyebrow}</p>
+              <h2>{t.operations.issuesTitle}</h2>
+              <p>{t.operations.issuesDesc}</p>
             </div>
             <Badge tone={issues.some((item) => item.status === "pending") ? "warning" : "neutral"}>
-              {issues.filter((item) => item.status === "pending").length} 待处理
+              {t.operations.issuesPendingCount(issues.filter((item) => item.status === "pending").length)}
             </Badge>
           </div>
           {issues.length === 0 ? (
-            <EmptyState title="暂无系统异常" description="系统运行健康，没有需要管理员关注的未处理异常。" />
+            <EmptyState title={t.operations.issuesEmptyTitle} description={t.operations.issuesEmptyDesc} />
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>业务类别</th>
-                    <th>错误代码</th>
-                    <th>状态</th>
-                    <th>来源</th>
-                    <th>发生次数</th>
-                    <th>最近时间</th>
-                    <th>操作</th>
+                    <th>{t.operations.tableColCategory}</th>
+                    <th>{t.operations.tableColErrorCode}</th>
+                    <th>{t.operations.tableColStatus}</th>
+                    <th>{t.operations.tableColSource}</th>
+                    <th>{t.operations.tableColOccurrences}</th>
+                    <th>{t.operations.tableColLastTime}</th>
+                    <th>{t.operations.tableColActions}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -130,19 +131,19 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
                     <tr key={item.id}>
                       <td><Badge tone="warning">{item.category}</Badge></td>
                       <td><strong>{item.errorCode}</strong><small>{item.operation}</small></td>
-                      <td><StatusBadge status={item.status} label={item.status === "pending" ? "待处理" : "已处理"} /></td>
+                      <td><StatusBadge status={item.status} label={item.status === "pending" ? t.operations.statusPending : t.operations.statusProcessed} /></td>
                       <td>{item.sourceType}<small>{item.sourceId}</small></td>
-                      <td>{item.occurrenceCount} 次</td>
-                      <td>{formatDate(item.lastSeenAt)}<small>首次 {formatDate(item.firstSeenAt)}</small></td>
+                      <td>{t.operations.countOccurrences(item.occurrenceCount)}</td>
+                      <td>{formatDate(item.lastSeenAt)}<small>{t.operations.firstSeenTime(formatDate(item.firstSeenAt))}</small></td>
                       <td>
                         <div className="button-row wrap">
                           {canManage && item.status === "pending" ? (
                             <Button variant="secondary" loading={saving} onClick={() => void processIssue(item)}>
-                              <CheckCircle2 className="size-4" />标记已处理
+                              <CheckCircle2 className="size-4" />{t.operations.btnMarkProcessed}
                             </Button>
                           ) : null}
                           <details>
-                            <summary>诊断信息</summary>
+                            <summary>{t.operations.btnDiagnostics}</summary>
                             <pre>{safeJson(item.error)}</pre>
                           </details>
                         </div>
@@ -160,25 +161,25 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
         <Card>
           <div className="card-header">
             <div>
-              <p className="eyebrow">Webhook 接入记录</p>
-              <h2>入站事件</h2>
-              <p>记录支付服务商发送的通知事件及处理状态。在修复相关配置或依赖后，可在此安全重试。</p>
+              <p className="eyebrow">{t.operations.eventsCardEyebrow}</p>
+              <h2>{t.operations.eventsTitle}</h2>
+              <p>{t.operations.eventsDesc}</p>
             </div>
-            <Badge>{events.length} 条记录</Badge>
+            <Badge>{t.operations.totalEventsCount(events.length)}</Badge>
           </div>
           {events.length === 0 ? (
-            <EmptyState title="暂无入站事件" description="来自支付服务商的通知事件将显示在此处。" />
+            <EmptyState title={t.operations.eventsEmptyTitle} description={t.operations.eventsEmptyDesc} />
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>事件类型</th>
-                    <th>外部标识</th>
-                    <th>通道与环境</th>
-                    <th>处理状态</th>
-                    <th>最近错误</th>
-                    <th>操作</th>
+                    <th>{t.operations.tableColEventType}</th>
+                    <th>{t.operations.tableColExternalId}</th>
+                    <th>{t.operations.tableColProviderEnv}</th>
+                    <th>{t.operations.tableColStatus}</th>
+                    <th>{t.operations.tableColError}</th>
+                    <th>{t.operations.tableColActions}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -189,7 +190,7 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
                       <td>{item.provider} · {item.environment}</td>
                       <td><StatusBadge status={item.status} /></td>
                       <td>{item.lastError?.code || item.lastErrorCode || "—"}</td>
-                      <td><Button variant="ghost" onClick={() => void openEvent(item)}>查看详情</Button></td>
+                      <td><Button variant="ghost" onClick={() => void openEvent(item)}>{t.operations.btnViewEventDetail}</Button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -199,27 +200,27 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
         </Card>
       ) : null}
 
-      <Modal open={Boolean(selectedEvent)} onClose={() => setSelectedEvent(null)} title="入站事件详情" description={selectedEvent?.externalEventId} wide>
+      <Modal open={Boolean(selectedEvent)} onClose={() => setSelectedEvent(null)} title={t.operations.modalEventDetailTitle} description={selectedEvent?.externalEventId} wide>
         {selectedEvent ? (
           <div className="diagnostic-detail">
             <div className="metric-grid compact">
-              <div><span>事件类型</span><strong>{selectedEvent.eventType}</strong></div>
-              <div><span>处理状态</span><strong><StatusBadge status={selectedEvent.status} /></strong></div>
-              <div><span>服务商与环境</span><strong>{selectedEvent.provider} · {selectedEvent.environment}</strong></div>
-              <div><span>接收时间</span><strong>{formatDate(selectedEvent.receivedAt)}</strong></div>
+              <div><span>{t.operations.modalEventDetailColType}</span><strong>{selectedEvent.eventType}</strong></div>
+              <div><span>{t.operations.modalEventDetailColStatus}</span><strong><StatusBadge status={selectedEvent.status} /></strong></div>
+              <div><span>{t.operations.modalEventDetailColProvider}</span><strong>{selectedEvent.provider} · {selectedEvent.environment}</strong></div>
+              <div><span>{t.operations.modalEventDetailColReceivedAt}</span><strong>{formatDate(selectedEvent.receivedAt)}</strong></div>
             </div>
             <section>
-              <h3>外部业务关联</h3>
+              <h3>{t.operations.modalEventDetailRelations}</h3>
               <pre>{safeJson({ customer: selectedEvent.externalCustomerId, transaction: selectedEvent.externalTransactionId, subscription: selectedEvent.externalSubscriptionId, adjustment: selectedEvent.externalAdjustmentId })}</pre>
             </section>
             <section>
-              <h3>最近错误诊断</h3>
+              <h3>{t.operations.modalEventDetailDiagnostics}</h3>
               <pre>{safeJson(selectedEvent.lastError || (selectedEvent.lastErrorCode || selectedEvent.lastErrorDetail ? { code: selectedEvent.lastErrorCode, details: selectedEvent.lastErrorDetail } : null))}</pre>
             </section>
             {canManage && ["needs_attention", "failed"].includes(selectedEvent.status) ? (
               <div className="button-row">
                 <Button loading={saving} onClick={() => setReplayConfirmTarget(selectedEvent)}>
-                  <RotateCw className="size-4" />重新执行此事件
+                  <RotateCw className="size-4" />{t.operations.btnReplayEvent}
                 </Button>
               </div>
             ) : null}
@@ -229,9 +230,9 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
 
       <ConfirmModal
         open={Boolean(replayConfirmTarget)}
-        title="确认重新执行入站事件"
-        description={`确定重新执行事件（${replayConfirmTarget?.eventType} · ${replayConfirmTarget?.externalEventId}）？系统将重新触发处理流程，不会产生重复记录。`}
-        confirmLabel="重新执行"
+        title={t.operations.modalReplayConfirmTitle}
+        description={t.operations.modalReplayConfirmDesc(`${replayConfirmTarget?.eventType} · ${replayConfirmTarget?.externalEventId}`)}
+        confirmLabel={t.operations.modalReplayConfirmBtn}
         variant="primary"
         loading={saving}
         onConfirm={handleConfirmReplay}

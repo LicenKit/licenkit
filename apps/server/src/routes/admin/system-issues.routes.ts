@@ -26,9 +26,11 @@ adminSystemIssuesRouter.get(
   "/issues",
   requireRole(["owner", "admin", "member", "viewer"]),
   async (c) => {
+    const status = c.req.query("status");
     const data = await listSystemIssues({
       db: c.env.DB,
       instanceId: instanceId(c),
+      status: status || undefined,
     });
     c.header("Cache-Control", "no-store");
     return c.json({ success: true, data: toSnakeCaseJson(data) });

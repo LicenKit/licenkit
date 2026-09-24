@@ -2,11 +2,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, CircleDollarSign, FlaskConical, Plus, RefreshCw, ShieldQuestion } from "lucide-react";
 import { api, type BillingAdjustment, type BillingEnvironment, type BillingOffer, type BillingProvider, type BillingSubscription, type LicensePlan, type Product, type ProviderTestResult, type ReadinessReport } from "../../lib/api-client";
 import { openVerificationCheckout } from "../../lib/verification-checkout";
-import { Badge, Button, Card, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, formatDate } from "../../components/ui";
+import { Badge, Button, Card, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge } from "../../components/ui";
+import { useI18n } from "../../lib/i18n";
 
 type Tab = "providers" | "offers" | "subscriptions" | "adjustments";
 
 export function BillingView({ canManage }: { canManage: boolean }) {
+  const { t, formatDate } = useI18n();
   const [tab, setTab] = useState<Tab>("providers");
   const [providers, setProviders] = useState<BillingProvider[]>([]);
   const [offers, setOffers] = useState<BillingOffer[]>([]);
@@ -109,21 +111,21 @@ export function BillingView({ canManage }: { canManage: boolean }) {
   }
 
   const tabLabels: Record<Tab, string> = {
-    providers: "支付通道",
-    offers: "定价方案",
-    subscriptions: "订阅镜像",
-    adjustments: "退款与争议",
+    providers: t.billing.tabProviders,
+    offers: t.billing.tabOffers,
+    subscriptions: t.billing.tabSubscriptions,
+    adjustments: t.billing.tabAdjustments,
   };
 
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="商业支付集成"
-        title="支付通道与定价关联"
-        description="连接 Paddle 支付网关；通过已验签 Webhook 将外部 Price ID 关联至产品与授权方案，保障交易自动履约与状态同步。"
-        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
+        eyebrow={t.billing.eyebrow}
+        title={t.billing.title}
+        description={t.billing.description}
+        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />{t.common.refresh}</Button>}
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
       <div className="tabs" role="tablist">
         {(["providers", "offers", "subscriptions", "adjustments"] as Tab[]).map((item) => (
           <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
@@ -136,79 +138,79 @@ export function BillingView({ canManage }: { canManage: boolean }) {
       {tab === "providers" ? <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">支付服务配置</p>
-            <h2>Paddle 支付通道</h2>
-            <p>沙盒 (Sandbox) 与正式 (Live) 环境是两条独立连接；创建后通道类型与运行环境不可更改。</p>
+            <p className="eyebrow">{t.billing.tabProviders}</p>
+            <h2>{t.billing.providerCardTitle("Paddle", "")}</h2>
+            <p>{t.billing.modalProviderDesc}</p>
           </div>
-          {canManage ? <Button onClick={() => setProviderModal(true)}><Plus className="size-4" />添加通道配置</Button> : null}
+          {canManage ? <Button onClick={() => setProviderModal(true)}><Plus className="size-4" />{t.billing.newProvider}</Button> : null}
         </div>
-        {providers.length === 0 ? <EmptyState title="未配置支付通道" description="发起在线购买至少需要配置 Client-side Token 与 Webhook Secret；API Key 仅供高级服务端能力使用。" /> : <div className="card-grid">{providers.map((provider) => <article className="entity-card" key={provider.id}><header><div><strong>Paddle {provider.environment === "sandbox" ? "沙盒环境 (Sandbox)" : "生产环境 (Live)"}</strong><span>{provider.id}</span></div><StatusBadge status={provider.status} /></header><div className="readiness-summary"><span>{provider.clientSideTokenConfigured ?? Boolean(provider.clientSideToken) ? <CheckCircle2 /> : <AlertTriangle />}Client-side Token</span><span>{provider.webhookSecretConfigured ? <CheckCircle2 /> : <AlertTriangle />}Webhook Secret</span><span>{provider.apiKeyConfigured ? <CheckCircle2 /> : <ShieldQuestion />}API Key（可选）</span></div>{provider.readiness ? <Readiness report={provider.readiness} /> : null}{canManage ? <Button variant="secondary" loading={saving} onClick={() => void testProvider(provider)}>测试通道连通性</Button> : null}</article>)}</div>}
+        {providers.length === 0 ? <EmptyState title={t.billing.providersEmptyTitle} description={t.billing.providersEmptyDesc} /> : <div className="card-grid">{providers.map((provider) => <article className="entity-card" key={provider.id}><header><div><strong>Paddle {provider.environment === "sandbox" ? t.billing.providerEnvSandbox : t.billing.providerEnvLive}</strong><span>{provider.id}</span></div><StatusBadge status={provider.status} /></header><div className="readiness-summary"><span>{provider.clientSideTokenConfigured ?? Boolean(provider.clientSideToken) ? <CheckCircle2 /> : <AlertTriangle />}Client-side Token</span><span>{provider.webhookSecretConfigured ? <CheckCircle2 /> : <AlertTriangle />}Webhook Secret</span><span>{provider.apiKeyConfigured ? <CheckCircle2 /> : <ShieldQuestion />}API Key</span></div>{provider.readiness ? <Readiness report={provider.readiness} /> : null}{canManage ? <Button variant="secondary" loading={saving} onClick={() => void testProvider(provider)}>{t.billing.btnTestProvider}</Button> : null}</article>)}</div>}
       </Card> : null}
 
       {tab === "offers" ? <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">价格与方案映射</p>
-            <h2>定价方案</h2>
-            <p>新创建的定价方案默认为草稿；通过结账就绪检查后方可激活用于线上收款。</p>
+            <p className="eyebrow">{t.billing.tabOffers}</p>
+            <h2>{t.billing.tabOffers}</h2>
+            <p>{t.billing.modalOfferDesc}</p>
           </div>
-          {canManage ? <Button onClick={() => setOfferModal(true)}><Plus className="size-4" />新建定价映射</Button> : null}
+          {canManage ? <Button onClick={() => setOfferModal(true)}><Plus className="size-4" />{t.billing.newOffer}</Button> : null}
         </div>
         {verificationPending ? (
           <Notice tone="warning">
-            <strong>正在等待沙盒结账验证</strong>
-            <p>定价方案 {verificationPending.offerId} 的测试链接有效至 {formatDate(verificationPending.expiresAt)}。完成支付后，系统将自动核验订单履约与邮件通知发送。</p>
+            <strong>Paddle Sandbox Checkout</strong>
+            <p>Expires: {formatDate(verificationPending.expiresAt)} ({verificationPending.offerId})</p>
           </Notice>
         ) : null}
-        {offers.length === 0 ? <EmptyState title="暂无定价方案" description="将 Paddle 的价格编号 (Price ID) 映射到具体的产品与授权方案。" /> : <div className="stack-list">{offers.map((offer) => {
+        {offers.length === 0 ? <EmptyState title={t.billing.offersEmptyTitle} description={t.billing.offersEmptyDesc} /> : <div className="stack-list">{offers.map((offer) => {
           const provider = providers.find((item) => item.id === offer.billingProviderId);
-          return <div className="offer-row" key={offer.id}><div className="offer-main"><div><strong>{offer.productName || products.find((item) => item.id === offer.productId)?.name || offer.productId}</strong><span>{offer.licensePlanName || plans.find((item) => item.id === offer.licensePlanId)?.name || offer.licensePlanId}</span></div><code>{offer.externalPriceId}</code></div><div className="offer-meta"><Badge>{offer.purchaseType === "subscription" ? "定期订阅" : "一次性买断"}</Badge><Badge>{provider?.environment || "未指定环境"}</Badge><StatusBadge status={offer.status} label={offer.status === "active" ? "已激活" : offer.status === "archived" ? "已归档" : "草稿"} /></div>{offer.readiness ? <Readiness report={offer.readiness} /> : null}{canManage ? <div className="button-row wrap">{offer.status === "draft" && provider?.environment === "sandbox" ? <Button variant="secondary" loading={saving} onClick={() => void prepareVerification(offer)}><FlaskConical className="size-4" />发起沙盒模拟结账</Button> : null}{offer.status === "draft" ? <Button loading={saving} onClick={() => void activateOffer(offer)}>运行就绪检查并激活</Button> : null}</div> : null}</div>;
+          return <div className="offer-row" key={offer.id}><div className="offer-main"><div><strong>{offer.productName || products.find((item) => item.id === offer.productId)?.name || offer.productId}</strong><span>{offer.licensePlanName || plans.find((item) => item.id === offer.licensePlanId)?.name || offer.licensePlanId}</span></div><code>{offer.externalPriceId}</code></div><div className="offer-meta"><Badge>{offer.purchaseType === "subscription" ? t.billing.offerTypeSubscription : t.billing.offerTypeOneTime}</Badge><Badge>{provider?.environment || "—"}</Badge><StatusBadge status={offer.status} /></div>{offer.readiness ? <Readiness report={offer.readiness} /> : null}{canManage ? <div className="button-row wrap">{offer.status === "draft" && provider?.environment === "sandbox" ? <Button variant="secondary" loading={saving} onClick={() => void prepareVerification(offer)}><FlaskConical className="size-4" />{t.billing.btnActivateOffer}</Button> : null}{offer.status === "draft" ? <Button loading={saving} onClick={() => void activateOffer(offer)}>{t.billing.btnVerifyReadiness}</Button> : null}</div> : null}</div>;
         })}</div>}
       </Card> : null}
 
-      {tab === "subscriptions" ? <Card><div className="card-header"><div><p className="eyebrow">订阅数据同步</p><h2>订阅记录</h2><p>由支付服务推送的通知事件驱动状态更新，保障账单周期与实际状态一致。</p></div><Badge>{subscriptions.length}</Badge></div>{subscriptions.length === 0 ? <EmptyState title="暂无订阅记录" description="用户在 Paddle 完成订阅购买或试用后，将在此展示同步的订阅状态。" /> : <div className="table-wrap"><table><thead><tr><th>外部订阅 ID</th><th>关联授权 / 客户</th><th>环境</th><th>状态</th><th>当前周期截止</th></tr></thead><tbody>{subscriptions.map((item) => <tr key={item.id}><td><strong>{item.externalSubscriptionId}</strong><small>{item.id}</small></td><td><span>{item.licenseId}</span><small>{item.customerId}</small></td><td>{item.environment}</td><td><StatusBadge status={item.status} /></td><td>{formatDate(item.currentPeriodEnd)}{item.cancelAtPeriodEnd ? <small>周期末自动取消</small> : null}</td></tr>)}</tbody></table></div>}</Card> : null}
+      {tab === "subscriptions" ? <Card><div className="card-header"><div><p className="eyebrow">{t.billing.tabSubscriptions}</p><h2>{t.billing.tabSubscriptions}</h2><p>{t.billing.subscriptionsEmptyDesc}</p></div><Badge>{subscriptions.length}</Badge></div>{subscriptions.length === 0 ? <EmptyState title={t.billing.subscriptionsEmptyTitle} description={t.billing.subscriptionsEmptyDesc} /> : <div className="table-wrap"><table><thead><tr><th>{t.billing.tableColSubId}</th><th>{t.billing.tableColSubLicenseCustomer}</th><th>{t.billing.fieldEnv}</th><th>{t.common.status}</th><th>{t.billing.tableColSubPeriodEnd}</th></tr></thead><tbody>{subscriptions.map((item) => <tr key={item.id}><td><strong>{item.externalSubscriptionId}</strong><small>{item.id}</small></td><td><span>{item.licenseId}</span><small>{item.customerId}</small></td><td>{item.environment}</td><td><StatusBadge status={item.status} /></td><td>{formatDate(item.currentPeriodEnd)}{item.cancelAtPeriodEnd ? <small>{t.billing.subCancelAtPeriodEnd}</small> : null}</td></tr>)}</tbody></table></div>}</Card> : null}
 
-      {tab === "adjustments" ? <Card><div className="card-header"><div><p className="eyebrow">资金与争议审计</p><h2>退款与争议记录</h2><p>记录支付网关上报的退款与争议事件，支持管理员核实后实施人工处置。</p></div><Badge>{adjustments.length}</Badge></div>{adjustments.length === 0 ? <EmptyState title="暂无退款或争议记录" description="发生的退款、信用返还、拒付或反转事件将记录在此处等待审计。" /> : <div className="table-wrap"><table><thead><tr><th>外部单号</th><th>原始网关状态</th><th>金额</th><th>系统联动影响</th><th>处置状态</th><th>操作</th></tr></thead><tbody>{adjustments.map((item) => <tr key={item.id}><td><strong>{item.externalAdjustmentId}</strong><small>{item.provider}</small></td><td>{item.action} · {item.type} · {item.status}</td><td>{item.amount || "—"} {item.currencyCode || ""}</td><td>{item.automaticEffect || "无自动动作"}<small>{item.licenseId || "未关联授权"}</small></td><td><StatusBadge status={item.reviewStatus} /></td><td>{canManage && item.reviewStatus === "open" ? <Button variant="secondary" loading={saving} onClick={() => { setResolvingAdjustment(item); setAdjustmentAction("keep_suspended"); setAdjustmentReason(""); }}>人工处置</Button> : null}</td></tr>)}</tbody></table></div>}</Card> : null}
+      {tab === "adjustments" ? <Card><div className="card-header"><div><p className="eyebrow">{t.billing.tabAdjustments}</p><h2>{t.billing.tabAdjustments}</h2><p>{t.billing.adjustmentsEmptyDesc}</p></div><Badge>{adjustments.length}</Badge></div>{adjustments.length === 0 ? <EmptyState title={t.billing.adjustmentsEmptyTitle} description={t.billing.adjustmentsEmptyDesc} /> : <div className="table-wrap"><table><thead><tr><th>{t.billing.tableColAdjExternalId}</th><th>{t.billing.tableColAdjGatewayStatus}</th><th>{t.billing.tableColAdjAmount}</th><th>{t.billing.tableColAdjSystemEffect}</th><th>{t.billing.tableColAdjReviewStatus}</th><th>{t.common.actions}</th></tr></thead><tbody>{adjustments.map((item) => <tr key={item.id}><td><strong>{item.externalAdjustmentId}</strong><small>{item.provider}</small></td><td>{item.action} · {item.type} · {item.status}</td><td>{item.amount || "—"} {item.currencyCode || ""}</td><td>{item.automaticEffect || t.billing.adjNoAutomaticEffect}<small>{item.licenseId || t.billing.adjUnlinkedLicense}</small></td><td><StatusBadge status={item.reviewStatus} /></td><td>{canManage && item.reviewStatus === "open" ? <Button variant="secondary" loading={saving} onClick={() => { setResolvingAdjustment(item); setAdjustmentAction("keep_suspended"); setAdjustmentReason(""); }}>{t.billing.modalResolveTitle}</Button> : null}</td></tr>)}</tbody></table></div>}</Card> : null}
 
-      <Modal open={providerModal} onClose={() => setProviderModal(false)} title="连接 Paddle 支付通道" description="Client-side Token 用于前端结账组件；Webhook Secret 与 API Key 将在后端密文存储。">
-        <form className="form-stack" onSubmit={createProvider}><Field label="运行环境"><Select value={providerForm.environment} onChange={(event) => setProviderForm({ ...providerForm, environment: event.target.value as BillingEnvironment })}><option value="sandbox">沙盒测试环境 (Sandbox)</option><option value="live">正式生产环境 (Live)</option></Select></Field><Field label="Client-side Token" hint="在 Paddle 开发者后台中获取的 Client-side Token 前端凭据"><Input value={providerForm.clientSideToken} onChange={(event) => setProviderForm({ ...providerForm, clientSideToken: event.target.value })} autoComplete="off" required /></Field><Field label="Webhook Secret" hint="在 Paddle 后台配置 Webhook 时生成的签名密钥 (Secret Key)"><Input type="password" value={providerForm.webhookSecret} onChange={(event) => setProviderForm({ ...providerForm, webhookSecret: event.target.value })} autoComplete="new-password" required /></Field><Field label="Paddle API Key（可选）" hint="仅在需要服务端对账或读取高级客户数据时选填"><Input type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} autoComplete="new-password" /></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setProviderModal(false)}>取消</Button><Button type="submit" loading={saving}>保存通道配置</Button></div></form>
+      <Modal open={providerModal} onClose={() => setProviderModal(false)} title={t.billing.modalProviderTitle} description={t.billing.modalProviderDesc}>
+        <form className="form-stack" onSubmit={createProvider}><Field label={t.billing.fieldEnv}><Select value={providerForm.environment} onChange={(event) => setProviderForm({ ...providerForm, environment: event.target.value as BillingEnvironment })}><option value="sandbox">{t.billing.providerEnvSandbox}</option><option value="live">{t.billing.providerEnvLive}</option></Select></Field><Field label={t.billing.fieldClientToken} hint={t.billing.fieldClientTokenHint}><Input value={providerForm.clientSideToken} onChange={(event) => setProviderForm({ ...providerForm, clientSideToken: event.target.value })} autoComplete="off" required /></Field><Field label={t.billing.fieldWebhookSecret} hint={t.billing.fieldWebhookSecretHint}><Input type="password" value={providerForm.webhookSecret} onChange={(event) => setProviderForm({ ...providerForm, webhookSecret: event.target.value })} autoComplete="new-password" required /></Field><Field label={t.billing.fieldApiKey} hint={t.billing.fieldApiKeyHint}><Input type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} autoComplete="new-password" /></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setProviderModal(false)}>{t.common.cancel}</Button><Button type="submit" loading={saving}>{t.billing.btnCreateProvider}</Button></div></form>
       </Modal>
 
-      <Modal open={offerModal} onClose={() => setOfferModal(false)} title="新建定价方案映射" description="将支付平台中的 Price 对应到系统内的一个产品及授权方案。">
-        <form className="form-stack" onSubmit={createOffer}><Field label="关联支付通道"><Select value={offerForm.billingProviderId} onChange={(event) => setOfferForm({ ...offerForm, billingProviderId: event.target.value })} required>{providers.map((item) => <option key={item.id} value={item.id}>Paddle {item.environment === "sandbox" ? "沙盒" : "生产"} ({item.id})</option>)}</Select></Field><Field label="Paddle Price ID" hint="在 Paddle 后台创建价格后生成的编号（以 pri_ 开头）"><Input value={offerForm.externalPriceId} onChange={(event) => setOfferForm({ ...offerForm, externalPriceId: event.target.value })} placeholder="pri_…" required /></Field><div className="form-grid"><Field label="关联产品"><Select value={offerForm.productId} onChange={(event) => setOfferForm({ ...offerForm, productId: event.target.value })} required>{products.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field><Field label="授权方案"><Select value={offerForm.licensePlanId} onChange={(event) => { const plan = plans.find((item) => item.id === event.target.value); setOfferForm({ ...offerForm, licensePlanId: event.target.value, purchaseType: plan?.licenseModel === "subscription" ? "subscription" : "one_time" }) }} required>{plans.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name} ({item.licenseModel === "subscription" ? "定期订阅" : "一次性买断"})</option>)}</Select></Field></div><Field label="购买类型"><Select value={offerForm.purchaseType} onChange={(event) => setOfferForm({ ...offerForm, purchaseType: event.target.value as "one_time" | "subscription" })}><option value="one_time">一次性买断 (One-time)</option><option value="subscription">定期订阅 (Subscription)</option></Select></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setOfferModal(false)}>取消</Button><Button type="submit" loading={saving}>保存为草稿</Button></div></form>
+      <Modal open={offerModal} onClose={() => setOfferModal(false)} title={t.billing.modalOfferTitle} description={t.billing.modalOfferDesc}>
+        <form className="form-stack" onSubmit={createOffer}><Field label={t.billing.fieldSelectProvider}><Select value={offerForm.billingProviderId} onChange={(event) => setOfferForm({ ...offerForm, billingProviderId: event.target.value })} required>{providers.map((item) => <option key={item.id} value={item.id}>Paddle {item.environment === "sandbox" ? "Sandbox" : "Live"} ({item.id})</option>)}</Select></Field><Field label={t.billing.fieldPriceId} hint={t.billing.fieldPriceIdHint}><Input value={offerForm.externalPriceId} onChange={(event) => setOfferForm({ ...offerForm, externalPriceId: event.target.value })} placeholder="pri_…" required /></Field><div className="form-grid"><Field label={t.billing.fieldSelectProduct}><Select value={offerForm.productId} onChange={(event) => setOfferForm({ ...offerForm, productId: event.target.value })} required>{products.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field><Field label={t.billing.fieldSelectPlan}><Select value={offerForm.licensePlanId} onChange={(event) => { const plan = plans.find((item) => item.id === event.target.value); setOfferForm({ ...offerForm, licensePlanId: event.target.value, purchaseType: plan?.licenseModel === "subscription" ? "subscription" : "one_time" }) }} required>{plans.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name} ({item.licenseModel === "subscription" ? t.billing.offerTypeSubscription : t.billing.offerTypeOneTime})</option>)}</Select></Field></div><Field label={t.billing.fieldPurchaseType}><Select value={offerForm.purchaseType} onChange={(event) => setOfferForm({ ...offerForm, purchaseType: event.target.value as "one_time" | "subscription" })}><option value="one_time">{t.billing.offerTypeOneTime}</option><option value="subscription">{t.billing.offerTypeSubscription}</option></Select></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setOfferModal(false)}>{t.common.cancel}</Button><Button type="submit" loading={saving}>{t.billing.btnCreateOffer}</Button></div></form>
       </Modal>
 
-      <Modal open={Boolean(providerTest)} onClose={() => setProviderTest(null)} title={providerTest ? `Paddle ${providerTest.environment === "sandbox" ? "沙盒" : "生产"}配置检查` : "支付通道检查"} description="此项检查仅验证配置凭证与签名有效性，不会产生真实扣费或签发授权。">
-        {providerTest ? <div className="readiness-list"><ProviderCheck label="Client-side Token 环境有效" value={providerTest.clientSideTokenValid} /><ProviderCheck label="Webhook Secret 可正常解密" value={providerTest.webhookSecretDecryptable} /><ProviderCheck label="Webhook 签名样本核验通过" value={providerTest.signatureSampleVerified} /><ProviderCheck label="服务端 API Key 已就绪（可选）" value={providerTest.apiKeyConfigured} /></div> : null}
+      <Modal open={Boolean(providerTest)} onClose={() => setProviderTest(null)} title={providerTest ? `Paddle ${providerTest.environment === "sandbox" ? "Sandbox" : "Live"}` : ""} description={t.billing.modalProviderDesc}>
+        {providerTest ? <div className="readiness-list"><ProviderCheck label="Client-side Token" value={providerTest.clientSideTokenValid} /><ProviderCheck label="Webhook Secret" value={providerTest.webhookSecretDecryptable} /><ProviderCheck label="Webhook Signature" value={providerTest.signatureSampleVerified} /><ProviderCheck label="API Key" value={providerTest.apiKeyConfigured} /></div> : null}
       </Modal>
 
       <Modal
         open={Boolean(resolvingAdjustment)}
         onClose={() => { setResolvingAdjustment(null); setAdjustmentReason(""); }}
-        title="人工处置退款与争议"
-        description={resolvingAdjustment ? `外部单号：${resolvingAdjustment.externalAdjustmentId}，关联授权：${resolvingAdjustment.licenseId || "未关联"}` : ""}
+        title={t.billing.modalResolveTitle}
+        description={resolvingAdjustment ? `${resolvingAdjustment.externalAdjustmentId} (${resolvingAdjustment.licenseId || "—"})` : ""}
       >
         <form onSubmit={submitResolveAdjustment} className="form-stack">
-          <Field label="处置动作" hint="选择对当前授权与业务状态执行的操作">
+          <Field label={t.billing.fieldResolutionAction}>
             <Select value={adjustmentAction} onChange={(e) => setAdjustmentAction(e.target.value as any)}>
-              <option value="keep_suspended">保持冻结</option>
-              <option value="reinstate">恢复授权</option>
-              <option value="revoke">吊销授权</option>
-              <option value="security_reset">安全重置授权凭证</option>
-              <option value="no_action">仅标记处理，不变更授权</option>
+              <option value="keep_suspended">{t.billing.actionKeepSuspended}</option>
+              <option value="reinstate">{t.billing.actionReinstate}</option>
+              <option value="revoke">{t.billing.actionRevoke}</option>
+              <option value="security_reset">{t.billing.actionSecurityReset}</option>
+              <option value="no_action">{t.billing.actionNoAction}</option>
             </Select>
           </Field>
-          <Field label="处理原因与依据" hint="必填，请填写处置原因或关联的客服工单号（将记录在操作日志中）">
+          <Field label={t.billing.fieldReason}>
             <Input
               value={adjustmentReason}
               onChange={(e) => setAdjustmentReason(e.target.value)}
-              placeholder="请输入核实说明或工单编号..."
+              placeholder="Reason..."
               required
             />
           </Field>
           <div className="form-actions">
-            <Button variant="secondary" type="button" onClick={() => { setResolvingAdjustment(null); setAdjustmentReason(""); }}>取消</Button>
-            <Button type="submit" loading={saving}>确认处置</Button>
+            <Button variant="secondary" type="button" onClick={() => { setResolvingAdjustment(null); setAdjustmentReason(""); }}>{t.common.cancel}</Button>
+            <Button type="submit" loading={saving}>{t.billing.btnResolveSubmit}</Button>
           </div>
         </form>
       </Modal>
@@ -217,11 +219,12 @@ export function BillingView({ canManage }: { canManage: boolean }) {
 }
 
 function Readiness({ report }: { report: ReadinessReport }) {
+  const { formatDate } = useI18n();
   return (
     <div className="readiness">
       <div className="readiness-title">
         <StatusBadge status={report.checkoutAvailable ? "ready" : "not_ready"} />
-        <strong>{report.checkoutAvailable ? "结账链路就绪" : "结账链路尚未就绪"}</strong>
+        <strong>{report.checkoutAvailable ? "Checkout Ready" : "Checkout Not Ready"}</strong>
       </div>
       <div className="readiness-list">
         {report.checks.map((check) => (
@@ -229,7 +232,7 @@ function Readiness({ report }: { report: ReadinessReport }) {
             <StatusBadge status={check.status} />
             <span>
               <strong>{check.label || check.key}</strong>
-              <small>{check.error?.code || check.action || (check.lastSucceededAt ? `最近检查通过于 ${formatDate(check.lastSucceededAt)}` : "暂无成功记录")}</small>
+              <small>{check.error?.code || check.action || (check.lastSucceededAt ? formatDate(check.lastSucceededAt) : "—")}</small>
             </span>
           </div>
         ))}
@@ -244,7 +247,7 @@ function ProviderCheck({ label, value }: { label: string; value: boolean | null 
       <StatusBadge status={value === true ? "ready" : value === false ? "not_ready" : "stale"} />
       <span>
         <strong>{label}</strong>
-        <small>{value === null ? "未提供签名样本" : value ? "通过" : "未通过"}</small>
+        <small>{value === null ? "—" : value ? "Passed" : "Failed"}</small>
       </span>
     </div>
   );

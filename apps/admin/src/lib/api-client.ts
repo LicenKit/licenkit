@@ -397,6 +397,15 @@ export interface EmailConfigurationTestResult {
   error?: Record<string, unknown> | null;
 }
 
+export interface AdminStats {
+  totalProducts: number;
+  totalLicenses: number;
+  activeActivations: number;
+  expiringSoon: number;
+  pendingInboundEvents: number;
+  pendingDeliveries: number;
+}
+
 export const api = {
   setup: {
     status: () => request<SetupStatus>("/setup/status", { scope: "public" }),
@@ -417,6 +426,9 @@ export const api = {
       login: (body: { email: string; password: string }) => request<AdminSession>("/admin/auth/login", { method: "POST", body, scope: "public", credentials: "include" }),
       session: () => request<AdminSession>("/admin/auth/session", { scope: "admin" }),
       logout: () => request<{ loggedOut: true }>("/admin/auth/logout", { method: "POST", scope: "admin" }),
+    },
+    stats: {
+      get: () => request<AdminStats>("/admin/stats", { scope: "admin" }),
     },
     instance: {
       get: () => request<Instance>("/admin/instance", { scope: "admin" }),
@@ -516,7 +528,10 @@ export const api = {
       },
     },
     emailDeliveries: {
-      list: (status?: DeliveryStatus) => request<ListResponse<EmailDelivery>>(`/admin/email-deliveries${queryString({ status })}`, { scope: "admin" }),
+      list: (params: { status?: DeliveryStatus; query?: string; page?: number; limit?: number } | DeliveryStatus = {}) => {
+        const queryParams = typeof params === "string" ? { status: params } : params;
+        return request<ListResponse<EmailDelivery>>(`/admin/email-deliveries${queryString(queryParams)}`, { scope: "admin" });
+      },
       get: (id: string) => request<EmailDelivery>(`/admin/email-deliveries/${encodeURIComponent(id)}`, { scope: "admin" }),
       retry: (id: string, confirmPossibleDuplicate = false) => request<EmailDelivery>(`/admin/email-deliveries/${encodeURIComponent(id)}/retry`, { method: "POST", body: { confirmPossibleDuplicate }, scope: "admin" }),
       cancel: (id: string) => request<EmailDelivery>(`/admin/email-deliveries/${encodeURIComponent(id)}/cancel`, { method: "POST", scope: "admin" }),
@@ -541,14 +556,14 @@ export const api = {
         resolve: (id: string, body: { action: "no_action" | "keep_suspended" | "reinstate" | "revoke" | "security_reset"; reason: string }) => request<BillingAdjustment>(`/admin/billing/adjustments/${encodeURIComponent(id)}/resolve`, { method: "POST", body, scope: "admin" }),
       },
       events: {
-        list: () => request<ListResponse<InboundEvent>>("/admin/billing/events", { scope: "admin" }),
+        list: (params?: { status?: string; limit?: number; offset?: number }) => request<ListResponse<InboundEvent>>(`/admin/billing/events${queryString(params ?? {})}`, { scope: "admin" }),
         get: (id: string) => request<InboundEvent>(`/admin/billing/events/${encodeURIComponent(id)}`, { scope: "admin" }),
         replay: (id: string) => request<InboundEvent>(`/admin/billing/events/${encodeURIComponent(id)}/replay`, { method: "POST", scope: "admin" }),
       },
     },
     system: {
       issues: {
-        list: () => request<ListResponse<SystemIssue>>("/admin/system/issues", { scope: "admin" }),
+        list: (params?: { status?: string }) => request<ListResponse<SystemIssue>>(`/admin/system/issues${queryString(params ?? {})}`, { scope: "admin" }),
         process: (id: string) => request<{ id: Identifier; status: "processed"; processedAt: IsoDateTime }>(`/admin/system/issues/${encodeURIComponent(id)}/process`, { method: "POST", scope: "admin" }),
       },
     },

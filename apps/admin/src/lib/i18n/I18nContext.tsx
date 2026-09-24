@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   dictionaries,
+  getCurrentLocale,
   getStoredLocale,
   resolveActiveLocale,
   setGlobalLocale,
@@ -90,7 +91,24 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 export function useI18n(): I18nContextValue {
   const context = useContext(I18nContext);
   if (!context) {
-    throw new Error("useI18n must be used within an I18nProvider");
+    const locale = getCurrentLocale();
+    const dictionary = dictionaries[locale] || dictionaries["zh-CN"];
+    return {
+      locale,
+      preference: locale,
+      setLocale: () => {},
+      setPreference: () => {},
+      t: dictionary,
+      formatDate: (value?: string | number | Date | null, options?: Intl.DateTimeFormatOptions): string => {
+        if (!value) return "—";
+        const date = value instanceof Date ? value : new Date(value);
+        if (Number.isNaN(date.getTime())) return String(value);
+        return new Intl.DateTimeFormat(
+          locale,
+          options || { dateStyle: "medium", timeStyle: "short" }
+        ).format(date);
+      },
+    };
   }
   return context;
 }

@@ -767,28 +767,79 @@ adminEmailIntegrationsRouter.post(
 export const adminEmailDeliveriesRouter = new Hono<AppContext>();
 
 adminEmailDeliveriesRouter.get("/", requireRole([...READ_ROLES]), async (c) => {
-  const status = c.req.query("status");
-  const result = status
-    ? await c.env.DB.prepare(
+  const queryInput = z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    status: z.enum([
+      "pending",
+      "processing",
+      "waiting_configuration",
+      "retry_scheduled",
+      "accepted",
+      "failed",
+      "expired",
+      "cancelled",
+    ]).optional(),
+    query: z.string().optional(),
+  }).strict().parse(c.req.query());
+
+  const page = Math.max(1, Number.parseInt(queryInput.page ?? "1", 10) || 1);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(queryInput.limit ?? "20", 10) || 20));
+  const offset = (page - 1) * limit;
+
+  const instanceId = c.get("instanceId")!;
+  const conditions: string[] = ["instance_id = ?1"];
+  const bindings: unknown[] = [instanceId];
+  let bindIndex = 2;
+
+  if (queryInput.status) {
+    conditions.push(`status = ?${bindIndex++}`);
+    bindings.push(queryInput.status);
+  }
+
+  const search = queryInput.query?.trim();
+  if (search) {
+    conditions.push(`(recipient_email LIKE ?${bindIndex} OR id = ?${bindIndex + 1} OR provider_message_id LIKE ?${bindIndex + 2} OR notification_type LIKE ?${bindIndex + 3})`);
+    bindings.push(`%${search}%`, search, `%${search}%`, `%${search}%`);
+    bindIndex += 4;
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const countResult = await c.env.DB
+    .prepare(`SELECT COUNT(*) AS total FROM email_deliveries WHERE ${whereClause}`)
+    .bind(...bindings)
+    .all<{ total: number }>();
+  const totalItems = Number(countResult.results[0]?.total ?? 0);
+
+  const itemsResult = await c.env.DB
+    .prepare(
       `SELECT id, recipient_type, customer_id, notification_type, contract_version,
               recipient_email, send_expires_at, variables_expires_at, status, attempt_count,
               next_attempt_at, provider_message_id, last_error_json,
               accepted_at, created_at, updated_at
        FROM email_deliveries
-       WHERE instance_id = ?1 AND status = ?2
-       ORDER BY created_at DESC, id DESC LIMIT 100`,
-    ).bind(c.get("instanceId")!, status).all<EmailDeliveryRow>()
-    : await c.env.DB.prepare(
-      `SELECT id, recipient_type, customer_id, notification_type, contract_version,
-              recipient_email, send_expires_at, variables_expires_at, status, attempt_count,
-              next_attempt_at, provider_message_id, last_error_json,
-              accepted_at, created_at, updated_at
-       FROM email_deliveries
-       WHERE instance_id = ?1
-       ORDER BY created_at DESC, id DESC LIMIT 100`,
-    ).bind(c.get("instanceId")!).all<EmailDeliveryRow>();
+       WHERE ${whereClause}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?${bindIndex++} OFFSET ?${bindIndex++}`,
+    )
+    .bind(...bindings, limit, offset)
+    .all<EmailDeliveryRow>();
+
   c.header("Cache-Control", "no-store");
-  return c.json({ success: true, data: { items: result.results.map(serializeDelivery) } });
+  return c.json({
+    success: true,
+    data: {
+      items: itemsResult.results.map(serializeDelivery),
+      pagination: {
+        page,
+        limit,
+        total: totalItems,
+        total_items: totalItems,
+        total_pages: Math.max(1, Math.ceil(totalItems / limit)),
+      },
+    },
+  });
 });
 
 adminEmailDeliveriesRouter.get(

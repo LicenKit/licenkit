@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowUpRight, CheckCircle2, CircleDollarSign, KeyRound, Package, RefreshCw, Send } from "lucide-react";
-import { api, type BillingOffer, type EmailDelivery, type InboundEvent, type License, type Product, type SystemIssue } from "../../lib/api-client";
-import { Badge, Button, Card, EmptyState, ErrorPanel, LoadingState, PageHeader, StatusBadge, formatDate } from "../../components/ui";
+import { api, type AdminStats, type BillingOffer, type EmailDelivery, type InboundEvent, type SystemIssue } from "../../lib/api-client";
+import { Badge, Button, Card, EmptyState, ErrorPanel, LoadingState, PageHeader, StatusBadge } from "../../components/ui";
+import { useI18n } from "../../lib/i18n";
 
 export function OverviewView() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [licenses, setLicenses] = useState<License[]>([]);
+  const { t, formatDate } = useI18n();
+  const [stats, setStats] = useState<AdminStats | null>(null);
   const [offers, setOffers] = useState<BillingOffer[]>([]);
   const [events, setEvents] = useState<InboundEvent[]>([]);
   const [deliveries, setDeliveries] = useState<EmailDelivery[]>([]);
@@ -17,87 +18,88 @@ export function OverviewView() {
     setLoading(true);
     setError(null);
     const results = await Promise.allSettled([
-      api.admin.products.list(),
-      api.admin.licenses.list({ limit: 50 }),
+      api.admin.stats.get(),
       api.admin.billing.offers.list(),
-      api.admin.billing.events.list(),
-      api.admin.emailDeliveries.list(),
-      api.admin.system.issues.list(),
+      api.admin.billing.events.list({ status: "needs_attention,failed", limit: 6 }),
+      api.admin.emailDeliveries.list({ status: "failed", limit: 6 }),
+      api.admin.system.issues.list({ status: "pending" }),
     ]);
-    if (results[0].status === "fulfilled") setProducts(results[0].value.items);
-    if (results[1].status === "fulfilled") setLicenses(results[1].value.items);
-    if (results[2].status === "fulfilled") setOffers(results[2].value.items);
-    if (results[3].status === "fulfilled") setEvents(results[3].value.items);
-    if (results[4].status === "fulfilled") setDeliveries(results[4].value.items);
-    if (results[5].status === "fulfilled") setIssues(results[5].value.items);
+    if (results[0].status === "fulfilled") setStats(results[0].value);
+    if (results[1].status === "fulfilled") setOffers(results[1].value.items);
+    if (results[2].status === "fulfilled") setEvents(results[2].value.items);
+    if (results[3].status === "fulfilled") setDeliveries(results[3].value.items);
+    if (results[4].status === "fulfilled") setIssues(results[4].value.items);
     const failure = results.find((result) => result.status === "rejected");
     if (failure?.status === "rejected") setError(failure.reason);
     setLoading(false);
   }
 
   useEffect(() => { void load() }, []);
-  const attentionEvents = events.filter((item) => item.status === "needs_attention" || item.status === "failed");
-  const deliveryProblems = deliveries.filter((item) => ["failed", "waiting_configuration", "expired"].includes(item.status));
+  const attentionEvents = events;
+  const deliveryProblems = deliveries;
+  const pendingDeliveriesCount = stats?.pendingDeliveries ?? deliveries.length;
+  const pendingEventsCount = stats?.pendingInboundEvents ?? attentionEvents.length;
+  const totalAlerts = pendingEventsCount + pendingDeliveriesCount;
   const activeOffers = offers.filter((item) => item.status === "active");
 
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="系统总览"
-        title="控制台运行总览"
-        description="汇总当前实例的产品、授权、定价方案、待办异常与通知投递状态。"
-        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
+        eyebrow={t.overview.eyebrow}
+        title={t.overview.title}
+        description={t.overview.description}
+        action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />{t.common.refresh}</Button>}
       />
-      <ErrorPanel error={error} title="部分总览数据加载失败" />
-      {loading && products.length === 0 ? <LoadingState label="正在读取运行状态" /> : (
+      <ErrorPanel error={error} onClose={() => setError(null)} title={t.overview.errorTitle} />
+      {loading && !stats ? <LoadingState label={t.overview.loadingLabel} /> : (
         <>
           <section className="metric-grid">
             <Card className="metric-card">
               <Package />
-              <span>产品</span>
-              <strong>{products.length}</strong>
-              <small>{products.filter((item) => item.status === "active").length} 个已启用</small>
+              <span>{t.overview.metricProducts}</span>
+              <strong>{stats?.totalProducts ?? 0}</strong>
+              <small>{t.overview.metricProductsSub}</small>
             </Card>
             <Card className="metric-card">
               <KeyRound />
-              <span>授权</span>
-              <strong>{licenses.length}</strong>
-              <small>{licenses.filter((item) => item.status === "active").length} 个生效中</small>
+              <span>{t.overview.metricLicenses}</span>
+              <strong>{stats?.totalLicenses ?? 0}</strong>
+              <small>{t.overview.metricLicensesSub(stats?.activeActivations ?? 0)}</small>
             </Card>
             <Card className="metric-card">
               <CircleDollarSign />
-              <span>定价方案</span>
+              <span>{t.overview.metricOffers}</span>
               <strong>{offers.length}</strong>
-              <small>{activeOffers.length} 个已激活生效</small>
+              <small>{t.overview.metricOffersSub(activeOffers.length)}</small>
             </Card>
-            <Card className={attentionEvents.length + deliveryProblems.length ? "metric-card metric-alert" : "metric-card"}>
+            <Card className={totalAlerts > 0 ? "metric-card metric-alert" : "metric-card"}>
               <AlertTriangle />
-              <span>待办事项</span>
-              <strong>{attentionEvents.length + deliveryProblems.length}</strong>
-              <small>异常事件 {attentionEvents.length} · 失败邮件 {deliveryProblems.length}</small>
+              <span>{t.overview.metricTodos}</span>
+              <strong>{totalAlerts}</strong>
+              <small>{t.overview.metricTodosSub(pendingEventsCount, pendingDeliveriesCount)}</small>
             </Card>
           </section>
           <section className="overview-grid">
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">定价与收款</p>
-                  <h2>定价方案</h2>
-                  <p>管理 Paddle 价格映射与定价方案生效状态。</p>
+                  <p className="eyebrow">{t.overview.pricingEyebrow}</p>
+                  <h2>{t.overview.pricingTitle}</h2>
+                  <p>{t.overview.pricingDesc}</p>
                 </div>
                 <CircleDollarSign className="size-5" />
               </div>
               {offers.length === 0 ? (
-                <EmptyState title="暂无定价映射" description="请先在产品、授权方案中进行配置，并绑定 Paddle 价格。" />
+                <EmptyState title={t.overview.pricingEmptyTitle} description={t.overview.pricingEmptyDesc} />
               ) : (
                 <div className="stack-list">
                   {offers.slice(0, 6).map((offer) => (
                     <div className="stack-row" key={offer.id}>
                       <div className="grow">
                         <strong>{offer.productName || offer.productId}</strong>
-                        <span>{offer.licensePlanName || offer.licensePlanId} · {offer.purchaseType === "subscription" ? "订阅制" : "买断制"}</span>
+                        <span>{offer.licensePlanName || offer.licensePlanId} · {offer.purchaseType === "subscription" ? t.overview.typeSubscription : t.overview.typeOneTime}</span>
                       </div>
-                      <StatusBadge status={offer.status} label={offer.status === "active" ? "已激活" : offer.status === "archived" ? "已归档" : "草稿"} />
+                      <StatusBadge status={offer.status} label={offer.status === "active" ? t.overview.statusActive : offer.status === "archived" ? t.overview.statusArchived : t.overview.statusDraft} />
                     </div>
                   ))}
                 </div>
@@ -106,17 +108,17 @@ export function OverviewView() {
             <Card>
               <div className="card-header">
                 <div>
-                  <p className="eyebrow">运维待办</p>
-                  <h2>待办与异常</h2>
-                  <p>汇集需要管理员关注的 Webhook 处理异常与邮件发送故障。</p>
+                  <p className="eyebrow">{t.overview.todosEyebrow}</p>
+                  <h2>{t.overview.todosTitle}</h2>
+                  <p>{t.overview.todosDesc}</p>
                 </div>
                 <Send className="size-5" />
               </div>
               {attentionEvents.length + deliveryProblems.length === 0 ? (
                 <div className="healthy-state">
                   <CheckCircle2 className="size-6" />
-                  <strong>当前无待办事项</strong>
-                  <span>所有入站事件已正常履约，邮件发送与系统运行畅通。</span>
+                  <strong>{t.overview.healthyTitle}</strong>
+                  <span>{t.overview.healthyDesc}</span>
                 </div>
               ) : (
                 <div className="stack-list">
@@ -144,7 +146,7 @@ export function OverviewView() {
               )}
               {issues.length > 0 ? (
                 <div className="stack-list">
-                  <p className="eyebrow">最近系统异常</p>
+                  <p className="eyebrow">{t.overview.recentIssuesEyebrow}</p>
                   {issues.slice(0, 4).map((issue) => (
                     <div className="stack-row" key={issue.id}>
                       <AlertTriangle className="size-5 text-danger" />
@@ -152,8 +154,8 @@ export function OverviewView() {
                         <strong>{issue.errorCode}</strong>
                         <span>{issue.category} · {issue.operation} · {formatDate(issue.lastSeenAt)}</span>
                       </div>
-                      <StatusBadge status={issue.status} label={issue.status === "pending" ? "待处理" : "已处理"} />
-                      <Badge tone="warning">{issue.occurrenceCount} 次</Badge>
+                      <StatusBadge status={issue.status} label={issue.status === "pending" ? t.overview.statusPending : t.overview.statusProcessed} />
+                      <Badge tone="warning">{t.overview.occurrenceTimes(issue.occurrenceCount)}</Badge>
                     </div>
                   ))}
                 </div>

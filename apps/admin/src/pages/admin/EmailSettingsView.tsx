@@ -9,7 +9,8 @@ import {
   type EmailTemplateContract,
 } from "../../lib/api-client";
 import { templateDownload } from "../../lib/email-delivery";
-import { Badge, Button, Card, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, StatusBadge, formatDate, safeJson } from "../../components/ui";
+import { Badge, Button, Card, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, StatusBadge, safeJson } from "../../components/ui";
+import { useI18n } from "../../lib/i18n/I18nContext";
 
 interface IntegrationForm {
   name: string;
@@ -48,6 +49,7 @@ function downloadHtml(example: EmailProviderTemplateExample): void {
 }
 
 export function EmailSettingsView({ canManage, embedded = false }: { canManage: boolean; embedded?: boolean }) {
+  const { t, formatDate } = useI18n();
   const [contracts, setContracts] = useState<EmailTemplateContract[]>([]);
   const [integrations, setIntegrations] = useState<EmailIntegration[]>([]);
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<string | null>(null);
@@ -271,35 +273,35 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
     }
   }
 
-  if (loading && contracts.length === 0) return <LoadingState label="正在读取邮件配置" />;
+  if (loading && contracts.length === 0) return <LoadingState label={t.email.loadingSettings} />;
 
   return (
     <div className="page-stack">
       {!embedded ? (
         <PageHeader
-          eyebrow="服务与通知"
-          title="邮件服务设置"
-          description="管理 Resend 发信通道连接、API 密钥轮换，以及业务通知模板与参数变量的映射配置。"
-          action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />刷新</Button>}
+          eyebrow={t.email.settingsEyebrow}
+          title={t.email.settingsTitle}
+          description={t.email.settingsDesc}
+          action={<Button variant="secondary" loading={loading} onClick={() => void load()}><RefreshCw className="size-4" />{t.common.refresh}</Button>}
         />
       ) : null}
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
 
       <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">发信服务商</p>
-            <h2>发信通道配置</h2>
-            <p>配置发信通道及发件人信息。新发出的业务邮件将始终使用这里的最新设置。</p>
+            <p className="eyebrow">{t.email.channelSectionEyebrow}</p>
+            <h2>{t.email.channelSectionTitle}</h2>
+            <p>{t.email.channelSectionDesc}</p>
           </div>
-          {canManage ? <Button onClick={openCreateIntegration}><Plus className="size-4" />连接通道</Button> : null}
+          {canManage ? <Button onClick={openCreateIntegration}><Plus className="size-4" />{t.email.newIntegration}</Button> : null}
         </div>
         <Notice>
-          <strong>通道配置即时生效</strong>
-          <p>修改 API Key、发件人名称、邮箱或回复地址后全局即刻生效，无需繁琐迁移。</p>
+          <strong>{t.email.channelNoticeTitle}</strong>
+          <p>{t.email.channelNoticeDesc}</p>
         </Notice>
         {integrations.length === 0 ? (
-          <EmptyState title="尚未连接发信服务商" description="连接 Resend 通道后，即可为各项业务通知绑定对应的远程邮件模板。" />
+          <EmptyState title={t.email.integrationsEmptyTitle} description={t.email.integrationsEmptyDesc} />
         ) : (
           <div className="card-grid">
             {integrations.map((integration) => (
@@ -313,29 +315,29 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                 </header>
                 <div className="metric-grid compact">
                   <div>
-                    <span>发件人 (From)</span>
+                    <span>{t.email.colSenderFrom}</span>
                     <strong>{integration.defaultFromName ? `${integration.defaultFromName} <${integration.defaultFromEmail}>` : integration.defaultFromEmail}</strong>
                   </div>
                   <div>
-                    <span>回复地址 (Reply-To)</span>
+                    <span>{t.email.colReplyTo}</span>
                     <strong>{integration.replyToEmail || "—"}</strong>
                   </div>
                   <div>
-                    <span>自动重试上限</span>
-                    <strong>{integration.maxAutomaticAttempts} 次</strong>
+                    <span>{t.email.colMaxRetry}</span>
+                    <strong>{t.email.countTimes(integration.maxAutomaticAttempts)}</strong>
                   </div>
                   <div>
-                    <span>API 密钥</span>
-                    <strong>{integration.credentialConfigured ? "已配置" : "未配置"}</strong>
+                    <span>{t.email.colApiKey}</span>
+                    <strong>{integration.credentialConfigured ? t.email.statusConfigured : t.email.statusNotConfigured}</strong>
                   </div>
                 </div>
                 <div className="button-row wrap">
-                  <Button variant="ghost" onClick={() => void load(integration.id)}>查看模板</Button>
-                  {canManage ? <Button variant="secondary" onClick={() => openEditIntegration(integration)}><Pencil className="size-4" />编辑</Button> : null}
-                  {canManage ? <Button variant="secondary" onClick={() => { setRotateTarget(integration); setNewApiKey("") }}><KeyRound className="size-4" />轮换 Key</Button> : null}
+                  <Button variant="ghost" onClick={() => void load(integration.id)}>{t.email.btnViewTemplates}</Button>
+                  {canManage ? <Button variant="secondary" onClick={() => openEditIntegration(integration)}><Pencil className="size-4" />{t.common.edit}</Button> : null}
+                  {canManage ? <Button variant="secondary" onClick={() => { setRotateTarget(integration); setNewApiKey("") }}><KeyRound className="size-4" />{t.email.btnRotateKey}</Button> : null}
                   {canManage ? (
                     <Button variant={integration.status === "active" ? "danger" : "secondary"} loading={saving} onClick={() => void toggleIntegration(integration)}>
-                      <Power className="size-4" />{integration.status === "active" ? "禁用" : "启用"}
+                      <Power className="size-4" />{integration.status === "active" ? t.common.disable : t.common.enable}
                     </Button>
                   ) : null}
                 </div>
@@ -348,18 +350,18 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
       <Card>
         <div className="card-header">
           <div>
-            <p className="eyebrow">通知类型与模板</p>
-            <h2>模板与变量绑定</h2>
-            <p>{selectedIntegration ? `${selectedIntegration.name} · 已启用 ${activeBindingCount}/${currentContracts.length} 个通知模板` : "先选择一个发信通道。"}</p>
+            <p className="eyebrow">{t.email.templatesEyebrow}</p>
+            <h2>{t.email.templatesSectionTitle}</h2>
+            <p>{selectedIntegration ? t.email.templatesSectionSubdesc(selectedIntegration.name, activeBindingCount, currentContracts.length) : t.email.templatesSelectPrompt}</p>
           </div>
           <Badge>{activeBindingCount}/{currentContracts.length} active</Badge>
         </div>
         <Notice tone="warning">
-          <strong>实时测试说明</strong>
-          <p>测试将使用示例数据实际调用发信服务商发送测试邮件，便于验证密钥可用性与模板语法是否正确。</p>
+          <strong>{t.email.testingNoticeTitle}</strong>
+          <p>{t.email.testingNoticeDesc}</p>
         </Notice>
         {!selectedIntegration ? (
-          <EmptyState title="尚未选择发信服务商" description="请先在上方连接或选择一个发信通道。" />
+          <EmptyState title={t.email.notSelectedTitle} description={t.email.notSelectedDesc} />
         ) : (
           <div className="email-contract-list">
             {currentContracts.map((contract) => {
@@ -373,7 +375,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                         <Mail className="size-5" />
                         <h3>{contract.name}</h3>
                         <Badge>v{contract.version}</Badge>
-                        {binding ? <StatusBadge status={binding.status} /> : <Badge tone="warning">未绑定</Badge>}
+                        {binding ? <StatusBadge status={binding.status} /> : <Badge tone="warning">{t.email.unboundBadge}</Badge>}
                       </div>
                       <code>{contract.notificationType}</code>
                       <p>{contract.description}</p>
@@ -381,7 +383,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                     <div className="button-row wrap">
                       {canManage ? (
                         <Button variant="secondary" onClick={() => openBinding(contract)}>
-                          {binding ? "编辑绑定" : "绑定模板"}
+                          {binding ? t.email.btnEditBinding : t.email.btnBindTemplate}
                         </Button>
                       ) : null}
                       {canManage && binding ? (
@@ -390,7 +392,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                           disabled={binding.status !== "active" || selectedIntegration.status !== "active"}
                           onClick={() => { setTestContract(contract); setTestRecipient(""); setTestResult(null); setRetryWaitingResult(null) }}
                         >
-                          <Send className="size-4" />发送测试
+                          <Send className="size-4" />{t.email.btnSendTestEmail}
                         </Button>
                       ) : null}
                       {canManage && binding ? (
@@ -399,26 +401,26 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                           loading={saving}
                           onClick={() => void toggleBinding(binding)}
                         >
-                          {binding.status === "active" ? "禁用" : "启用"}
+                          {binding.status === "active" ? t.common.disable : t.common.enable}
                         </Button>
                       ) : null}
                     </div>
                   </header>
                   {binding ? (
                     <div className="metric-grid compact">
-                      <div><span>Provider Template Ref</span><strong>{binding.providerTemplateRef}</strong></div>
-                      <div><span>合同版本</span><strong>v{binding.contractVersion}</strong></div>
-                      <div><span>状态</span><strong>{binding.status}</strong></div>
-                      <div><span>更新时间</span><strong>{formatDate(binding.updatedAt)}</strong></div>
+                      <div><span>{t.email.colTemplateRef}</span><strong>{binding.providerTemplateRef}</strong></div>
+                      <div><span>{t.email.colContractVersion}</span><strong>v{binding.contractVersion}</strong></div>
+                      <div><span>{t.common.status}</span><strong>{binding.status}</strong></div>
+                      <div><span>{t.common.updatedAt}</span><strong>{formatDate(binding.updatedAt)}</strong></div>
                     </div>
                   ) : null}
                   <details className="email-contract-detail">
-                    <summary>查看可用变量与模板示例</summary>
+                    <summary>{t.email.variablesSectionSummary}</summary>
                     <section>
                       <div className="email-section-heading">
                         <div>
-                          <h4>模板变量</h4>
-                          <p>可在邮件模板中引用的业务变量。系统在触发通知时会自动填充对应数据。</p>
+                          <h4>{t.email.variablesTitle}</h4>
+                          <p>{t.email.variablesDesc}</p>
                         </div>
                         <Badge>{contract.variables.length} variables</Badge>
                       </div>
@@ -426,12 +428,12 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                         <table>
                           <thead>
                             <tr>
-                              <th>变量</th>
-                              <th>类型</th>
-                              <th>必填</th>
-                              <th>敏感</th>
-                              <th>说明</th>
-                              <th>示例</th>
+                              <th>{t.email.tableColVariable}</th>
+                              <th>{t.email.tableColDataType}</th>
+                              <th>{t.email.tableColRequired}</th>
+                              <th>{t.email.tableColSensitive}</th>
+                              <th>{t.email.tableColDescription}</th>
+                              <th>{t.email.tableColExample}</th>
                               <th></th>
                             </tr>
                           </thead>
@@ -440,11 +442,11 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                               <tr key={variable.name}>
                                 <td><code>{variable.name}</code></td>
                                 <td>{variable.type}{variable.format ? <small>{variable.format}</small> : null}</td>
-                                <td>{variable.required ? "是" : "否"}</td>
-                                <td>{variable.sensitive ? <Badge tone="warning">敏感</Badge> : "否"}</td>
+                                <td>{variable.required ? t.email.yes : t.email.no}</td>
+                                <td>{variable.sensitive ? <Badge tone="warning">{t.email.sensitiveBadge}</Badge> : t.email.no}</td>
                                 <td>{variable.description}</td>
                                 <td><code>{String(variable.example)}</code></td>
-                                <td><Button variant="ghost" aria-label={`复制变量 ${variable.name}`} onClick={() => void copyText(variable.name)}><Copy className="size-4" /></Button></td>
+                                <td><Button variant="ghost" aria-label={t.common.copyValue(variable.name)} onClick={() => void copyText(variable.name)}><Copy className="size-4" /></Button></td>
                               </tr>
                             ))}
                           </tbody>
@@ -455,15 +457,15 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                       <section>
                         <div className="email-section-heading">
                           <div>
-                            <h4>参考模板 ({example.provider})</h4>
-                            <p>变量占位符格式：{example.placeholderSyntax}。请在发信服务商后台创建对应的邮件模板。</p>
+                            <h4>{t.email.sampleTemplateTitle(example.provider)}</h4>
+                            <p>{t.email.sampleTemplateDesc(example.placeholderSyntax)}</p>
                           </div>
                           <Badge>{example.fileName}</Badge>
                         </div>
                         <div className="button-row wrap">
-                          <Button variant="secondary" onClick={() => void copyText(example.subject)}><Copy className="size-4" />复制邮件标题</Button>
-                          <Button variant="secondary" onClick={() => void copyText(example.html)}><Copy className="size-4" />复制 HTML</Button>
-                          <Button variant="secondary" onClick={() => downloadHtml(example)}><Download className="size-4" />下载 HTML</Button>
+                          <Button variant="secondary" onClick={() => void copyText(example.subject)}><Copy className="size-4" />{t.email.btnCopySubject}</Button>
+                          <Button variant="secondary" onClick={() => void copyText(example.html)}><Copy className="size-4" />{t.email.btnCopyHtml}</Button>
+                          <Button variant="secondary" onClick={() => downloadHtml(example)}><Download className="size-4" />{t.email.btnDownloadHtml}</Button>
                         </div>
                       </section>
                     ) : null}
@@ -475,57 +477,57 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
         )}
       </Card>
 
-      <Modal open={integrationMode !== null} onClose={() => { setIntegrationMode(null); setIntegrationTarget(null) }} title={integrationMode === "create" ? "连接发信通道" : "编辑发信通道"} description="保存后，后续发信将自动使用最新配置。">
+      <Modal open={integrationMode !== null} onClose={() => { setIntegrationMode(null); setIntegrationTarget(null) }} title={t.email.modalIntegrationTitle(integrationMode === "edit")} description={t.email.modalIntegrationSaveDesc}>
         <form className="form-stack" onSubmit={saveIntegration}>
-          <Field label="发信服务商"><Input value="resend" disabled /></Field>
-          <Field label="连接名称"><Input value={integrationForm.name} onChange={(event) => setIntegrationForm({ ...integrationForm, name: event.target.value })} maxLength={120} required /></Field>
+          <Field label={t.email.fieldProviderLabel}><Input value="resend" disabled /></Field>
+          <Field label={t.email.fieldChannelName}><Input value={integrationForm.name} onChange={(event) => setIntegrationForm({ ...integrationForm, name: event.target.value })} maxLength={120} required /></Field>
           {integrationMode === "create" ? (
-            <Field label="Resend API Key" hint="保存后不回显。">
+            <Field label={t.email.fieldApiKey} hint={t.email.fieldApiKeyHint}>
               <Input type="password" value={integrationForm.apiKey} onChange={(event) => setIntegrationForm({ ...integrationForm, apiKey: event.target.value })} autoComplete="new-password" required />
             </Field>
           ) : null}
           <div className="form-grid">
-            <Field label="发件邮箱 (From)"><Input type="email" value={integrationForm.defaultFromEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromEmail: event.target.value })} required /></Field>
-            <Field label="发件人名称（可选）"><Input value={integrationForm.defaultFromName} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromName: event.target.value })} /></Field>
+            <Field label={t.email.fieldFromEmail}><Input type="email" value={integrationForm.defaultFromEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromEmail: event.target.value })} required /></Field>
+            <Field label={t.email.fieldFromName}><Input value={integrationForm.defaultFromName} onChange={(event) => setIntegrationForm({ ...integrationForm, defaultFromName: event.target.value })} /></Field>
           </div>
           <div className="form-grid">
-            <Field label="回复邮箱（可选）"><Input type="email" value={integrationForm.replyToEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, replyToEmail: event.target.value })} /></Field>
-            <Field label="最大自动重试次数" hint="包含首次发送尝试"><Input type="number" min="1" max="20" value={integrationForm.maxAutomaticAttempts} onChange={(event) => setIntegrationForm({ ...integrationForm, maxAutomaticAttempts: event.target.value })} required /></Field>
+            <Field label={t.email.fieldReplyTo}><Input type="email" value={integrationForm.replyToEmail} onChange={(event) => setIntegrationForm({ ...integrationForm, replyToEmail: event.target.value })} /></Field>
+            <Field label={t.email.fieldMaxAttempts} hint={t.email.fieldMaxAttemptsHint}><Input type="number" min="1" max="20" value={integrationForm.maxAutomaticAttempts} onChange={(event) => setIntegrationForm({ ...integrationForm, maxAutomaticAttempts: event.target.value })} required /></Field>
           </div>
           <div className="form-actions">
-            <Button type="button" variant="secondary" onClick={() => setIntegrationMode(null)}>取消</Button>
-            <Button type="submit" loading={saving}>保存</Button>
+            <Button type="button" variant="secondary" onClick={() => setIntegrationMode(null)}>{t.common.cancel}</Button>
+            <Button type="submit" loading={saving}>{t.common.save}</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={Boolean(rotateTarget)} onClose={() => setRotateTarget(null)} title="更换 API 密钥" description="保存后，后续外发邮件将立即使用新密钥。">
+      <Modal open={Boolean(rotateTarget)} onClose={() => setRotateTarget(null)} title={t.email.modalRotateKeyTitle} description={t.email.modalRotateKeyDesc}>
         <form className="form-stack" onSubmit={rotateCredential}>
-          <Field label="新 API 密钥"><Input type="password" value={newApiKey} onChange={(event) => setNewApiKey(event.target.value)} autoComplete="new-password" required /></Field>
-          <Notice tone="warning"><strong>密钥不回显</strong><p>为保障安全，密钥保存后不会在界面明文展示。建议保存后发送一封测试邮件验证连通性。</p></Notice>
+          <Field label={t.email.fieldNewApiKey}><Input type="password" value={newApiKey} onChange={(event) => setNewApiKey(event.target.value)} autoComplete="new-password" required /></Field>
+          <Notice tone="warning"><strong>{t.email.rotateKeyNoticeTitle}</strong><p>{t.email.rotateKeyNoticeDesc}</p></Notice>
           <div className="form-actions">
-            <Button type="button" variant="secondary" onClick={() => setRotateTarget(null)}>取消</Button>
-            <Button type="submit" loading={saving}>确认更换</Button>
+            <Button type="button" variant="secondary" onClick={() => setRotateTarget(null)}>{t.common.cancel}</Button>
+            <Button type="submit" loading={saving}>{t.email.btnConfirmRotate}</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={Boolean(bindingContract)} onClose={() => setBindingContract(null)} title="配置模板绑定" description={bindingContract ? `${bindingContract.notificationType}@${bindingContract.version}` : undefined} wide>
+      <Modal open={Boolean(bindingContract)} onClose={() => setBindingContract(null)} title={t.email.modalBindingTitle} description={bindingContract ? `${bindingContract.notificationType}@${bindingContract.version}` : undefined} wide>
         {bindingContract ? (
           <form className="form-stack" onSubmit={saveBinding}>
-            <Field label="模板标识 (Template ID / Alias)" hint="填写发信服务商后台中的模板 ID 或别名；保存仅在本系统建立关联，不会修改远程模板。">
+            <Field label={t.email.fieldTemplateRef} hint={t.email.bindingTemplateRefHint}>
               <Input value={providerTemplateRef} onChange={(event) => setProviderTemplateRef(event.target.value)} maxLength={512} required />
             </Field>
-            <Notice><strong>支持的动态变量清单</strong><p>在 Resend 邮件模板中可引用下列变量占位符，触发通知时系统将自动注入相应业务数据。</p></Notice>
+            <Notice><strong>{t.email.bindingVariablesNoticeTitle}</strong><p>{t.email.bindingVariablesNoticeDesc}</p></Notice>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>变量</th>
-                    <th>类型</th>
-                    <th>必填</th>
-                    <th>说明</th>
-                    <th>示例</th>
+                    <th>{t.email.tableColVariable}</th>
+                    <th>{t.email.tableColDataType}</th>
+                    <th>{t.email.tableColRequired}</th>
+                    <th>{t.email.tableColDescription}</th>
+                    <th>{t.email.tableColExample}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -533,7 +535,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                     <tr key={variable.name}>
                       <td><code>{variable.name}</code></td>
                       <td>{variable.type}</td>
-                      <td>{variable.required ? "是" : "否"}</td>
+                      <td>{variable.required ? t.email.yes : t.email.no}</td>
                       <td>{variable.description}</td>
                       <td><code>{String(variable.example)}</code></td>
                     </tr>
@@ -542,43 +544,43 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
               </table>
             </div>
             <div className="form-actions">
-              <Button type="button" variant="secondary" onClick={() => setBindingContract(null)}>取消</Button>
-              <Button type="submit" loading={saving}>保存模板绑定</Button>
+              <Button type="button" variant="secondary" onClick={() => setBindingContract(null)}>{t.common.cancel}</Button>
+              <Button type="submit" loading={saving}>{t.email.btnSaveBinding}</Button>
             </div>
           </form>
         ) : null}
       </Modal>
 
-      <Modal open={Boolean(testContract)} onClose={() => setTestContract(null)} title="发送配置测试" description={testContract?.notificationType} wide>
+      <Modal open={Boolean(testContract)} onClose={() => setTestContract(null)} title={t.email.modalTestTitle} description={testContract?.notificationType} wide>
         {testContract ? (
           <form className="form-stack" onSubmit={sendConfigurationTest}>
-            <Field label="测试收件邮箱" hint="系统将真实发送一封测试邮件，内容采用下方列表中的示例数据。">
+            <Field label={t.email.fieldTestRecipient} hint={t.email.testRecipientHint}>
               <Input type="email" value={testRecipient} onChange={(event) => setTestRecipient(event.target.value)} placeholder="you@example.com" required />
             </Field>
             <Notice tone="warning">
-              <strong>测试结果说明</strong>
-              <p>服务商受理仅代表发信请求已成功送达网关，最终是否进入收件箱取决于收件方垃圾邮件策略；测试记录不会存入正式投递日志。</p>
+              <strong>{t.email.testNoticeTitle}</strong>
+              <p>{t.email.testNoticeDesc}</p>
             </Notice>
             {testResult ? (
               <Notice tone={testResult.providerAccepted ? "success" : "warning"}>
-                <strong>{testResult.providerAccepted ? "服务商已成功受理" : "服务商未受理请求"}</strong>
+                <strong>{testResult.providerAccepted ? t.email.testSuccessTitle : t.email.testFailedTitle}</strong>
                 <pre>{safeJson(testResult)}</pre>
               </Notice>
             ) : null}
             {retryWaitingResult ? (
               <Notice tone="success">
-                <strong>已重新排队</strong>
-                <p>{retryWaitingResult.queuedCount} 封待处理邮件已重新排队，将使用最新配置发送。</p>
+                <strong>{t.email.retryQueuedTitle}</strong>
+                <p>{t.email.retryQueuedDesc(retryWaitingResult.queuedCount)}</p>
               </Notice>
             ) : null}
             <div className="form-actions">
-              <Button type="button" variant="secondary" onClick={() => setTestContract(null)}>关闭</Button>
+              <Button type="button" variant="secondary" onClick={() => setTestContract(null)}>{t.common.close}</Button>
               {testResult?.providerAccepted ? (
                 <Button type="button" variant="secondary" loading={saving} onClick={() => void retryWaitingDeliveries()}>
-                  <RefreshCw className="size-4" />重试待处理邮件
+                  <RefreshCw className="size-4" />{t.email.btnRetryWaitingDeliveries}
                 </Button>
               ) : null}
-              <Button type="submit" loading={saving}><Send className="size-4" />发送测试</Button>
+              <Button type="submit" loading={saving}><Send className="size-4" />{t.email.btnSendTestEmail}</Button>
             </div>
           </form>
         ) : null}

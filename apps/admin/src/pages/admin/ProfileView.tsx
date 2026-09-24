@@ -99,7 +99,7 @@ export function ProfileView({
           </Button>
         }
       />
-      <ErrorPanel error={error} />
+      <ErrorPanel error={error} onClose={() => setError(null)} />
       {message ? (
         <Notice tone="success">
           <strong>{message}</strong>
