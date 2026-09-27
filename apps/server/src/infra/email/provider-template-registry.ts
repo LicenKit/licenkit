@@ -146,25 +146,58 @@ const RESEND_TEMPLATE_EXAMPLES = Object.freeze([
     subject: "Your {{{product_name}}} license key",
     html: `<!doctype html>
 <html lang="en">
-  <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
-    <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
-      <h1 style="margin-top:0;">Your {{{product_name}}} license</h1>
-      <p>{{{instance_name}}} has issued a license for {{{product_name}}}.</p>
-      <p>Your license key:</p>
-      <p style="padding:16px;background:#f3f4f6;border-radius:8px;font-family:monospace;font-size:16px;word-break:break-all;">
-        {{{license_key}}}
-      </p>
-      <p>License model: {{{license_model}}}</p>
-    </main>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #18181b; -webkit-font-smoothing: antialiased;">
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5; padding: 40px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 36px 32px; text-align: left; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);">
+            <tr>
+              <td>
+                <div style="font-size: 13px; font-weight: 600; color: #71717a; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 20px;">{{{instance_name}}}</div>
+                <h1 style="margin: 0 0 16px; font-size: 22px; font-weight: 600; line-height: 1.3; color: #09090b; letter-spacing: -0.3px;">Your {{{product_name}}} license</h1>
+                <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #3f3f46;">Thank you for your purchase. Here is your license key to activate {{{product_name}}}.</p>
+                <div style="background-color: #f9fafb; border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px 20px; margin: 0 0 24px;">
+                  <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #71717a; margin-bottom: 8px;">License Key</div>
+                  <div style="font-family: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace; font-size: 15px; font-weight: 500; color: #09090b; word-break: break-all; letter-spacing: 0.5px;">{{{license_key}}}</div>
+                </div>
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 0 0 28px; font-size: 14px; border-top: 1px solid #f4f4f5;">
+                  <tr>
+                    <td style="padding: 10px 0; color: #71717a; border-bottom: 1px solid #f4f4f5; width: 120px;">Product</td>
+                    <td style="padding: 10px 0; color: #09090b; font-weight: 500; border-bottom: 1px solid #f4f4f5;">{{{product_name}}}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 10px 0; color: #71717a; border-bottom: 1px solid #f4f4f5;">Model</td>
+                    <td style="padding: 10px 0; color: #09090b; font-weight: 500; border-bottom: 1px solid #f4f4f5;">{{{license_model}}}</td>
+                  </tr>
+                </table>
+                <div style="border-top: 1px solid #f4f4f5; padding-top: 20px; font-size: 12px; line-height: 1.5; color: #a1a1aa;">
+                  Sent by {{{instance_name}}} &middot; Powered by LicenKit
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>`,
-    text: `Your {{{product_name}}} license
+    text: `Your {{{product_name}}} License
 
-{{{instance_name}}} has issued a license for {{{product_name}}}.
+Thank you for your purchase. Here is your license key to activate {{{product_name}}}.
 
-License key: {{{license_key}}}
-License model: {{{license_model}}}
+License Key:
+{{{license_key}}}
 
+Details:
+- Product: {{{product_name}}}
+- License Model: {{{license_model}}}
+
+---
+Sent by {{{instance_name}}} · Powered by LicenKit
 `,
   }),
   example({
@@ -175,25 +208,61 @@ License model: {{{license_model}}}
     subject: "Your recovered {{{product_name}}} license key",
     html: `<!doctype html>
 <html lang="en">
-  <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
-    <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
-      <h1 style="margin-top:0;">Your recovered {{{product_name}}} license</h1>
-      <p>{{{instance_name}}} has generated a new license key. The previous key is no longer valid.</p>
-      <p>Your new license key:</p>
-      <p style="padding:16px;background:#f3f4f6;border-radius:8px;font-family:monospace;font-size:16px;word-break:break-all;">
-        {{{license_key}}}
-      </p>
-      <p>Key version: {{{key_version}}}</p>
-    </main>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #18181b; -webkit-font-smoothing: antialiased;">
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5; padding: 40px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 36px 32px; text-align: left; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);">
+            <tr>
+              <td>
+                <div style="font-size: 13px; font-weight: 600; color: #71717a; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 20px;">{{{instance_name}}}</div>
+                <h1 style="margin: 0 0 16px; font-size: 22px; font-weight: 600; line-height: 1.3; color: #09090b; letter-spacing: -0.3px;">Your recovered {{{product_name}}} license</h1>
+                <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #3f3f46;">A new license key has been generated for your {{{product_name}}} license. Any previous key has been deactivated.</p>
+                <div style="background-color: #f9fafb; border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px 20px; margin: 0 0 24px;">
+                  <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #71717a; margin-bottom: 8px;">New License Key (v{{{key_version}}})</div>
+                  <div style="font-family: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace; font-size: 15px; font-weight: 500; color: #09090b; word-break: break-all; letter-spacing: 0.5px;">{{{license_key}}}</div>
+                </div>
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 0 0 24px; font-size: 14px; border-top: 1px solid #f4f4f5;">
+                  <tr>
+                    <td style="padding: 10px 0; color: #71717a; border-bottom: 1px solid #f4f4f5; width: 120px;">Product</td>
+                    <td style="padding: 10px 0; color: #09090b; font-weight: 500; border-bottom: 1px solid #f4f4f5;">{{{product_name}}}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 10px 0; color: #71717a; border-bottom: 1px solid #f4f4f5;">Key Version</td>
+                    <td style="padding: 10px 0; color: #09090b; font-weight: 500; border-bottom: 1px solid #f4f4f5;">{{{key_version}}}</td>
+                  </tr>
+                </table>
+                <p style="margin: 0 0 24px; font-size: 13px; line-height: 1.5; color: #71717a;">If you did not request this recovery, please contact support immediately.</p>
+                <div style="border-top: 1px solid #f4f4f5; padding-top: 20px; font-size: 12px; line-height: 1.5; color: #a1a1aa;">
+                  Sent by {{{instance_name}}} &middot; Powered by LicenKit
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>`,
     text: `Your recovered {{{product_name}}} license
 
-{{{instance_name}}} has generated a new license key. The previous key is no longer valid.
+A new license key has been generated for your {{{product_name}}} license. Any previous key has been deactivated.
 
-New license key: {{{license_key}}}
-Key version: {{{key_version}}}
+New License Key (v{{{key_version}}}):
+{{{license_key}}}
 
+Details:
+- Product: {{{product_name}}}
+- Key Version: {{{key_version}}}
+
+If you did not request this recovery, please contact support immediately.
+
+---
+Sent by {{{instance_name}}} · Powered by LicenKit
 `,
   }),
   example({
@@ -204,27 +273,61 @@ Key version: {{{key_version}}}
     subject: "Security reset for your {{{product_name}}} license",
     html: `<!doctype html>
 <html lang="en">
-  <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
-    <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
-      <h1 style="margin-top:0;">Your {{{product_name}}} license was reset</h1>
-      <p>{{{instance_name}}} completed a security reset for this license.</p>
-      <p>The previous license key and existing device activations are no longer valid.</p>
-      <p>Your new license key:</p>
-      <p style="padding:16px;background:#f3f4f6;border-radius:8px;font-family:monospace;font-size:16px;word-break:break-all;">
-        {{{license_key}}}
-      </p>
-      <p>Key version: {{{key_version}}}</p>
-    </main>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #18181b; -webkit-font-smoothing: antialiased;">
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5; padding: 40px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 36px 32px; text-align: left; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);">
+            <tr>
+              <td>
+                <div style="font-size: 13px; font-weight: 600; color: #71717a; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 20px;">{{{instance_name}}}</div>
+                <h1 style="margin: 0 0 16px; font-size: 22px; font-weight: 600; line-height: 1.3; color: #09090b; letter-spacing: -0.3px;">Your {{{product_name}}} license was reset</h1>
+                <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #3f3f46;">A security reset has been completed for your {{{product_name}}} license. All previous license keys and existing device activations have been revoked.</p>
+                <div style="background-color: #f9fafb; border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px 20px; margin: 0 0 24px;">
+                  <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #71717a; margin-bottom: 8px;">New License Key (v{{{key_version}}})</div>
+                  <div style="font-family: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace; font-size: 15px; font-weight: 500; color: #09090b; word-break: break-all; letter-spacing: 0.5px;">{{{license_key}}}</div>
+                </div>
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 0 0 24px; font-size: 14px; border-top: 1px solid #f4f4f5;">
+                  <tr>
+                    <td style="padding: 10px 0; color: #71717a; border-bottom: 1px solid #f4f4f5; width: 120px;">Product</td>
+                    <td style="padding: 10px 0; color: #09090b; font-weight: 500; border-bottom: 1px solid #f4f4f5;">{{{product_name}}}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 10px 0; color: #71717a; border-bottom: 1px solid #f4f4f5;">Key Version</td>
+                    <td style="padding: 10px 0; color: #09090b; font-weight: 500; border-bottom: 1px solid #f4f4f5;">{{{key_version}}}</td>
+                  </tr>
+                </table>
+                <p style="margin: 0 0 24px; font-size: 13px; line-height: 1.5; color: #71717a;">Please re-activate your devices using the new license key above.</p>
+                <div style="border-top: 1px solid #f4f4f5; padding-top: 20px; font-size: 12px; line-height: 1.5; color: #a1a1aa;">
+                  Sent by {{{instance_name}}} &middot; Powered by LicenKit
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>`,
     text: `Your {{{product_name}}} license was reset
 
-{{{instance_name}}} completed a security reset for this license.
-The previous license key and existing device activations are no longer valid.
+A security reset has been completed for your {{{product_name}}} license. All previous license keys and existing device activations have been revoked.
 
-New license key: {{{license_key}}}
-Key version: {{{key_version}}}
+New License Key (v{{{key_version}}}):
+{{{license_key}}}
 
+Details:
+- Product: {{{product_name}}}
+- Key Version: {{{key_version}}}
+
+Please re-activate your devices using the new license key above.
+
+---
+Sent by {{{instance_name}}} · Powered by LicenKit
 `,
   }),
   example({
@@ -235,27 +338,52 @@ Key version: {{{key_version}}}
     subject: "Sign in to {{{instance_name}}}",
     html: `<!doctype html>
 <html lang="en">
-  <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
-    <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
-      <h1 style="margin-top:0;">Sign in to {{{instance_name}}}</h1>
-      <p>Use the button below to open your customer portal.</p>
-      <p style="margin:24px 0;">
-        <a href="{{{access_url}}}" style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;">
-          Open customer portal
-        </a>
-      </p>
-      <p>This link expires at {{{expires_at}}} and can only be used once.</p>
-      <p>If you did not request this email, you can ignore it.</p>
-    </main>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #18181b; -webkit-font-smoothing: antialiased;">
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5; padding: 40px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 36px 32px; text-align: left; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);">
+            <tr>
+              <td>
+                <div style="font-size: 13px; font-weight: 600; color: #71717a; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 20px;">{{{instance_name}}}</div>
+                <h1 style="margin: 0 0 16px; font-size: 22px; font-weight: 600; line-height: 1.3; color: #09090b; letter-spacing: -0.3px;">Sign in to your customer portal</h1>
+                <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #3f3f46;">Use the secure button below to sign in to your customer portal.</p>
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 0 0 24px;">
+                  <tr>
+                    <td>
+                      <a href="{{{access_url}}}" target="_blank" style="display: inline-block; background-color: #18181b; color: #ffffff; font-size: 14px; font-weight: 500; text-decoration: none; padding: 12px 22px; border-radius: 8px; line-height: 1;">
+                        Open Customer Portal &rarr;
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin: 0 0 24px; font-size: 13px; line-height: 1.5; color: #71717a;">This link expires at {{{expires_at}}} and can only be used once. If you did not request this email, you can safely ignore it.</p>
+                <div style="border-top: 1px solid #f4f4f5; padding-top: 20px; font-size: 12px; line-height: 1.5; color: #a1a1aa;">
+                  Sent by {{{instance_name}}} &middot; Powered by LicenKit
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>`,
-    text: `Sign in to {{{instance_name}}}
+    text: `Sign in to your customer portal
 
-Open your customer portal:
+Use the link below to sign in to {{{instance_name}}}:
 {{{access_url}}}
 
 This link expires at {{{expires_at}}} and can only be used once.
-If you did not request this email, you can ignore it.`,
+If you did not request this email, you can safely ignore it.
+
+---
+Sent by {{{instance_name}}} · Powered by LicenKit
+`,
   }),
   example({
     provider: "resend",
@@ -265,27 +393,54 @@ If you did not request this email, you can ignore it.`,
     subject: "You are invited to {{{instance_name}}}",
     html: `<!doctype html>
 <html lang="en">
-  <body style="margin:0;padding:24px;background:#f6f7f9;font-family:Arial,sans-serif;color:#1f2937;">
-    <main style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;border-radius:12px;">
-      <h1 style="margin-top:0;">Join {{{instance_name}}}</h1>
-      <p>You have been invited to join this LicenKit Instance.</p>
-      <p style="margin:24px 0;">
-        <a href="{{{invitation_url}}}" style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;">
-          Review invitation
-        </a>
-      </p>
-      <p>This link expires at {{{expires_at}}} and can only be used once.</p>
-      <p>If you did not expect this invitation, you can ignore it.</p>
-    </main>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #18181b; -webkit-font-smoothing: antialiased;">
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5; padding: 40px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 520px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 36px 32px; text-align: left; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);">
+            <tr>
+              <td>
+                <div style="font-size: 13px; font-weight: 600; color: #71717a; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 20px;">{{{instance_name}}}</div>
+                <h1 style="margin: 0 0 16px; font-size: 22px; font-weight: 600; line-height: 1.3; color: #09090b; letter-spacing: -0.3px;">Join {{{instance_name}}}</h1>
+                <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #3f3f46;">You have been invited to join the team on {{{instance_name}}}. Click the button below to accept your invitation.</p>
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 0 0 24px;">
+                  <tr>
+                    <td>
+                      <a href="{{{invitation_url}}}" target="_blank" style="display: inline-block; background-color: #18181b; color: #ffffff; font-size: 14px; font-weight: 500; text-decoration: none; padding: 12px 22px; border-radius: 8px; line-height: 1;">
+                        Accept Invitation &rarr;
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin: 0 0 24px; font-size: 13px; line-height: 1.5; color: #71717a;">This invitation expires at {{{expires_at}}} and can only be used once. If you did not expect this invitation, you can safely ignore it.</p>
+                <div style="border-top: 1px solid #f4f4f5; padding-top: 20px; font-size: 12px; line-height: 1.5; color: #a1a1aa;">
+                  Sent by {{{instance_name}}} &middot; Powered by LicenKit
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>`,
     text: `Join {{{instance_name}}}
 
-Review your invitation:
+You have been invited to join the team on {{{instance_name}}}.
+
+Accept your invitation:
 {{{invitation_url}}}
 
-This link expires at {{{expires_at}}} and can only be used once.
-If you did not expect this invitation, you can ignore it.`,
+This invitation expires at {{{expires_at}}} and can only be used once.
+If you did not expect this invitation, you can safely ignore it.
+
+---
+Sent by {{{instance_name}}} · Powered by LicenKit
+`,
   }),
 ] satisfies readonly EmailProviderTemplateExample[]);
 
