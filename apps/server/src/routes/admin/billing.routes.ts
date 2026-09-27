@@ -7,6 +7,7 @@ import { AppError, NotFoundError } from "../../middleware/error";
 import { assertPaddleClientToken } from "../../infra/billing/paddle";
 import type { BillingProviderRecord } from "../../infra/billing/types";
 import {
+  decryptBillingProviderSimulatorWebhookSecret,
   decryptBillingProviderWebhookSecret,
   encryptBillingProviderSecret,
 } from "../../infra/billing/storage";
@@ -18,6 +19,7 @@ import { sha256Hex } from "../../infra/crypto";
 import { BillingProcessingError } from "../../infra/billing/errors";
 import { dispatchDelivery } from "../../infra/delivery/dispatcher";
 import { toSnakeCaseJson } from "./snake-case-json";
+import { getPaddleWebhookRequirements } from "../../services/billing/webhook-requirements";
 
 export const adminBillingRouter = new Hono<AppContext>();
 
@@ -30,12 +32,14 @@ const ProviderCreateSchema = z.object({
   environment: z.enum(["sandbox", "live"]),
   client_side_token: z.string().min(6).max(512),
   webhook_secret: z.string().min(16).max(2048),
+  simulator_webhook_secret: z.string().min(16).max(2048),
   api_key: z.string().min(16).max(4096).optional(),
 }).strict().transform((input) => ({
   provider: input.provider,
   environment: input.environment,
   clientSideToken: input.client_side_token,
   webhookSecret: input.webhook_secret,
+  simulatorWebhookSecret: input.simulator_webhook_secret,
   apiKey: input.api_key,
 }));
 
@@ -44,6 +48,7 @@ const ProviderPatchSchema = z.object({
   environment: z.enum(["sandbox", "live"]).optional(),
   client_side_token: z.string().min(6).max(512).optional(),
   webhook_secret: z.string().min(16).max(2048).optional(),
+  simulator_webhook_secret: z.string().min(16).max(2048).optional(),
   api_key: z.string().min(16).max(4096).nullable().optional(),
   status: z.enum(["active", "disabled"]).optional(),
 }).strict().transform((input) => ({
@@ -51,6 +56,7 @@ const ProviderPatchSchema = z.object({
   environment: input.environment,
   clientSideToken: input.client_side_token,
   webhookSecret: input.webhook_secret,
+  simulatorWebhookSecret: input.simulator_webhook_secret,
   apiKey: input.api_key,
   status: input.status,
 }));
@@ -152,7 +158,9 @@ function assertPaddleClientTokenForRoute(environment: "sandbox" | "live", token:
 
 adminBillingRouter.get("/providers", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
   const result = await c.env.DB.prepare(
-    `SELECT id, provider, environment, client_side_token, api_secret_ciphertext,
+    `SELECT id, instance_id, provider, environment, client_side_token,
+            simulator_webhook_secret_ciphertext, simulator_webhook_secret_version,
+            api_secret_ciphertext,
             status, created_at, updated_at,
             (SELECT event.received_at
              FROM inbound_events AS event
@@ -166,24 +174,33 @@ adminBillingRouter.get("/providers", requireRole(["owner", "admin", "member", "v
      ORDER BY created_at DESC
      LIMIT 100`,
   ).bind(instanceId(c)).all<{
-    id: string; provider: string; environment: string; client_side_token: string;
+    id: string; instance_id: string; provider: string; environment: string; client_side_token: string;
+    simulator_webhook_secret_ciphertext: string | null; simulator_webhook_secret_version: number;
     api_secret_ciphertext: string | null; status: string; created_at: string; updated_at: string;
     webhook_verified_at: string | null;
   }>();
   return c.json({
     success: true,
     data: {
-      items: result.results.map((row) => ({
-        id: row.id,
-        provider: row.provider,
-        environment: row.environment,
-        client_side_token: row.client_side_token,
-        webhook_secret_configured: true,
-        webhook_verified_at: row.webhook_verified_at,
-        api_key_configured: Boolean(row.api_secret_ciphertext),
-        status: row.status,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
+      items: await Promise.all(result.results.map(async (row) => {
+        const requirements = await getPaddleWebhookRequirements(c.env.DB, row);
+        return {
+          id: row.id,
+          provider: row.provider,
+          environment: row.environment,
+          client_side_token: row.client_side_token,
+          webhook_secret_configured: true,
+          webhook_verified_at: row.webhook_verified_at,
+          simulator_webhook_secret_configured: requirements.simulatorSecretConfigured,
+          simulator_test_completed_at: requirements.completedAt,
+          required_event_types: requirements.requiredEventTypes,
+          verified_event_types: requirements.verifiedEventTypes,
+          missing_event_types: requirements.missingEventTypes,
+          api_key_configured: requirements.apiKeyConfigured,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+        };
       })),
     },
   });
@@ -201,6 +218,13 @@ adminBillingRouter.post("/providers", requireRole(["owner", "admin"]), async (c)
     id,
     "webhook_secret_ciphertext",
   );
+  const simulatorWebhookCiphertext = await encryptBillingProviderSecret(
+    input.simulatorWebhookSecret,
+    c.env,
+    instanceId(c),
+    id,
+    "simulator_webhook_secret_ciphertext",
+  );
   const apiCiphertext = input.apiKey
     ? await encryptBillingProviderSecret(input.apiKey, c.env, instanceId(c), id, "api_secret_ciphertext")
     : null;
@@ -209,9 +233,19 @@ adminBillingRouter.post("/providers", requireRole(["owner", "admin"]), async (c)
       c.env.DB.prepare(
         `INSERT INTO billing_providers (
            id, instance_id, provider, environment, client_side_token,
-           webhook_secret_ciphertext, api_secret_ciphertext, status, created_at, updated_at
-         ) VALUES (?1, ?2, 'paddle', ?3, ?4, ?5, ?6, 'active', ?7, ?7)`,
-      ).bind(id, instanceId(c), input.environment, input.clientSideToken, webhookCiphertext, apiCiphertext, now),
+           webhook_secret_ciphertext, simulator_webhook_secret_ciphertext,
+           api_secret_ciphertext, status, created_at, updated_at
+         ) VALUES (?1, ?2, 'paddle', ?3, ?4, ?5, ?6, ?7, 'active', ?8, ?8)`,
+      ).bind(
+        id,
+        instanceId(c),
+        input.environment,
+        input.clientSideToken,
+        webhookCiphertext,
+        simulatorWebhookCiphertext,
+        apiCiphertext,
+        now,
+      ),
       prepareAudit(c, "billing.provider.create", "billing_provider", id, {
         provider: "paddle",
         environment: input.environment,
@@ -236,6 +270,8 @@ adminBillingRouter.post("/providers", requireRole(["owner", "admin"]), async (c)
       client_side_token: input.clientSideToken,
       webhook_secret_configured: true,
       webhook_verified_at: null,
+      simulator_webhook_secret_configured: true,
+      simulator_test_completed_at: null,
       api_key_configured: Boolean(input.apiKey),
       status: "active",
     },
@@ -260,6 +296,15 @@ adminBillingRouter.patch("/providers/:providerId", requireRole(["owner", "admin"
   const webhookCiphertext = input.webhookSecret
     ? await encryptBillingProviderSecret(input.webhookSecret, c.env, provider.instance_id, provider.id, "webhook_secret_ciphertext")
     : provider.webhook_secret_ciphertext;
+  const simulatorWebhookCiphertext = input.simulatorWebhookSecret
+    ? await encryptBillingProviderSecret(
+        input.simulatorWebhookSecret,
+        c.env,
+        provider.instance_id,
+        provider.id,
+        "simulator_webhook_secret_ciphertext",
+      )
+    : provider.simulator_webhook_secret_ciphertext;
   const apiCiphertext = input.apiKey === undefined
     ? provider.api_secret_ciphertext
     : input.apiKey === null
@@ -271,12 +316,16 @@ adminBillingRouter.patch("/providers/:providerId", requireRole(["owner", "admin"
       `UPDATE billing_providers
        SET client_side_token = ?1, webhook_secret_ciphertext = ?2,
            webhook_secret_version = CASE WHEN ?3 = 1 THEN webhook_secret_version + 1 ELSE webhook_secret_version END,
-           api_secret_ciphertext = ?4, status = ?5, updated_at = ?6
-       WHERE instance_id = ?7 AND id = ?8`,
+           simulator_webhook_secret_ciphertext = ?4,
+           simulator_webhook_secret_version = CASE WHEN ?5 = 1 THEN simulator_webhook_secret_version + 1 ELSE simulator_webhook_secret_version END,
+           api_secret_ciphertext = ?6, status = ?7, updated_at = ?8
+       WHERE instance_id = ?9 AND id = ?10`,
     ).bind(
       clientToken,
       webhookCiphertext,
       input.webhookSecret !== undefined ? 1 : 0,
+      simulatorWebhookCiphertext,
+      input.simulatorWebhookSecret !== undefined ? 1 : 0,
       apiCiphertext,
       input.status ?? provider.status,
       now,
@@ -286,6 +335,7 @@ adminBillingRouter.patch("/providers/:providerId", requireRole(["owner", "admin"
     prepareAudit(c, "billing.provider.update", "billing_provider", provider.id, {
       clientSideTokenRotated: input.clientSideToken !== undefined,
       webhookSecretRotated: input.webhookSecret !== undefined,
+      simulatorWebhookSecretRotated: input.simulatorWebhookSecret !== undefined,
       apiKeyChanged: input.apiKey !== undefined,
       status: input.status ?? provider.status,
     }),
@@ -299,6 +349,10 @@ adminBillingRouter.post("/providers/:providerId/test", requireRole(["owner", "ad
   if (!provider) throw new NotFoundError("Billing Provider not found.");
   assertPaddleClientTokenForRoute(provider.environment, provider.client_side_token);
   const secret = await decryptBillingProviderWebhookSecret(provider, c.env);
+  const simulatorSecret = provider.simulator_webhook_secret_ciphertext
+    ? await decryptBillingProviderSimulatorWebhookSecret(provider, c.env)
+    : null;
+  const requirements = await getPaddleWebhookRequirements(c.env.DB, provider);
   return c.json({
     success: true,
     data: {
@@ -308,7 +362,13 @@ adminBillingRouter.post("/providers/:providerId/test", requireRole(["owner", "ad
       client_side_token_valid: true,
       webhook_secret_decryptable: secret.length > 0,
       webhook_verified_at: provider.webhook_verified_at,
-      api_key_configured: Boolean(provider.api_secret_ciphertext),
+      simulator_webhook_secret_configured: requirements.simulatorSecretConfigured,
+      simulator_webhook_secret_decryptable: simulatorSecret !== null && simulatorSecret.length > 0,
+      simulator_test_completed_at: requirements.completedAt,
+      required_event_types: requirements.requiredEventTypes,
+      verified_event_types: requirements.verifiedEventTypes,
+      missing_event_types: requirements.missingEventTypes,
+      api_key_configured: requirements.apiKeyConfigured,
     },
   });
 });
@@ -639,7 +699,9 @@ async function getProvider(
 ): Promise<BillingProviderWithVerification | null> {
   const row = await db.prepare(
     `SELECT id, instance_id, provider, environment, client_side_token,
-            webhook_secret_ciphertext, webhook_secret_version, api_secret_ciphertext,
+            webhook_secret_ciphertext, webhook_secret_version,
+            simulator_webhook_secret_ciphertext, simulator_webhook_secret_version,
+            api_secret_ciphertext,
             status, created_at, updated_at,
             (SELECT event.received_at
              FROM inbound_events AS event

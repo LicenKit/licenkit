@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Copy, Download, KeyRound, Mail, Pencil, Plus, Power, RefreshCw, Send } from "lucide-react";
+import { Copy, Download, KeyRound, Mail, Pencil, Plus, Power, RefreshCw, Send, Upload } from "lucide-react";
 import {
   api,
   type EmailConfigurationTestResult,
+  type EmailDefaultTemplateInstallationResult,
   type EmailIntegration,
   type EmailProviderTemplateExample,
   type EmailTemplateBinding,
@@ -63,6 +64,12 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
   const [integrationForm, setIntegrationForm] = useState<IntegrationForm>(emptyIntegrationForm);
   const [rotateTarget, setRotateTarget] = useState<EmailIntegration | null>(null);
   const [newApiKey, setNewApiKey] = useState("");
+  const [installTarget, setInstallTarget] = useState<EmailIntegration | null>(null);
+  const [fullAccessApiKey, setFullAccessApiKey] = useState("");
+  const [installResult, setInstallResult] = useState<{
+    integrationId: string;
+    result: EmailDefaultTemplateInstallationResult;
+  } | null>(null);
   const [bindingContract, setBindingContract] = useState<EmailTemplateContract | null>(null);
   const [providerTemplateRef, setProviderTemplateRef] = useState("");
   const [testContract, setTestContract] = useState<EmailTemplateContract | null>(null);
@@ -81,6 +88,9 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
     return [...latest.values()];
   }, [contracts]);
   const activeBindingCount = bindings.filter((item) => item.status === "active").length;
+  const missingBindingCount = currentContracts.filter(
+    (contract) => !bindingsByType.has(contract.notificationType),
+  ).length;
 
   async function load(preferredIntegrationId?: string | null) {
     setLoading(true);
@@ -186,6 +196,28 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
     } catch (caught) {
       setError(caught);
     } finally {
+      setSaving(false);
+    }
+  }
+
+  async function installDefaultTemplates(event: FormEvent) {
+    event.preventDefault();
+    if (!installTarget) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await api.admin.emailIntegrations.installDefaultTemplates(
+        installTarget.id,
+        fullAccessApiKey,
+      );
+      const integrationId = installTarget.id;
+      setInstallResult({ integrationId, result });
+      setInstallTarget(null);
+      await load(integrationId);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setFullAccessApiKey("");
       setSaving(false);
     }
   }
@@ -354,12 +386,35 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
             <h2>{t.email.templatesSectionTitle}</h2>
             <p>{selectedIntegration ? t.email.templatesSectionSubdesc(selectedIntegration.name, activeBindingCount, currentContracts.length) : t.email.templatesSelectPrompt}</p>
           </div>
-          <Badge>{activeBindingCount}/{currentContracts.length} active</Badge>
+          <div className="button-row wrap">
+            {canManage && selectedIntegration?.provider === "resend" && missingBindingCount > 0 ? (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setInstallTarget(selectedIntegration);
+                  setFullAccessApiKey("");
+                  setInstallResult(null);
+                }}
+              >
+                <Upload className="size-4" />{t.email.btnInstallDefaultTemplates}
+              </Button>
+            ) : null}
+            <Badge>{activeBindingCount}/{currentContracts.length} active</Badge>
+          </div>
         </div>
         <Notice tone="warning">
           <strong>{t.email.testingNoticeTitle}</strong>
           <p>{t.email.testingNoticeDesc}</p>
         </Notice>
+        {installResult && installResult.integrationId === selectedIntegration?.id ? (
+          <Notice tone="success">
+            <strong>{t.email.defaultTemplateInstallSuccessTitle}</strong>
+            <p>{t.email.defaultTemplateInstallSuccessDesc(
+              installResult.result.installedCount,
+              installResult.result.skippedCount,
+            )}</p>
+          </Notice>
+        ) : null}
         {!selectedIntegration ? (
           <EmptyState title={t.email.notSelectedTitle} description={t.email.notSelectedDesc} />
         ) : (
@@ -508,6 +563,44 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
           <div className="form-actions">
             <Button type="button" variant="secondary" onClick={() => setRotateTarget(null)}>{t.common.cancel}</Button>
             <Button type="submit" loading={saving}>{t.email.btnConfirmRotate}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(installTarget)}
+        onClose={() => { setInstallTarget(null); setFullAccessApiKey("") }}
+        title={t.email.modalDefaultTemplateInstallTitle}
+        description={t.email.modalDefaultTemplateInstallDesc(missingBindingCount)}
+      >
+        <form className="form-stack" onSubmit={installDefaultTemplates}>
+          <Field
+            label={t.email.fieldFullAccessApiKey}
+            hint={t.email.fieldFullAccessApiKeyHint}
+          >
+            <Input
+              type="password"
+              value={fullAccessApiKey}
+              onChange={(event) => setFullAccessApiKey(event.target.value)}
+              autoComplete="new-password"
+              required
+            />
+          </Field>
+          <Notice tone="warning">
+            <strong>{t.email.defaultTemplateInstallNoticeTitle}</strong>
+            <p>{t.email.defaultTemplateInstallNoticeDesc}</p>
+          </Notice>
+          <div className="form-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => { setInstallTarget(null); setFullAccessApiKey("") }}
+            >
+              {t.common.cancel}
+            </Button>
+            <Button type="submit" loading={saving}>
+              <Upload className="size-4" />{t.email.btnConfirmDefaultTemplateInstall}
+            </Button>
           </div>
         </form>
       </Modal>

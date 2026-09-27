@@ -15,6 +15,13 @@
       "when": 1790494458777,
       "tag": "0001_webhook_verification_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790497699740,
+      "tag": "0002_paddle_simulator_verification",
+      "breakpoints": true
     }
   ]
 }

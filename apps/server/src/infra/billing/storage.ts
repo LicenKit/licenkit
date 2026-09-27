@@ -11,13 +11,28 @@ export function encryptBillingProviderSecret(
   env: BillingCryptoEnv,
   instanceId: string,
   providerId: string,
-  field: "webhook_secret_ciphertext" | "api_secret_ciphertext",
+  field: "webhook_secret_ciphertext" | "simulator_webhook_secret_ciphertext" | "api_secret_ciphertext",
 ): Promise<string> {
   return encryptEnvelopeV1(plaintext, env, {
     instanceId,
     table: "billing_providers",
     rowId: providerId,
     field,
+  });
+}
+
+export function decryptBillingProviderSimulatorWebhookSecret(
+  provider: BillingProviderRecord,
+  env: BillingCryptoEnv,
+): Promise<string> {
+  if (!provider.simulator_webhook_secret_ciphertext) {
+    return Promise.reject(new Error("Paddle Simulator webhook secret is not configured."));
+  }
+  return decryptEnvelopeV1(provider.simulator_webhook_secret_ciphertext, env, {
+    instanceId: provider.instance_id,
+    table: "billing_providers",
+    rowId: provider.id,
+    field: "simulator_webhook_secret_ciphertext",
   });
 }
 

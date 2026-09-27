@@ -1,14 +1,31 @@
-export const PADDLE_REQUIRED_EVENT_TYPES = [
+export const PADDLE_ONE_TIME_EVENT_TYPES = [
   "customer.created",
   "customer.updated",
   "transaction.completed",
-  "subscription.created",
-  "subscription.updated",
   "adjustment.created",
   "adjustment.updated",
 ] as const;
 
-export type PaddleRequiredEventType = (typeof PADDLE_REQUIRED_EVENT_TYPES)[number];
+export const PADDLE_SUBSCRIPTION_EVENT_TYPES = [
+  "subscription.created",
+  "subscription.updated",
+] as const;
+
+export const PADDLE_SUPPORTED_EVENT_TYPES = [
+  ...PADDLE_ONE_TIME_EVENT_TYPES,
+  ...PADDLE_SUBSCRIPTION_EVENT_TYPES,
+] as const;
+
+export type PaddleSupportedEventType = (typeof PADDLE_SUPPORTED_EVENT_TYPES)[number];
+
+export function requiredPaddleEventTypes(input: {
+  includesSubscriptionOffers: boolean;
+}): PaddleSupportedEventType[] {
+  return [
+    ...PADDLE_ONE_TIME_EVENT_TYPES,
+    ...(input.includesSubscriptionOffers ? PADDLE_SUBSCRIPTION_EVENT_TYPES : []),
+  ];
+}
 export type BillingEnvironment = "sandbox" | "live";
 export type PurchaseType = "one_time" | "subscription";
 
@@ -20,6 +37,8 @@ export interface BillingProviderRecord {
   client_side_token: string;
   webhook_secret_ciphertext: string;
   webhook_secret_version: number;
+  simulator_webhook_secret_ciphertext: string | null;
+  simulator_webhook_secret_version: number;
   api_secret_ciphertext: string | null;
   status: "active" | "disabled";
   created_at: string;

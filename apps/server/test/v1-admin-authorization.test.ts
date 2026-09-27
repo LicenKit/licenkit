@@ -95,6 +95,7 @@ const OWNER_ADMIN_ROUTE_KEYS = [
   "POST /api/v1/admin/email-integrations/:integrationId/disable",
   "POST /api/v1/admin/email-integrations/:integrationId/enable",
   "POST /api/v1/admin/email-integrations/:integrationId/rotate-credential",
+  "POST /api/v1/admin/email-integrations/:integrationId/template-bindings/install-defaults",
   "POST /api/v1/admin/email-integrations/:integrationId/template-bindings/:notificationType/disable",
   "POST /api/v1/admin/email-integrations/:integrationId/template-bindings/:notificationType/enable",
   "POST /api/v1/admin/email-integrations/:integrationId/template-bindings/:notificationType/test",

@@ -124,8 +124,8 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 在 Admin 中继续配置：
 
 1. Email Integration：V1 选择 Resend，配置 API Key、From/Reply-To 和重试预算；API Key 只在写入时提交，之后不返回明文；
-2. 在 Resend 创建并发布五个外部模板，将 Template ID/Alias 绑定到四个 Customer 合同和 `instance.member_invited@1` Invitation 合同，逐个执行配置测试；
-3. Paddle Billing Provider、Webhook Secret 和公开 Client-side Token；
+2. 在邮件配置页使用临时 Resend Full access Key 执行一次“安装默认模板”；LicenKit 创建并发布五个外部模板，自动将 Template ID 绑定到四个 Customer 合同和 `instance.member_invited@1` Invitation 合同。临时 Key 不保存，日常发送继续使用 Integration 中的 Sending access Key；
+3. 分别创建 Sandbox/Live Paddle Billing Provider，配置公开 Client-side Token、Platform Webhook Secret 和独立的 Simulator Webhook Secret；
 4. Product、License Plan、Offer Mapping 和 Product Release；
 5. 需要本地签名凭据时配置 Product Signing Key；
 6. 只有启用 Paddle Customer 读穿、对账或支付平台门户时，才配置具备对应最小权限的 Paddle API Key；
@@ -133,9 +133,13 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 
 每个 Template Binding 的测试成功只证明 Resend Send API 返回 Message ID（Provider 已接收），不证明最终送达。没有真实 API Key、已发布 Template ID/Alias 和测试收件地址时，不得将 Resend E2E 写成已完成。
 
+一次性安装只补齐缺失 Binding，不覆盖已有配置。安装完成后 LicenKit 不读取、更新、删除或同步 Resend 中的模板；后续模板文案和样式由管理员直接在 Resend 管理。
+
 五种邮件合同分别测试并展示状态；Offer 激活只要求购买闭环直接依赖的 `customer.license_issued@1` Binding 当前测试通过。找回、安全重置、Customer Magic Link 和 Instance Invitation 未就绪不会阻止 Offer 激活，但会使对应服务能力保持未就绪。
 
 产品页直接使用 Paddle.js，不调用 LicenKit Checkout API。Paddle Price ID 必须在 LicenKit Offer 中映射到明确的 Product 和 License Plan。
+
+每个 Paddle 环境都必须建立两条 URL Notification Destination：正式业务地址使用 Admin 显示的不带 `/simulator` URL，并把 `traffic_source` 设为 `platform`；测试地址使用带 `/simulator` URL，并把 `traffic_source` 设为 `simulation`。两条地址分别保存各自生成的 Secret，但订阅相同的当前必需事件清单。仅有一次性 Offer 时清单为 `customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在订阅 Offer 时再加入 `subscription.created`、`subscription.updated`。在 Paddle Simulator 中逐类发送 Single event，Admin 显示全部必需事件通过后才算完成 Simulator 合同测试。Simulator 结果不等于正式业务验证；Sandbox 还需执行真实 Checkout，Live 还需在上线后确认 Platform 目标收到真实事件。
 
 ## 8. Customer Site 路由
 
@@ -159,8 +163,9 @@ https://license.tidest.app/admin/*             LicenKit Admin
 4. 部署 Worker 与 Admin；
 5. 在 Cloudflare 远程界面检查 Cron Trigger，并通过 Cron Events 与 Workers Logs 验证 Scheduled Worker 实际触发；同时检查待处理 Inbound Event、Delivery 和当前 Instance 的 System Issue；
 6. 重新查询目标 D1 migration 历史和关键表/列，确认当前初始 Schema 已在正确数据库生效；
-7. 用独立请求验证 Admin、API、支付 Webhook 和 Email Provider 的实际环境；
-8. 逐个检查五个 Template Binding 的当前 revision 测试，确认返回 Provider Message ID；最终送达状态仍以 Provider 管理界面/事件为准。
+7. 用独立请求验证 Admin、API、支付 Webhook 和 Email Provider 的实际环境；支付侧分别核对 Sandbox/Live 的 Platform 与 Simulator 地址、`traffic_source`、独立 Secret 和当前事件清单；
+8. 在每个启用的 Paddle 环境逐项完成当前必需事件的 Simulator 测试，并对 Sandbox 执行真实 Checkout；Simulator 证据不能替代 Platform 真实事件；
+9. 逐个检查五个 Template Binding 的当前 revision 测试，确认返回 Provider Message ID；最终送达状态仍以 Provider 管理界面/事件为准。
 
 本地命令成功不等于线上升级完成；必须对部署目标执行独立 readback。
 

@@ -8,8 +8,12 @@ import {
   parsePaddleWebhook,
   verifyPaddleWebhookSignature,
 } from "../infra/billing/paddle";
-import { decryptBillingProviderWebhookSecret, encryptInboundPayload } from "../infra/billing/storage";
-import type { BillingProviderRecord } from "../infra/billing/types";
+import {
+  decryptBillingProviderSimulatorWebhookSecret,
+  decryptBillingProviderWebhookSecret,
+  encryptInboundPayload,
+} from "../infra/billing/storage";
+import { PADDLE_SUPPORTED_EVENT_TYPES, type BillingProviderRecord } from "../infra/billing/types";
 import { BillingProcessingError } from "../infra/billing/errors";
 import { processBillingInboundEvent } from "../services/billing/fulfillment";
 
@@ -28,7 +32,11 @@ function inboundPayloadTtlSeconds(value: string | undefined): number {
   return parsed;
 }
 
-async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProviderRecord) {
+async function verifyAndParsePaddleWebhook(
+  c: Context<AppContext>,
+  route: BillingProviderRecord,
+  source: "platform" | "simulation",
+) {
   const rawBody = await c.req.text();
   const signatureHeader = c.req.header("paddle-signature");
   if (!rawBody || !signatureHeader) {
@@ -36,17 +44,32 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
       "BILLING_WEBHOOK_SIGNATURE_OR_BODY_MISSING",
       "Paddle-Signature and a raw request body are required.",
       400,
-      { provider: "paddle", billing_provider_id: route.id },
+      { provider: "paddle", billing_provider_id: route.id, traffic_source: source },
     );
   }
 
-  const webhookSecret = await decryptBillingProviderWebhookSecret(route, c.env);
+  let webhookSecret: string;
+  try {
+    webhookSecret = source === "platform"
+      ? await decryptBillingProviderWebhookSecret(route, c.env)
+      : await decryptBillingProviderSimulatorWebhookSecret(route, c.env);
+  } catch (error) {
+    if (source === "simulation" && !route.simulator_webhook_secret_ciphertext) {
+      throw new AppError(
+        "BILLING_WEBHOOK_SIMULATOR_SECRET_NOT_CONFIGURED",
+        "Paddle Simulator webhook secret is not configured for this Billing Provider.",
+        503,
+        { provider: "paddle", billing_provider_id: route.id, traffic_source: source },
+      );
+    }
+    throw error;
+  }
   if (!await verifyPaddleWebhookSignature(rawBody, signatureHeader, webhookSecret)) {
     throw new AppError(
       "BILLING_WEBHOOK_SIGNATURE_INVALID",
       "Paddle webhook signature verification failed.",
       401,
-      { provider: "paddle", billing_provider_id: route.id },
+      { provider: "paddle", billing_provider_id: route.id, traffic_source: source },
     );
   }
 
@@ -64,9 +87,19 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
       "BILLING_WEBHOOK_IDENTIFIER_TOO_LONG",
       "Paddle event ID or event type exceeds the accepted length.",
       400,
-      { provider: "paddle", external_event_id_length: event.event_id.length, event_type_length: event.event_type.length },
+      {
+        provider: "paddle",
+        traffic_source: source,
+        external_event_id_length: event.event_id.length,
+        event_type_length: event.event_type.length,
+      },
     );
   }
+  return { rawBody, event, payloadHash: await hashPaddlePayload(rawBody) };
+}
+
+async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProviderRecord) {
+  const { rawBody, event, payloadHash } = await verifyAndParsePaddleWebhook(c, route, "platform");
 
   const references = extractPaddleReferences(event);
   const inboundEventId = `ine_${ulid().toLowerCase()}`;
@@ -81,8 +114,6 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
     route.instance_id,
     inboundEventId,
   );
-  const payloadHash = await hashPaddlePayload(rawBody);
-
   await c.env.DB.prepare(
     `INSERT INTO inbound_events (
        id, instance_id, billing_provider_id, webhook_secret_version,
@@ -238,15 +269,56 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
   }, 200);
 }
 
+async function receivePaddleSimulatorWebhook(c: Context<AppContext>, route: BillingProviderRecord) {
+  const { event, payloadHash } = await verifyAndParsePaddleWebhook(c, route, "simulation");
+  const supported = (PADDLE_SUPPORTED_EVENT_TYPES as readonly string[]).includes(event.event_type);
+  const now = new Date().toISOString();
+  if (supported) {
+    await c.env.DB.prepare(
+      `INSERT INTO billing_webhook_simulation_tests (
+         id, instance_id, billing_provider_id, event_type,
+         simulator_webhook_secret_version, external_event_id, payload_hash,
+         verified_at, created_at, updated_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8)
+       ON CONFLICT(instance_id, billing_provider_id, event_type) DO UPDATE SET
+         simulator_webhook_secret_version = excluded.simulator_webhook_secret_version,
+         external_event_id = excluded.external_event_id,
+         payload_hash = excluded.payload_hash,
+         verified_at = excluded.verified_at,
+         updated_at = excluded.updated_at`,
+    ).bind(
+      `bwt_${ulid().toLowerCase()}`,
+      route.instance_id,
+      route.id,
+      event.event_type,
+      route.simulator_webhook_secret_version,
+      event.event_id,
+      payloadHash,
+      now,
+    ).run();
+  }
+  return c.json({
+    success: true,
+    data: {
+      received: true,
+      traffic_source: "simulation",
+      external_event_id: event.event_id,
+      event_type: event.event_type,
+      counted_for_verification: supported,
+    },
+  }, 200);
+}
+
 async function findPaddleProviderByEnvironment(
   c: Context<AppContext>,
   instanceId: string,
   environment: "sandbox" | "live",
 ): Promise<BillingProviderRecord | null> {
   return c.env.DB.prepare(
-    `SELECT provider.id, provider.instance_id, provider.provider, provider.environment,
+     `SELECT provider.id, provider.instance_id, provider.provider, provider.environment,
             provider.client_side_token, provider.webhook_secret_ciphertext,
-            provider.webhook_secret_version, provider.api_secret_ciphertext, provider.status,
+            provider.webhook_secret_version, provider.simulator_webhook_secret_ciphertext,
+            provider.simulator_webhook_secret_version, provider.api_secret_ciphertext, provider.status,
             provider.created_at, provider.updated_at
      FROM billing_providers AS provider
      JOIN instances AS instance ON instance.id = provider.instance_id
@@ -274,4 +346,19 @@ webhookRouter.post("/payments/:instanceId/paddle/:environment", async (c) => {
   const route = await findPaddleProviderByEnvironment(c, c.req.param("instanceId"), environment);
   if (!route) throw new NotFoundError("Paddle webhook destination was not found.");
   return receivePaddleWebhook(c, route);
+});
+
+/**
+ * Paddle Simulator boundary. It uses the same raw-body signature verification
+ * and envelope parser as the platform route, but records only per-event test
+ * evidence. Simulated data never enters the billing fulfillment state machine.
+ */
+webhookRouter.post("/payments/:instanceId/paddle/:environment/simulator", async (c) => {
+  const environment = c.req.param("environment");
+  if (environment !== "sandbox" && environment !== "live") {
+    throw new NotFoundError("Paddle Simulator webhook destination was not found.");
+  }
+  const route = await findPaddleProviderByEnvironment(c, c.req.param("instanceId"), environment);
+  if (!route) throw new NotFoundError("Paddle Simulator webhook destination was not found.");
+  return receivePaddleSimulatorWebhook(c, route);
 });

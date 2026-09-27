@@ -1,4 +1,3 @@
-import { PADDLE_REQUIRED_EVENT_TYPES } from "../../infra/billing/types";
 import type {
   BillingProviderRecord,
   CheckoutReadiness,
@@ -8,6 +7,7 @@ import { assertPaddleClientToken } from "../../infra/billing/paddle";
 import { EMAIL_NOTIFICATION_CONTRACTS } from "../../domain/email/contracts";
 import { decryptEnvelopeV1, type DeliveryCryptoEnv } from "../../infra/delivery/crypto";
 import { getEmailProviderAdapter } from "../../infra/email/provider";
+import { getPaddleWebhookRequirements } from "./webhook-requirements";
 
 export interface BillingOfferReadinessRow {
   id: string;
@@ -26,6 +26,9 @@ export interface BillingOfferReadinessRow {
   provider_status: "active" | "disabled";
   provider_environment: "sandbox" | "live";
   client_side_token: string;
+  simulator_webhook_secret_ciphertext: string | null;
+  simulator_webhook_secret_version: number;
+  api_secret_ciphertext: string | null;
   provider_updated_at: string;
 }
 
@@ -46,7 +49,9 @@ export async function getBillingOfferReadinessRow(
        plan.license_model, plan.credential_mode, plan.status AS plan_status,
        provider.id AS provider_id, provider.status AS provider_status,
        provider.environment AS provider_environment,
-       provider.client_side_token, provider.updated_at AS provider_updated_at
+       provider.client_side_token, provider.simulator_webhook_secret_ciphertext,
+       provider.simulator_webhook_secret_version, provider.api_secret_ciphertext,
+       provider.updated_at AS provider_updated_at
      FROM billing_offers AS offer
      JOIN products AS product
        ON product.instance_id = offer.instance_id AND product.id = offer.product_id
@@ -60,24 +65,6 @@ export async function getBillingOfferReadinessRow(
      LIMIT 1`,
   ).bind(instanceId, offerId).first<BillingOfferReadinessRow>();
   return row ?? null;
-}
-
-async function getReceivedRequiredEventTypes(
-  db: D1Database,
-  instanceId: string,
-  providerId: string,
-  after: string,
-): Promise<Set<string>> {
-  const placeholders = PADDLE_REQUIRED_EVENT_TYPES.map((_, index) => `?${index + 4}`).join(", ");
-  const result = await db.prepare(
-    `SELECT DISTINCT external_event_type
-     FROM inbound_events
-     WHERE instance_id = ?1
-       AND billing_provider_id = ?2
-       AND received_at >= ?3
-       AND external_event_type IN (${placeholders})`,
-  ).bind(instanceId, providerId, after, ...PADDLE_REQUIRED_EVENT_TYPES).all<{ external_event_type: string }>();
-  return new Set(result.results.map((row) => row.external_event_type));
 }
 
 interface EmailDeliveryReadinessRow {
@@ -243,18 +230,26 @@ export async function evaluateBillingOfferReadiness(
   }
   checks.push(check("client_side_token", tokenReady, "CHECKOUT_PROVIDER_UNAVAILABLE"));
 
-  const received = await getReceivedRequiredEventTypes(
+  const webhookRequirements = await getPaddleWebhookRequirements(
     db,
-    row.instance_id,
-    row.provider_id,
-    row.provider_updated_at,
+    {
+      id: row.provider_id,
+      instance_id: row.instance_id,
+      api_secret_ciphertext: row.api_secret_ciphertext,
+      simulator_webhook_secret_ciphertext: row.simulator_webhook_secret_ciphertext,
+      simulator_webhook_secret_version: row.simulator_webhook_secret_version,
+    },
   );
-  const missingEvents = PADDLE_REQUIRED_EVENT_TYPES.filter((eventType) => !received.has(eventType));
   checks.push(check(
     "webhook_event_contract",
-    missingEvents.length === 0,
+    webhookRequirements.simulatorSecretConfigured && webhookRequirements.missingEventTypes.length === 0,
     "CHECKOUT_CONFIGURATION_PENDING",
-    { missingEventTypes: missingEvents },
+    {
+      requiredEventTypes: webhookRequirements.requiredEventTypes,
+      verifiedEventTypes: webhookRequirements.verifiedEventTypes,
+      missingEventTypes: webhookRequirements.missingEventTypes,
+      simulatorSecretConfigured: webhookRequirements.simulatorSecretConfigured,
+    },
   ));
 
   const email = await emailDeliveryReadiness(db, options.env, row.instance_id);
@@ -315,7 +310,9 @@ export function toProviderRecord(row: BillingOfferReadinessRow): BillingProvider
     client_side_token: row.client_side_token,
     webhook_secret_ciphertext: "",
     webhook_secret_version: 1,
-    api_secret_ciphertext: null,
+    simulator_webhook_secret_ciphertext: row.simulator_webhook_secret_ciphertext,
+    simulator_webhook_secret_version: row.simulator_webhook_secret_version,
+    api_secret_ciphertext: row.api_secret_ciphertext,
     status: row.provider_status,
     created_at: row.provider_updated_at,
     updated_at: row.provider_updated_at,

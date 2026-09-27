@@ -248,12 +248,20 @@ export interface ProviderTestResult {
   clientSideTokenValid: boolean;
   webhookSecretDecryptable: boolean;
   webhookVerifiedAt: IsoDateTime | null;
+  simulatorWebhookSecretConfigured: boolean;
+  simulatorWebhookSecretDecryptable: boolean;
+  simulatorTestCompletedAt: IsoDateTime | null;
+  requiredEventTypes: string[];
+  verifiedEventTypes: string[];
+  missingEventTypes: string[];
   apiKeyConfigured: boolean;
 }
 export interface BillingProvider {
   id: Identifier; provider: "paddle"; environment: BillingEnvironment; status: "active" | "disabled" | "configuration_error";
   clientSideToken?: string; clientSideTokenConfigured?: boolean; webhookSecretConfigured: boolean; apiKeyConfigured: boolean;
-  webhookVerifiedAt?: IsoDateTime | null; apiCapabilities?: string[]; updatedAt?: IsoDateTime; readiness?: ReadinessReport;
+  webhookVerifiedAt?: IsoDateTime | null; simulatorWebhookSecretConfigured?: boolean; simulatorTestCompletedAt?: IsoDateTime | null;
+  requiredEventTypes?: string[]; verifiedEventTypes?: string[]; missingEventTypes?: string[];
+  apiCapabilities?: string[]; updatedAt?: IsoDateTime; readiness?: ReadinessReport;
 }
 export interface BillingOffer {
   id: Identifier; billingProviderId: Identifier; externalPriceId: string; productId: Identifier; productName?: string;
@@ -397,6 +405,20 @@ export interface EmailConfigurationTestResult {
   error?: Record<string, unknown> | null;
 }
 
+export interface EmailDefaultTemplateInstallationResult {
+  provider: string;
+  installedCount: number;
+  skippedCount: number;
+  totalCount: number;
+  complete: boolean;
+  items: Array<{
+    notificationType: string;
+    contractVersion: number;
+    providerTemplateRef: string;
+    outcome: "installed" | "already_bound";
+  }>;
+}
+
 export interface AdminStats {
   totalProducts: number;
   totalLicenses: number;
@@ -521,6 +543,12 @@ export const api = {
       rotateCredential: (id: string, apiKey: string) => request<{ id: Identifier; credentialConfigured: true }>(`/admin/email-integrations/${encodeURIComponent(id)}/rotate-credential`, { method: "POST", body: { apiKey }, scope: "admin" }),
       disable: (id: string) => request<{ id: Identifier; status: "disabled" }>(`/admin/email-integrations/${encodeURIComponent(id)}/disable`, { method: "POST", scope: "admin" }),
       enable: (id: string) => request<{ id: Identifier; status: "active" }>(`/admin/email-integrations/${encodeURIComponent(id)}/enable`, { method: "POST", scope: "admin" }),
+      installDefaultTemplates: (id: string, fullAccessApiKey: string) =>
+        request<EmailDefaultTemplateInstallationResult>(`/admin/email-integrations/${encodeURIComponent(id)}/template-bindings/install-defaults`, {
+          method: "POST",
+          body: { fullAccessApiKey },
+          scope: "admin",
+        }),
       bindings: {
         list: (integrationId: string) => request<ListResponse<EmailTemplateBinding>>(`/admin/email-integrations/${encodeURIComponent(integrationId)}/template-bindings`, { scope: "admin" }),
         upsert: (integrationId: string, notificationType: string, body: { contractVersion: number; providerTemplateRef: string }) =>
@@ -545,8 +573,8 @@ export const api = {
     billing: {
       providers: {
         list: () => request<ListResponse<BillingProvider>>("/admin/billing/providers", { scope: "admin" }),
-        create: (body: { provider: "paddle"; environment: BillingEnvironment; clientSideToken: string; webhookSecret: string; apiKey?: string }) => request<BillingProvider>("/admin/billing/providers", { method: "POST", body, scope: "admin" }),
-        update: (id: string, body: { clientSideToken?: string; webhookSecret?: string; apiKey?: string | null; status?: "active" | "disabled" }) => request<BillingProvider>(`/admin/billing/providers/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
+        create: (body: { provider: "paddle"; environment: BillingEnvironment; clientSideToken: string; webhookSecret: string; simulatorWebhookSecret: string; apiKey?: string }) => request<BillingProvider>("/admin/billing/providers", { method: "POST", body, scope: "admin" }),
+        update: (id: string, body: { clientSideToken?: string; webhookSecret?: string; simulatorWebhookSecret?: string; apiKey?: string | null; status?: "active" | "disabled" }) => request<BillingProvider>(`/admin/billing/providers/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
         test: (id: string) => request<ProviderTestResult>(`/admin/billing/providers/${encodeURIComponent(id)}/test`, { method: "POST", scope: "admin" }),
       },
       offers: {

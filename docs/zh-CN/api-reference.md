@@ -396,17 +396,18 @@ PATCH  /api/v1/admin/billing/providers/:providerId
 POST   /api/v1/admin/billing/providers/:providerId/test
 ```
 
-测试接口只验证配置和签名样本能力，不创建 License。
+测试接口只读取当前配置、正式事件验签时间和 Simulator 逐事件测试证据；它不伪造签名样本，也不创建 License。
 
-Paddle Provider 配置三类互不替代的凭证：
+Paddle Provider 配置四类互不替代的凭证：
 
 - `client_side_token`：必填、与 `sandbox|live` 环境匹配，作为公开字段返回给 Paddle.js；它不是 Secret；
-- Webhook Secret：必填、加密保存，只用于验证原始 Paddle Webhook；
+- Platform Webhook Secret：必填、加密保存，只验证 Paddle `traffic_source=platform` 正式业务目标发来的原始 Webhook；
+- Simulator Webhook Secret：必填、加密保存，只验证另一条 `traffic_source=simulation` 测试目标发来的原始 Webhook；
 - Paddle API Key：可选、加密保存，只在启用服务器端 API 能力时需要；Get Customer/对账至少要求 `customer.read`，托管客户门户要求 `customer_portal_session.write`。
 
-管理 API 返回 `client_side_token` 的值或可用状态，但 Webhook Secret 与 API Key 写入后只返回是否已配置和掩码，不返回明文。基础购买、事件履约和发码不能要求 API Key；没有 API Key 时 Customer 映射通过 Webhook 收敛。
+管理 API 返回 `client_side_token` 的值或可用状态，但两类 Webhook Secret 与 API Key 写入后只返回是否已配置，不返回明文。基础购买、事件履约和发码不能要求 API Key；没有 API Key 时 Customer 映射通过 Webhook 收敛。
 
-`provider` 和 `environment` 是连接身份，创建后不可 PATCH；切换 Sandbox/Live 必须创建另一条 Provider。PATCH 只允许轮换同一连接的 Client-side Token、Webhook Secret、可选 API Key 或修改状态。这样已有外部 Customer、Transaction、Subscription 和事件 ID 不会被重新解释到另一环境。
+`provider` 和 `environment` 是连接身份，创建后不可 PATCH；切换 Sandbox/Live 必须创建另一条 Provider。PATCH 只允许轮换同一连接的 Client-side Token、两类 Webhook Secret、可选 API Key 或修改状态。Platform 与 Simulator Secret 分别维护版本；任一 Secret 轮换后，只使对应入口在旧版本下形成的验证证据失效。这样已有外部 Customer、Transaction、Subscription 和事件 ID 不会被重新解释到另一环境。
 
 启用 Customer API 读穿后，LicenKit 服务端可以发起 Paddle Billing REST API 请求；它不是基础路径，也不是回调 Paddle Webhook：
 
@@ -535,6 +536,7 @@ POST   /api/v1/admin/email-integrations/:integrationId/rotate-credential
 POST   /api/v1/admin/email-integrations/:integrationId/disable
 POST   /api/v1/admin/email-integrations/:integrationId/enable
 GET    /api/v1/admin/email-integrations/:integrationId/template-bindings
+POST   /api/v1/admin/email-integrations/:integrationId/template-bindings/install-defaults
 PUT    /api/v1/admin/email-integrations/:integrationId/template-bindings/:notificationType
 POST   /api/v1/admin/email-integrations/:integrationId/template-bindings/:notificationType/disable
 POST   /api/v1/admin/email-integrations/:integrationId/template-bindings/:notificationType/enable
@@ -543,6 +545,8 @@ POST   /api/v1/admin/email-integrations/:integrationId/template-bindings/:notifi
 ```
 
 V1 `provider` 只允许 `resend`。创建时提交 `name`、`api_key`、`default_from_email`、可选 `default_from_name`/`reply_to_email` 和 `max_automatic_attempts`。API Key 加密保存；响应只返回 `credential_configured`，不返回密钥。Provider 是不可变连接身份。Integration 不含 revision；凭证、From 或 Reply-To 修改后，未成功 Delivery 下一次发送直接读取最新配置。
+
+`install-defaults` 提交 `{ full_access_api_key }`，使用 Resend Full access Key 将代码内置的当前五份参考 subject/HTML/text 和变量声明创建并发布为 Resend Template，再把返回的 Template ID 写入缺失的 Binding。该 Key 只存在于本次请求内，不写入 Integration、数据库、响应或审计；日常发送仍使用 Integration 中保存的 Sending access Key。接口不会覆盖已有 Binding，部分成功后再次调用只继续处理尚未绑定的合同。全部 Binding 建立后，管理端不再显示安装入口。安装完成后 LicenKit 不读取、比较、更新、删除或同步远程模板。
 
 五种邮件 Binding 都可以通过各自的 `:notificationType/test` 端点独立执行真实 Provider Test，测试一个 Binding 不要求其他 Binding 已配置或已通过。管理端展示当前 Binding 配置，不展示或保存测试历史。
 
@@ -973,11 +977,12 @@ GET /api/v1/client/products/:productId/signing-keys?instance_id=3Jd9K_aP0qUwbL6F
 
 ```text
 POST /api/v1/webhooks/payments/:instanceId/paddle/:environment
+POST /api/v1/webhooks/payments/:instanceId/paddle/:environment/simulator
 ```
 
-V1 的支付渠道是 Paddle，`:environment` 只能是 `sandbox` 或 `live`。回调地址在创建支付通道前即可由 Instance 的 Admin/API 地址、Instance ID 和 Paddle 环境确定；同一 Instance 的每个 Paddle 环境只允许一条 Billing Provider 配置。
+V1 的支付渠道是 Paddle，`:environment` 只能是 `sandbox` 或 `live`。每个环境都配置两条 Paddle URL Notification Destination：不带 `/simulator` 的地址用于 `traffic_source=platform` 正式业务事件，带 `/simulator` 的地址用于 `traffic_source=simulation` 的 Simulator 测试事件。两条 Destination 使用独立 Secret，不能复用地址或 Secret；Sandbox 与 Live 都遵循同一结构。同一 Instance 的每个 Paddle 环境只允许一条 Billing Provider 配置。
 
-处理顺序固定为：
+正式业务入口的处理顺序固定为：
 
 1. 根据路径中的 Instance ID 读取 Instance，再以 `instance_id + provider=paddle + environment` 读取唯一 Billing Provider 配置；
 2. 对原始请求体执行渠道签名验证；
@@ -990,9 +995,15 @@ V1 的支付渠道是 Paddle，`:environment` 只能是 `sandbox` 或 `live`。�
 
 路径中的 Paddle 环境只用于定位该 Instance 的支付通道配置，不能替代验签，也不从请求体接受 `instance_id`。Sandbox 与 Live 使用同一处理流程，区别只来自对应环境的 Billing Provider 配置。没有签名配置时返回配置错误，不得继续处理。
 
+Simulator 入口复用完全相同的原始请求体验签和 Paddle Envelope 解析逻辑，但验证自己的 Simulator Secret，且只按 `event_type` 保存测试时间、外部 Event ID、payload Hash 与 Secret 版本。模拟数据不得写入正式 `inbound_events`，不得创建 Customer、License、Subscription 或 Delivery，也不得进入履约状态机。这样 Simulator 可以证明测试目标、Secret 和共享解析逻辑能够处理某一类事件，但不能冒充真实业务事件。
+
 只有 Inbound Event 已可靠持久化才返回 2xx。签名无效返回 4xx，数据库写入失败返回 5xx 让 Paddle 重试；事件已持久化后的 Customer API 超时、依赖未齐或履约失败不再改变本次接收响应，由内部状态机和 Scheduled Worker 重试，避免把 Paddle 重投当作内部任务队列。
 
-Paddle Notification Destination 最小事件合同为 `customer.created`、`customer.updated`、`transaction.completed`、`subscription.created`、`subscription.updated`、`adjustment.created` 和 `adjustment.updated`。Offer 激活检查必须在当前 Provider 配置更新时间之后找到每种事件对应的 Inbound Event 且验签成功，通常由管理员通过官方模拟器逐项触发；不能只验证 URL 可达，也不能要求 API Key 才能读取远端配置。Customer 事件 upsert Billing Customer 镜像并尝试建立内部映射。购买事件先按外部 Customer ID 查询映射；缺失时以 `BILLING_CUSTOMER_PENDING` 保持 `pending` 并等待 Customer 事件。只有配置了具备 `customer.read` 权限的 API Key 时才调用 Paddle Get Customer 加速恢复，API 失败不改变 Webhook 等待路径。
+当前必需事件由该 Provider 下未归档 Offer 的购买类型决定。仅有一次性购买时为 5 类：`customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在任一订阅 Offer 时再加入 `subscription.created`、`subscription.updated`，共 7 类。Platform 与 Simulator Destination 必须订阅同一份当前清单，管理员必须在 Paddle Simulator 中为每一类分别发送 Single event；一次模拟事件不能证明其他事件可被解析。Simulator Secret 轮换后必须重新完成全部当前必需事件测试；新增订阅 Offer 后只会新增尚未验证的订阅事件要求。
+
+逐事件 Simulator 证据只用于验证测试目标和共享解析合同，不证明 Platform Destination 已正确订阅这些事件。正式入口的 `webhook_verified_at` 只能由当前 Platform Secret 下收到的真实 `traffic_source=platform` 事件形成；完整的正式业务闭环仍需在 Sandbox 通过真实 Checkout 验证，并在 Live 上线后观察真实事件。LicenKit 不要求 API Key 才能读取远端订阅配置，也不把 API Key 当作 Webhook 完整性的替代品。
+
+Customer 事件 upsert Billing Customer 镜像并尝试建立内部映射。购买事件先按外部 Customer ID 查询映射；缺失时以 `BILLING_CUSTOMER_PENDING` 保持 `pending` 并等待 Customer 事件。只有配置了具备 `customer.read` 权限的 API Key 时才调用 Paddle Get Customer 加速恢复，API 失败不改变 Webhook 等待路径。
 
 只有 `link_status=linked` 才能创建新 License 和发码 Delivery。`email_mismatch`、无效/归档 provider Customer 或无法安全链接时进入 `needs_attention`。已有 Subscription 的续费根据 Subscription 直接更新原 License，不重新按邮箱链接。处理器不得读取 `custom_data.email`、Checkout 参数或调用方自报邮箱作为发码身份。
 
@@ -1012,7 +1023,7 @@ Paddle 会把 Checkout Transaction 的 custom data 复制到新 Subscription，�
 
 LicenKit Worker 通过 Email Provider Adapter 直接发送邮件。V1 Resend Adapter 把已校验的通用消息转换为 Resend Email API 的 From、To、Reply-To、`template.id` 与 `template.variables`，使用加密 API Key 认证，并携带 Delivery 派生的幂等键。Provider API 目标由 Adapter 固定，管理请求不能传入任意 URL。
 
-正式主题、HTML、文本和已发布模板版本在 Provider 中管理。LicenKit 只保存 Template Reference、Contract Version、变量和投递证据。因此 LicenKit 可以证明某次请求使用了哪个 Template Reference 与变量，但不能还原 Provider 最终渲染内容。
+正式主题、HTML、文本和已发布模板版本在 Provider 中管理。LicenKit 可以通过一次性安装操作创建初始 Resend 模板；Binding 建立后只保存 Template Reference、Contract Version、变量和投递证据，不再维护远程模板内容或一致性。因此 LicenKit 可以证明某次请求使用了哪个 Template Reference 与变量，但不能还原 Provider 最终渲染内容。
 
 Resend 成功响应必须包含有效 Message ID；否则记为 Provider 协议错误。成功后 Delivery 进入 `accepted`，该状态不等于最终送达、进入收件箱或已读。V1 不接收 Resend bounce/complaint/suppression Webhook 来更新最终送达状态。
 

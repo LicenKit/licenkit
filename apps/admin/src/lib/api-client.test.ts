@@ -46,6 +46,7 @@ describe("Admin API JSON boundary", () => {
       environment: "sandbox",
       clientSideToken: "test_client_token",
       webhookSecret: "pdl_ntfset_test_secret",
+      simulatorWebhookSecret: "pdl_ntfset_simulator_secret",
       apiKey: "pdl_sdbx_apikey_test",
     });
 
@@ -55,6 +56,7 @@ describe("Admin API JSON boundary", () => {
       environment: "sandbox",
       client_side_token: "test_client_token",
       webhook_secret: "pdl_ntfset_test_secret",
+      simulator_webhook_secret: "pdl_ntfset_simulator_secret",
       api_key: "pdl_sdbx_apikey_test",
     });
   });

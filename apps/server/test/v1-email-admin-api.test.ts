@@ -17,6 +17,7 @@ const NOW = "2026-09-20T10:00:00.000Z";
 const ORIGIN = "https://license.example.test";
 const CSRF_TOKEN = "acf_email_admin_test_token";
 const API_KEY = "re_email_admin_api_secret";
+const FULL_ACCESS_API_KEY = "re_email_template_install_full_access";
 const INSTANCE_ID = "acc_email_admin";
 const CUSTOMER_ID = "cus_email_admin";
 
@@ -161,6 +162,164 @@ describe("Admin Email API", () => {
       rowId: integration.id,
       field: "credential_ciphertext",
     }))).toEqual({ version: 1, apiKey: API_KEY });
+  });
+
+  it("installs only missing Resend defaults and never persists the temporary Full access key", async () => {
+    const app = createAdminRouteApp();
+    const { integration } = await createConfiguration(app);
+    let sequence = 0;
+    const providerFetch = vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(request);
+      if (init?.method === "GET") {
+        return new Response(JSON.stringify({ message: "Template not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (init?.method === "POST" && url === "https://api.resend.com/templates") {
+        sequence += 1;
+        return new Response(JSON.stringify({ object: "template", id: `template_${sequence}` }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const templateId = url.match(/\/templates\/([^/]+)\/publish$/)?.[1];
+      if (init?.method === "POST" && templateId) {
+        return new Response(JSON.stringify({ object: "template", id: templateId }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected Resend request: ${init?.method} ${url}`);
+    });
+    vi.stubGlobal("fetch", providerFetch);
+
+    const response = await app.request(
+      `${ORIGIN}/email-integrations/${integration.id}/template-bindings/install-defaults`,
+      requestInit("POST", { full_access_api_key: FULL_ACCESS_API_KEY }),
+      testEnv.env,
+    );
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(body).toMatchObject({
+      data: {
+        provider: "resend",
+        installed_count: 4,
+        skipped_count: 1,
+        total_count: 5,
+        complete: true,
+      },
+    });
+    expectNoCamelCaseKeys(body);
+    expect(providerFetch).toHaveBeenCalledTimes(12);
+    expect(providerFetch.mock.calls.every(([, init]) =>
+      new Headers(init?.headers).get("Authorization") === `Bearer ${FULL_ACCESS_API_KEY}`
+    )).toBe(true);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT COUNT(*) AS count FROM email_template_bindings WHERE instance_id = ? AND email_integration_id = ?",
+    ).get(INSTANCE_ID, integration.id)).toEqual({ count: 5 });
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT COUNT(*) AS count FROM audit_logs
+       WHERE instance_id = ? AND action = 'admin.email_template_binding.default_installed'`,
+    ).get(INSTANCE_ID)).toEqual({ count: 4 });
+
+    const stored = testEnv.sqliteDb.prepare(
+      "SELECT credential_ciphertext FROM email_integrations WHERE id = ?",
+    ).get(integration.id) as any;
+    expect(JSON.parse(await decryptEnvelopeV1(stored.credential_ciphertext, testEnv.env, {
+      instanceId: INSTANCE_ID,
+      table: "email_integrations",
+      rowId: integration.id,
+      field: "credential_ciphertext",
+    }))).toEqual({ version: 1, apiKey: API_KEY });
+    const audits = testEnv.sqliteDb.prepare(
+      "SELECT details_redacted_json FROM audit_logs WHERE instance_id = ?",
+    ).all(INSTANCE_ID) as Array<{ details_redacted_json: string }>;
+    expect(JSON.stringify(audits)).not.toContain(FULL_ACCESS_API_KEY);
+
+    providerFetch.mockClear();
+    const repeated = await app.request(
+      `${ORIGIN}/email-integrations/${integration.id}/template-bindings/install-defaults`,
+      requestInit("POST", { full_access_api_key: FULL_ACCESS_API_KEY }),
+      testEnv.env,
+    );
+    expect(repeated.status).toBe(200);
+    expect(await json(repeated)).toMatchObject({
+      data: { installed_count: 0, skipped_count: 5, complete: true },
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps completed bindings when a later default template installation fails", async () => {
+    const app = createAdminRouteApp();
+    const { integration } = await createConfiguration(app);
+    let createCount = 0;
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(request);
+      if (init?.method === "GET") {
+        return new Response(JSON.stringify({ message: "Template not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (init?.method === "POST" && url === "https://api.resend.com/templates") {
+        createCount += 1;
+        if (createCount === 2) {
+          return new Response(JSON.stringify({
+            name: "restricted_api_key",
+            code: "invalid_permission",
+            message: "Full access is required",
+          }), {
+            status: 403,
+            headers: {
+              "content-type": "application/json",
+              "x-resend-request-id": "req_partial_install",
+            },
+          });
+        }
+        return new Response(JSON.stringify({ object: "template", id: "template_partial_1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const templateId = url.match(/\/templates\/([^/]+)\/publish$/)?.[1];
+      if (init?.method === "POST" && templateId) {
+        return new Response(JSON.stringify({ object: "template", id: templateId }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected Resend request: ${init?.method} ${url}`);
+    }));
+
+    const response = await app.request(
+      `${ORIGIN}/email-integrations/${integration.id}/template-bindings/install-defaults`,
+      requestInit("POST", { full_access_api_key: FULL_ACCESS_API_KEY }),
+      testEnv.env,
+    );
+    expect(response.status).toBe(400);
+    const body = await json(response);
+    expect(body).toMatchObject({
+      error: {
+        code: "EMAIL_DEFAULT_TEMPLATE_INSTALL_PROVIDER_REJECTED",
+        details: {
+          provider: "resend",
+          operation: "create_template",
+          http_status: 403,
+          provider_error_code: "invalid_permission",
+          provider_request_id: "req_partial_install",
+        },
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain(FULL_ACCESS_API_KEY);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT COUNT(*) AS count FROM email_template_bindings WHERE instance_id = ? AND email_integration_id = ?",
+    ).get(INSTANCE_ID, integration.id)).toEqual({ count: 2 });
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT COUNT(*) AS count FROM audit_logs
+       WHERE instance_id = ? AND action = 'admin.email_template_binding.default_installed'`,
+    ).get(INSTANCE_ID)).toEqual({ count: 1 });
   });
 
   it("requires a recipient and returns the direct configuration-test result without creating Delivery data", async () => {

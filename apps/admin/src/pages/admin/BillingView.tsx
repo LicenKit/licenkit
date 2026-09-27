@@ -4,9 +4,16 @@ import { api, type BillingAdjustment, type BillingEnvironment, type BillingOffer
 import { openVerificationCheckout } from "../../lib/verification-checkout";
 import { Badge, Button, Card, CopyValue, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge } from "../../components/ui";
 import { useI18n } from "../../lib/i18n";
-import { buildPaddleWebhookUrl } from "../../lib/billing-webhook";
+import { buildPaddleSimulatorWebhookUrl, buildPaddleWebhookUrl } from "../../lib/billing-webhook";
 
 type Tab = "providers" | "offers" | "subscriptions" | "adjustments";
+const INITIAL_PADDLE_EVENT_TYPES = [
+  "customer.created",
+  "customer.updated",
+  "transaction.completed",
+  "adjustment.created",
+  "adjustment.updated",
+];
 
 export function BillingView({ canManage, instance }: { canManage: boolean; instance: Pick<Instance, "id" | "adminApiUrl"> }) {
   const { t, formatDate } = useI18n();
@@ -22,11 +29,13 @@ export function BillingView({ canManage, instance }: { canManage: boolean; insta
   const [error, setError] = useState<unknown>(null);
   const [providerModal, setProviderModal] = useState(false);
   const [offerModal, setOfferModal] = useState(false);
-  const [providerForm, setProviderForm] = useState({ environment: "sandbox" as BillingEnvironment, clientSideToken: "", webhookSecret: "", apiKey: "" });
+  const [providerForm, setProviderForm] = useState({ environment: "sandbox" as BillingEnvironment, clientSideToken: "", webhookSecret: "", simulatorWebhookSecret: "", apiKey: "" });
   const [offerForm, setOfferForm] = useState({ billingProviderId: "", externalPriceId: "", productId: "", licensePlanId: "", purchaseType: "one_time" as "one_time" | "subscription" });
   const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
+  const [simulatorSecretInput, setSimulatorSecretInput] = useState("");
   const [verificationPending, setVerificationPending] = useState<{ offerId: string; expiresAt: string } | null>(null);
   const webhookUrl = buildPaddleWebhookUrl(instance.adminApiUrl, instance.id, providerForm.environment);
+  const simulatorWebhookUrl = buildPaddleSimulatorWebhookUrl(instance.adminApiUrl, instance.id, providerForm.environment);
 
   const [resolvingAdjustment, setResolvingAdjustment] = useState<BillingAdjustment | null>(null);
   const [adjustmentAction, setAdjustmentAction] = useState<"no_action" | "keep_suspended" | "reinstate" | "revoke" | "security_reset">("keep_suspended");
@@ -57,8 +66,8 @@ export function BillingView({ canManage, instance }: { canManage: boolean; insta
   async function createProvider(event: FormEvent) {
     event.preventDefault(); setSaving(true); setError(null);
     try {
-      await api.admin.billing.providers.create({ provider: "paddle", environment: providerForm.environment, clientSideToken: providerForm.clientSideToken.trim(), webhookSecret: providerForm.webhookSecret, apiKey: providerForm.apiKey || undefined });
-      setProviderModal(false); setProviderForm({ environment: "sandbox", clientSideToken: "", webhookSecret: "", apiKey: "" }); await load();
+      await api.admin.billing.providers.create({ provider: "paddle", environment: providerForm.environment, clientSideToken: providerForm.clientSideToken.trim(), webhookSecret: providerForm.webhookSecret, simulatorWebhookSecret: providerForm.simulatorWebhookSecret, apiKey: providerForm.apiKey || undefined });
+      setProviderModal(false); setProviderForm({ environment: "sandbox", clientSideToken: "", webhookSecret: "", simulatorWebhookSecret: "", apiKey: "" }); await load();
     } catch (caught) { setError(caught) } finally { setSaving(false) }
   }
 
@@ -75,9 +84,30 @@ export function BillingView({ canManage, instance }: { canManage: boolean; insta
     try {
       const result = await api.admin.billing.providers.test(provider.id);
       setProviderTest(result);
+      setSimulatorSecretInput("");
       setProviders((current) => current.map((item) => item.id === provider.id
-        ? { ...item, webhookVerifiedAt: result.webhookVerifiedAt }
+        ? {
+            ...item,
+            webhookVerifiedAt: result.webhookVerifiedAt,
+            simulatorWebhookSecretConfigured: result.simulatorWebhookSecretConfigured,
+            simulatorTestCompletedAt: result.simulatorTestCompletedAt,
+            requiredEventTypes: result.requiredEventTypes,
+            verifiedEventTypes: result.verifiedEventTypes,
+            missingEventTypes: result.missingEventTypes,
+          }
         : item));
+    } catch (caught) { setError(caught) } finally { setSaving(false) }
+  }
+
+  async function saveSimulatorSecret() {
+    if (!providerTest || !simulatorSecretInput) return;
+    setSaving(true); setError(null);
+    try {
+      await api.admin.billing.providers.update(providerTest.providerId, { simulatorWebhookSecret: simulatorSecretInput });
+      const refreshed = await api.admin.billing.providers.test(providerTest.providerId);
+      setProviderTest(refreshed);
+      setSimulatorSecretInput("");
+      await load();
     } catch (caught) { setError(caught) } finally { setSaving(false) }
   }
 
@@ -152,7 +182,7 @@ export function BillingView({ canManage, instance }: { canManage: boolean; insta
           </div>
           {canManage ? <Button onClick={() => setProviderModal(true)}><Plus className="size-4" />{t.billing.newProvider}</Button> : null}
         </div>
-        {providers.length === 0 ? <EmptyState title={t.billing.providersEmptyTitle} description={t.billing.providersEmptyDesc} /> : <div className="card-grid">{providers.map((provider) => <article className="entity-card" key={provider.id}><header><div><strong>Paddle {provider.environment === "sandbox" ? t.billing.providerEnvSandbox : t.billing.providerEnvLive}</strong><span>{provider.id}</span></div><StatusBadge status={provider.status} /></header><div className="readiness-summary"><span>{provider.clientSideTokenConfigured ?? Boolean(provider.clientSideToken) ? <CheckCircle2 /> : <AlertTriangle />}Client-side Token</span><span>{provider.webhookSecretConfigured ? <CheckCircle2 /> : <AlertTriangle />}Webhook Secret</span><span>{provider.apiKeyConfigured ? <CheckCircle2 /> : <ShieldQuestion />}API Key</span><span>{provider.webhookVerifiedAt ? <CheckCircle2 /> : <ShieldQuestion />}{provider.webhookVerifiedAt ? t.billing.webhookVerified : t.billing.webhookUnverified}</span></div>{provider.readiness ? <Readiness report={provider.readiness} /> : null}{canManage ? <Button variant="secondary" loading={saving} onClick={() => void testProvider(provider)}>{t.billing.btnCheckProviderConfiguration}</Button> : null}</article>)}</div>}
+        {providers.length === 0 ? <EmptyState title={t.billing.providersEmptyTitle} description={t.billing.providersEmptyDesc} /> : <div className="card-grid">{providers.map((provider) => <article className="entity-card" key={provider.id}><header><div><strong>Paddle {provider.environment === "sandbox" ? t.billing.providerEnvSandbox : t.billing.providerEnvLive}</strong><span>{provider.id}</span></div><StatusBadge status={provider.status} /></header><div className="readiness-summary"><span>{provider.clientSideTokenConfigured ?? Boolean(provider.clientSideToken) ? <CheckCircle2 /> : <AlertTriangle />}Client-side Token</span><span>{provider.webhookSecretConfigured ? <CheckCircle2 /> : <AlertTriangle />}{t.billing.platformDestinationTitle}</span><span>{provider.simulatorWebhookSecretConfigured ? <CheckCircle2 /> : <AlertTriangle />}{t.billing.simulatorDestinationTitle}</span><span>{provider.apiKeyConfigured ? <CheckCircle2 /> : <ShieldQuestion />}API Key</span><span>{provider.webhookVerifiedAt ? <CheckCircle2 /> : <ShieldQuestion />}{provider.webhookVerifiedAt ? t.billing.platformWebhookVerified : t.billing.platformWebhookUnverified}</span><span>{provider.simulatorTestCompletedAt ? <CheckCircle2 /> : <ShieldQuestion />}{provider.simulatorTestCompletedAt ? t.billing.simulatorTestsComplete : t.billing.simulatorTestsIncomplete}</span></div>{provider.readiness ? <Readiness report={provider.readiness} /> : null}{canManage ? <Button variant="secondary" loading={saving} onClick={() => void testProvider(provider)}>{t.billing.btnCheckProviderConfiguration}</Button> : null}</article>)}</div>}
       </Card> : null}
 
       {tab === "offers" ? <Card>
@@ -172,7 +202,7 @@ export function BillingView({ canManage, instance }: { canManage: boolean; insta
         ) : null}
         {offers.length === 0 ? <EmptyState title={t.billing.offersEmptyTitle} description={t.billing.offersEmptyDesc} /> : <div className="stack-list">{offers.map((offer) => {
           const provider = providers.find((item) => item.id === offer.billingProviderId);
-          return <div className="offer-row" key={offer.id}><div className="offer-main"><div><strong>{offer.productName || products.find((item) => item.id === offer.productId)?.name || offer.productId}</strong><span>{offer.licensePlanName || plans.find((item) => item.id === offer.licensePlanId)?.name || offer.licensePlanId}</span></div><code>{offer.externalPriceId}</code></div><div className="offer-meta"><Badge>{offer.purchaseType === "subscription" ? t.billing.offerTypeSubscription : t.billing.offerTypeOneTime}</Badge><Badge>{provider?.environment || "—"}</Badge><StatusBadge status={offer.status} /></div>{offer.readiness ? <Readiness report={offer.readiness} /> : null}{canManage ? <div className="button-row wrap">{offer.status === "draft" && provider?.environment === "sandbox" ? <Button variant="secondary" loading={saving} onClick={() => void prepareVerification(offer)}><FlaskConical className="size-4" />{t.billing.btnActivateOffer}</Button> : null}{offer.status === "draft" ? <Button loading={saving} onClick={() => void activateOffer(offer)}>{t.billing.btnVerifyReadiness}</Button> : null}</div> : null}</div>;
+          return <div className="offer-row" key={offer.id}><div className="offer-main"><div><strong>{offer.productName || products.find((item) => item.id === offer.productId)?.name || offer.productId}</strong><span>{offer.licensePlanName || plans.find((item) => item.id === offer.licensePlanId)?.name || offer.licensePlanId}</span></div><code>{offer.externalPriceId}</code></div><div className="offer-meta"><Badge>{offer.purchaseType === "subscription" ? t.billing.offerTypeSubscription : t.billing.offerTypeOneTime}</Badge><Badge>{provider?.environment || "—"}</Badge><StatusBadge status={offer.status} /></div>{offer.readiness ? <Readiness report={offer.readiness} /> : null}{canManage ? <div className="button-row wrap">{offer.status === "draft" && provider?.environment === "sandbox" ? <Button variant="secondary" loading={saving} onClick={() => void prepareVerification(offer)}><FlaskConical className="size-4" />{t.billing.btnVerifyReadiness}</Button> : null}{offer.status === "draft" ? <Button loading={saving} onClick={() => void activateOffer(offer)}>{t.billing.btnActivateOffer}</Button> : null}</div> : null}</div>;
         })}</div>}
       </Card> : null}
 
@@ -181,21 +211,38 @@ export function BillingView({ canManage, instance }: { canManage: boolean; insta
       {tab === "adjustments" ? <Card><div className="card-header"><div><p className="eyebrow">{t.billing.tabAdjustments}</p><h2>{t.billing.tabAdjustments}</h2><p>{t.billing.adjustmentsEmptyDesc}</p></div><Badge>{adjustments.length}</Badge></div>{adjustments.length === 0 ? <EmptyState title={t.billing.adjustmentsEmptyTitle} description={t.billing.adjustmentsEmptyDesc} /> : <div className="table-wrap"><table><thead><tr><th>{t.billing.tableColAdjExternalId}</th><th>{t.billing.tableColAdjGatewayStatus}</th><th>{t.billing.tableColAdjAmount}</th><th>{t.billing.tableColAdjSystemEffect}</th><th>{t.billing.tableColAdjReviewStatus}</th><th>{t.common.actions}</th></tr></thead><tbody>{adjustments.map((item) => <tr key={item.id}><td><strong>{item.externalAdjustmentId}</strong><small>{item.provider}</small></td><td>{item.action} · {item.type} · {item.status}</td><td>{item.amount || "—"} {item.currencyCode || ""}</td><td>{item.automaticEffect || t.billing.adjNoAutomaticEffect}<small>{item.licenseId || t.billing.adjUnlinkedLicense}</small></td><td><StatusBadge status={item.reviewStatus} /></td><td>{canManage && item.reviewStatus === "open" ? <Button variant="secondary" loading={saving} onClick={() => { setResolvingAdjustment(item); setAdjustmentAction("keep_suspended"); setAdjustmentReason(""); }}>{t.billing.modalResolveTitle}</Button> : null}</td></tr>)}</tbody></table></div>}</Card> : null}
 
       <Modal open={providerModal} onClose={() => setProviderModal(false)} title={t.billing.modalProviderTitle} description={t.billing.modalProviderDesc}>
-        <form className="form-stack" onSubmit={createProvider}><Field label={t.billing.fieldEnv}><Select value={providerForm.environment} onChange={(event) => setProviderForm({ ...providerForm, environment: event.target.value as BillingEnvironment })}><option value="sandbox">{t.billing.providerEnvSandbox}</option><option value="live">{t.billing.providerEnvLive}</option></Select></Field><Field label={t.billing.fieldClientToken} hint={t.billing.fieldClientTokenHint}><Input value={providerForm.clientSideToken} onChange={(event) => setProviderForm({ ...providerForm, clientSideToken: event.target.value })} autoComplete="off" required /></Field><Field label={t.billing.fieldWebhookSecret} hint={t.billing.fieldWebhookSecretHint}><Input type="password" value={providerForm.webhookSecret} onChange={(event) => setProviderForm({ ...providerForm, webhookSecret: event.target.value })} autoComplete="new-password" required /></Field><div className="webhook-endpoint"><span className="field-label">{t.billing.fieldWebhookUrl}</span><div><code>{webhookUrl}</code><CopyValue value={webhookUrl} /></div><span className="field-hint">{t.billing.fieldWebhookUrlHint}</span></div><Field label={t.billing.fieldApiKey} hint={t.billing.fieldApiKeyHint}><Input type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} autoComplete="new-password" /></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setProviderModal(false)}>{t.common.cancel}</Button><Button type="submit" loading={saving}>{t.billing.btnCreateProvider}</Button></div></form>
+        <form className="form-stack" onSubmit={createProvider}>
+          <Field label={t.billing.fieldEnv}><Select value={providerForm.environment} onChange={(event) => setProviderForm({ ...providerForm, environment: event.target.value as BillingEnvironment })}><option value="sandbox">{t.billing.providerEnvSandbox}</option><option value="live">{t.billing.providerEnvLive}</option></Select></Field>
+          <Notice tone="info"><strong>{t.billing.requiredWebhookEvents}</strong><p>{t.billing.providerSetupEventsHint}</p><code>{INITIAL_PADDLE_EVENT_TYPES.join(", ")}</code></Notice>
+          <div className="webhook-endpoint"><span className="field-label">{t.billing.platformDestinationTitle}</span><div><code>{webhookUrl}</code><CopyValue value={webhookUrl} /></div><span className="field-hint">{t.billing.platformDestinationHint}</span></div>
+          <Field label={t.billing.fieldWebhookSecret} hint={t.billing.fieldWebhookSecretHint}><Input type="password" value={providerForm.webhookSecret} onChange={(event) => setProviderForm({ ...providerForm, webhookSecret: event.target.value })} autoComplete="new-password" required /></Field>
+          <div className="webhook-endpoint"><span className="field-label">{t.billing.simulatorDestinationTitle}</span><div><code>{simulatorWebhookUrl}</code><CopyValue value={simulatorWebhookUrl} /></div><span className="field-hint">{t.billing.simulatorDestinationHint}</span></div>
+          <Field label={t.billing.fieldSimulatorWebhookSecret} hint={t.billing.fieldSimulatorWebhookSecretHint}><Input type="password" value={providerForm.simulatorWebhookSecret} onChange={(event) => setProviderForm({ ...providerForm, simulatorWebhookSecret: event.target.value })} autoComplete="new-password" required /></Field>
+          <Field label={t.billing.fieldClientToken} hint={t.billing.fieldClientTokenHint}><Input value={providerForm.clientSideToken} onChange={(event) => setProviderForm({ ...providerForm, clientSideToken: event.target.value })} autoComplete="off" required /></Field>
+          <Field label={t.billing.fieldApiKey} hint={t.billing.fieldApiKeyHint}><Input type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} autoComplete="new-password" /></Field>
+          <div className="form-actions"><Button variant="secondary" type="button" onClick={() => setProviderModal(false)}>{t.common.cancel}</Button><Button type="submit" loading={saving}>{t.billing.btnCreateProvider}</Button></div>
+        </form>
       </Modal>
 
       <Modal open={offerModal} onClose={() => setOfferModal(false)} title={t.billing.modalOfferTitle} description={t.billing.modalOfferDesc}>
         <form className="form-stack" onSubmit={createOffer}><Field label={t.billing.fieldSelectProvider}><Select value={offerForm.billingProviderId} onChange={(event) => setOfferForm({ ...offerForm, billingProviderId: event.target.value })} required>{providers.map((item) => <option key={item.id} value={item.id}>Paddle {item.environment === "sandbox" ? "Sandbox" : "Live"} ({item.id})</option>)}</Select></Field><Field label={t.billing.fieldPriceId} hint={t.billing.fieldPriceIdHint}><Input value={offerForm.externalPriceId} onChange={(event) => setOfferForm({ ...offerForm, externalPriceId: event.target.value })} placeholder="pri_…" required /></Field><div className="form-grid"><Field label={t.billing.fieldSelectProduct}><Select value={offerForm.productId} onChange={(event) => setOfferForm({ ...offerForm, productId: event.target.value })} required>{products.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field><Field label={t.billing.fieldSelectPlan}><Select value={offerForm.licensePlanId} onChange={(event) => { const plan = plans.find((item) => item.id === event.target.value); setOfferForm({ ...offerForm, licensePlanId: event.target.value, purchaseType: plan?.licenseModel === "subscription" ? "subscription" : "one_time" }) }} required>{plans.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name} ({item.licenseModel === "subscription" ? t.billing.offerTypeSubscription : t.billing.offerTypeOneTime})</option>)}</Select></Field></div><Field label={t.billing.fieldPurchaseType}><Select value={offerForm.purchaseType} onChange={(event) => setOfferForm({ ...offerForm, purchaseType: event.target.value as "one_time" | "subscription" })}><option value="one_time">{t.billing.offerTypeOneTime}</option><option value="subscription">{t.billing.offerTypeSubscription}</option></Select></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setOfferModal(false)}>{t.common.cancel}</Button><Button type="submit" loading={saving}>{t.billing.btnCreateOffer}</Button></div></form>
       </Modal>
 
-      <Modal open={Boolean(providerTest)} onClose={() => setProviderTest(null)} title={providerTest ? `Paddle ${providerTest.environment === "sandbox" ? "Sandbox" : "Live"}` : ""} description={t.billing.modalProviderCheckDesc}>
+      <Modal open={Boolean(providerTest)} onClose={() => { setProviderTest(null); setSimulatorSecretInput(""); }} title={providerTest ? `Paddle ${providerTest.environment === "sandbox" ? "Sandbox" : "Live"}` : ""} description={t.billing.modalProviderCheckDesc}>
         {providerTest ? <div className="form-stack">
-          <div className="readiness-list"><ProviderCheck label={t.billing.checkClientTokenFormat} value={providerTest.clientSideTokenValid} /><ProviderCheck label={t.billing.checkWebhookSecretReadable} value={providerTest.webhookSecretDecryptable} /><ProviderCheck label={t.billing.checkApiKeyConfigured} value={providerTest.apiKeyConfigured} /></div>
+          <div className="readiness-list"><ProviderCheck label={t.billing.checkClientTokenFormat} value={providerTest.clientSideTokenValid} /><ProviderCheck label={t.billing.checkWebhookSecretReadable} value={providerTest.webhookSecretDecryptable} /><ProviderCheck label={t.billing.checkSimulatorWebhookSecretReadable} value={providerTest.simulatorWebhookSecretDecryptable} /><ProviderCheck label={t.billing.checkApiKeyConfigured} value={providerTest.apiKeyConfigured} /></div>
           <Notice tone={providerTest.webhookVerifiedAt ? "success" : "warning"}>
-            <strong>{providerTest.webhookVerifiedAt ? t.billing.webhookVerified : t.billing.webhookUnverified}</strong>
-            <p>{providerTest.webhookVerifiedAt ? `${t.billing.webhookVerifiedAt}: ${formatDate(providerTest.webhookVerifiedAt)}` : t.billing.webhookVerificationHint}</p>
+            <strong>{providerTest.webhookVerifiedAt ? t.billing.platformWebhookVerified : t.billing.platformWebhookUnverified}</strong>
+            <p>{providerTest.webhookVerifiedAt ? `${t.billing.webhookVerifiedAt}: ${formatDate(providerTest.webhookVerifiedAt)}` : t.billing.platformWebhookVerificationHint}</p>
           </Notice>
-          {!providerTest.webhookVerifiedAt ? <div className="webhook-endpoint"><span className="field-label">{t.billing.fieldWebhookUrl}</span><div><code>{buildPaddleWebhookUrl(instance.adminApiUrl, instance.id, providerTest.environment)}</code><CopyValue value={buildPaddleWebhookUrl(instance.adminApiUrl, instance.id, providerTest.environment)} /></div></div> : null}
+          <div className="webhook-endpoint"><span className="field-label">{t.billing.platformDestinationTitle}</span><div><code>{buildPaddleWebhookUrl(instance.adminApiUrl, instance.id, providerTest.environment)}</code><CopyValue value={buildPaddleWebhookUrl(instance.adminApiUrl, instance.id, providerTest.environment)} /></div><span className="field-hint">{t.billing.platformDestinationHint}</span></div>
+          <Notice tone={providerTest.simulatorTestCompletedAt ? "success" : "warning"}>
+            <strong>{providerTest.simulatorTestCompletedAt ? t.billing.simulatorTestsComplete : t.billing.simulatorTestsIncomplete}</strong>
+            <p>{t.billing.simulatorTestProgress(providerTest.verifiedEventTypes.length, providerTest.requiredEventTypes.length)}</p>
+          </Notice>
+          <div className="webhook-endpoint"><span className="field-label">{t.billing.simulatorDestinationTitle}</span><div><code>{buildPaddleSimulatorWebhookUrl(instance.adminApiUrl, instance.id, providerTest.environment)}</code><CopyValue value={buildPaddleSimulatorWebhookUrl(instance.adminApiUrl, instance.id, providerTest.environment)} /></div><span className="field-hint">{t.billing.simulatorDestinationHint}</span></div>
+          <div><span className="field-label">{t.billing.requiredWebhookEvents}</span><div className="readiness-list">{providerTest.requiredEventTypes.map((eventType) => <ProviderCheck key={eventType} label={eventType} value={providerTest.verifiedEventTypes.includes(eventType)} />)}</div><span className="field-hint">{t.billing.requiredWebhookEventsHint}</span></div>
+          {canManage ? <div className="form-stack"><Field label={t.billing.fieldSimulatorWebhookSecret} hint={t.billing.simulatorSecretSaveHint}><Input type="password" value={simulatorSecretInput} onChange={(event) => setSimulatorSecretInput(event.target.value)} autoComplete="new-password" /></Field><Button type="button" variant="secondary" loading={saving} disabled={!simulatorSecretInput} onClick={() => void saveSimulatorSecret()}>{t.billing.btnSaveSimulatorSecret}</Button></div> : null}
         </div> : null}
       </Modal>
 
@@ -256,13 +303,13 @@ function Readiness({ report }: { report: ReadinessReport }) {
   );
 }
 
-function ProviderCheck({ label, value }: { label: string; value: boolean | null }) {
+function ProviderCheck({ label, value }: { label: string; value: boolean }) {
   return (
     <div>
-      <StatusBadge status={value === true ? "ready" : value === false ? "not_ready" : "stale"} />
+      <StatusBadge status={value ? "ready" : "not_ready"} />
       <span>
         <strong>{label}</strong>
-        <small>{value === null ? "—" : value ? "Passed" : "Failed"}</small>
+        <small>{value ? "Passed" : "Failed"}</small>
       </span>
     </div>
   );

@@ -13,6 +13,7 @@ import {
 } from "../../infra/delivery/dispatcher";
 import { getEmailProviderAdapter } from "../../infra/email/provider";
 import { getEmailProviderTemplateExample } from "../../infra/email/provider-template-registry";
+import { installResendDefaultTemplate } from "../../infra/email/resend-template-installer";
 import { adminCsrf, requireAdminAppOrigin, requireRole } from "../../middleware/auth";
 import { AppError, ConflictError, NotFoundError } from "../../middleware/error";
 import { prepareAuditInsert } from "../../services/identity/audit";
@@ -64,6 +65,12 @@ const TemplateBindingSchema = z.object({
 }).strict().transform((input) => ({
   contractVersion: input.contract_version,
   providerTemplateRef: input.provider_template_ref,
+}));
+
+const DefaultTemplateInstallSchema = z.object({
+  full_access_api_key: z.string().min(1).max(2048),
+}).strict().transform((input) => ({
+  fullAccessApiKey: input.full_access_api_key,
 }));
 
 export const EmailConfigurationTestSchema = z.object({
@@ -560,6 +567,129 @@ adminEmailIntegrationsRouter.get(
     return c.json({
       success: true,
       data: { items: result.results.map(serializeBinding) },
+    });
+  },
+);
+
+adminEmailIntegrationsRouter.post(
+  "/:integrationId/template-bindings/install-defaults",
+  ...mutationGuards(),
+  async (c) => {
+    const input = DefaultTemplateInstallSchema.parse(await c.req.json());
+    const instanceId = c.get("instanceId")!;
+    const integrationId = c.req.param("integrationId");
+    const integration = await requireIntegration(c, integrationId);
+    if (integration.provider !== "resend") {
+      throw new AppError(
+        "EMAIL_DEFAULT_TEMPLATE_INSTALL_PROVIDER_UNSUPPORTED",
+        "Default template installation is only available for Resend integrations.",
+        409,
+        { provider: integration.provider },
+      );
+    }
+
+    const contracts = listEmailNotificationContracts();
+    const existingResult = await c.env.DB.prepare(
+      `SELECT id, email_integration_id, notification_type, contract_version,
+              provider_template_ref, status, created_at, updated_at
+       FROM email_template_bindings
+       WHERE instance_id = ?1 AND email_integration_id = ?2`,
+    ).bind(instanceId, integrationId).all<EmailTemplateBindingRow>();
+    const bindingsByType = new Map(
+      existingResult.results.map((binding) => [binding.notification_type, binding]),
+    );
+    const items: Array<{
+      notificationType: string;
+      contractVersion: number;
+      providerTemplateRef: string;
+      outcome: "installed" | "already_bound";
+    }> = [];
+
+    for (const contract of contracts) {
+      const existing = bindingsByType.get(contract.notificationType);
+      if (existing) {
+        items.push({
+          notificationType: contract.notificationType,
+          contractVersion: existing.contract_version,
+          providerTemplateRef: existing.provider_template_ref,
+          outcome: "already_bound",
+        });
+        continue;
+      }
+
+      const installed = await installResendDefaultTemplate({
+        apiKey: input.fullAccessApiKey,
+        integrationId,
+        contract,
+        example: getEmailProviderTemplateExample(
+          "resend",
+          contract.notificationType,
+          contract.version,
+        ),
+      });
+      const bindingId = `etb_${ulid().toLowerCase()}`;
+      const now = new Date().toISOString();
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          `INSERT INTO email_template_bindings (
+             id, instance_id, email_integration_id, notification_type,
+             contract_version, provider_template_ref, status, created_at, updated_at
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?7)`,
+        ).bind(
+          bindingId,
+          instanceId,
+          integrationId,
+          contract.notificationType,
+          contract.version,
+          installed.providerTemplateRef,
+          now,
+        ),
+        audit(c, {
+          action: "admin.email_template_binding.default_installed",
+          resourceType: "email_template_binding",
+          resourceId: bindingId,
+          details: {
+            integrationId,
+            notificationType: contract.notificationType,
+            contractVersion: contract.version,
+            providerTemplateRef: installed.providerTemplateRef,
+            providerTemplateAlias: installed.alias,
+            providerTemplateCreated: installed.created,
+            providerTemplatePublished: installed.published,
+          },
+          now,
+        }),
+      ]);
+      bindingsByType.set(contract.notificationType, {
+        id: bindingId,
+        email_integration_id: integrationId,
+        notification_type: contract.notificationType,
+        contract_version: contract.version,
+        provider_template_ref: installed.providerTemplateRef,
+        status: "active",
+        created_at: now,
+        updated_at: now,
+      });
+      items.push({
+        notificationType: contract.notificationType,
+        contractVersion: contract.version,
+        providerTemplateRef: installed.providerTemplateRef,
+        outcome: "installed",
+      });
+    }
+
+    const installedCount = items.filter((item) => item.outcome === "installed").length;
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      success: true,
+      data: toSnakeCaseJson({
+        provider: "resend",
+        installedCount,
+        skippedCount: items.length - installedCount,
+        totalCount: contracts.length,
+        complete: contracts.every((contract) => bindingsByType.has(contract.notificationType)),
+        items,
+      }),
     });
   },
 );

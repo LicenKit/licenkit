@@ -319,6 +319,8 @@ export const billingProviders = sqliteTable(
     clientSideToken: text("client_side_token").notNull(),
     webhookSecretCiphertext: text("webhook_secret_ciphertext").notNull(),
     webhookSecretVersion: integer("webhook_secret_version").notNull().default(1),
+    simulatorWebhookSecretCiphertext: text("simulator_webhook_secret_ciphertext"),
+    simulatorWebhookSecretVersion: integer("simulator_webhook_secret_version").notNull().default(1),
     apiSecretCiphertext: text("api_secret_ciphertext"),
     status: text("status").notNull().default("active"),
     createdAt: text("created_at").notNull(),
@@ -334,6 +336,46 @@ export const billingProviders = sqliteTable(
       "ck_billing_providers_client_side_token",
       sql`(${table.environment} = 'sandbox' and substr(${table.clientSideToken}, 1, 5) = 'test_')
         or (${table.environment} = 'live' and substr(${table.clientSideToken}, 1, 5) = 'live_')`,
+    ),
+  ],
+);
+
+export const billingWebhookSimulationTests = sqliteTable(
+  "billing_webhook_simulation_tests",
+  {
+    id: text("id").primaryKey(),
+    instanceId: text("instance_id")
+      .notNull()
+      .references(() => instances.id, restrictReference),
+    billingProviderId: text("billing_provider_id").notNull(),
+    eventType: text("event_type").notNull(),
+    simulatorWebhookSecretVersion: integer("simulator_webhook_secret_version").notNull(),
+    externalEventId: text("external_event_id").notNull(),
+    payloadHash: text("payload_hash").notNull(),
+    verifiedAt: text("verified_at").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    unique("uq_billing_webhook_simulation_tests_event").on(
+      table.instanceId,
+      table.billingProviderId,
+      table.eventType,
+    ),
+    foreignKey({
+      name: "fk_billing_webhook_simulation_tests_provider",
+      columns: [table.instanceId, table.billingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
+    }).onDelete("restrict"),
+    index("idx_billing_webhook_simulation_tests_verification").on(
+      table.instanceId,
+      table.billingProviderId,
+      table.simulatorWebhookSecretVersion,
+      table.eventType,
+    ),
+    check(
+      "ck_billing_webhook_simulation_tests_event_type",
+      sql`${table.eventType} in ('transaction.completed', 'adjustment.created', 'adjustment.updated', 'customer.created', 'customer.updated', 'subscription.created', 'subscription.updated')`,
     ),
   ],
 );

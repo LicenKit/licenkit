@@ -75,14 +75,18 @@ function insertDelivery(
 describe("User and Instance database schema", () => {
   it("contains the initial schema and forward webhook verification migration", () => {
     expect(fs.readdirSync(drizzleDir).filter((file) => file.endsWith(".sql")).sort())
-      .toEqual(["0000_v1_initial.sql", "0001_webhook_verification_evidence.sql"]);
+      .toEqual([
+        "0000_v1_initial.sql",
+        "0001_webhook_verification_evidence.sql",
+        "0002_paddle_simulator_verification.sql",
+      ]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
     const tables = (db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
     ).all() as Array<{ name: string }>).map((row) => row.name);
-    expect(tables).toHaveLength(29);
+    expect(tables).toHaveLength(30);
     expect(tables).toEqual(expect.arrayContaining([
       "users", "instances", "instance_memberships", "instance_invitations",
       "deployment_bootstrap", "admin_sessions",
@@ -108,12 +112,20 @@ describe("User and Instance database schema", () => {
     ).run(now, now);
 
     applyMigrationFile(db, "0001_webhook_verification_evidence.sql");
+    applyMigrationFile(db, "0002_paddle_simulator_verification.sql");
 
     expect(db.prepare(
-      `SELECT id, webhook_secret_version
+      `SELECT id, webhook_secret_version, simulator_webhook_secret_ciphertext,
+              simulator_webhook_secret_version
        FROM billing_providers WHERE id = 'bpr_existing'`,
-    ).get()).toEqual({ id: "bpr_existing", webhook_secret_version: 1 });
+    ).get()).toEqual({
+      id: "bpr_existing",
+      webhook_secret_version: 1,
+      simulator_webhook_secret_ciphertext: null,
+      simulator_webhook_secret_version: 1,
+    });
     expect(columns(db, "inbound_events")).toContain("webhook_secret_version");
+    expect(columns(db, "billing_webhook_simulation_tests")).toContain("event_type");
     expect(db.pragma("foreign_key_check")).toEqual([]);
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
   });
