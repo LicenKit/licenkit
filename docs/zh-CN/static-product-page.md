@@ -40,7 +40,7 @@ Customer Portal 不需要配置 Instance 选择字段；服务端由请求的 `a
 
 ```ts
 Paddle.Environment.set("sandbox"); // 仅 Sandbox
-Paddle.Setup({ token: "test_..." });
+Paddle.Initialize({ token: "test_..." });
 
 Paddle.Checkout.open({
   items: [{ priceId: "pri_01...", quantity: 1 }],

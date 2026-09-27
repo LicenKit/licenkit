@@ -2,7 +2,7 @@ import type { BillingVerificationConfig, SuccessEnvelope } from "./api-client";
 
 export interface PaddleRuntime {
   Environment?: { set(value: "sandbox"): void };
-  Setup(options: { token: string }): void;
+  Initialize(options: { token: string }): void;
   Checkout: { open(options: Record<string, unknown>): void };
 }
 
@@ -74,7 +74,7 @@ async function initializedPaddle(token: string, loadPaddle: () => Promise<Paddle
   }
   if (!initializedToken) {
     paddle.Environment?.set("sandbox");
-    paddle.Setup({ token });
+    paddle.Initialize({ token });
     initializedToken = token;
   }
   return paddle;

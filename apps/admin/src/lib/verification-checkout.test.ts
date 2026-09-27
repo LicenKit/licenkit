@@ -24,14 +24,18 @@ describe("openVerificationCheckout", () => {
   it("loads authenticated configuration, opens one Sandbox Price, and clears the token", async () => {
     const payload = response();
     const checkoutOpen = vi.fn();
+    const environmentSet = vi.fn();
+    const initialize = vi.fn();
     const paddle: PaddleRuntime = {
-      Environment: { set: vi.fn() },
-      Setup: vi.fn(),
+      Environment: { set: environmentSet },
+      Initialize: initialize,
       Checkout: { open: checkoutOpen },
     };
 
     await openVerificationCheckout(vi.fn(async () => payload), async () => paddle);
 
+    expect(environmentSet).toHaveBeenCalledWith("sandbox");
+    expect(initialize).toHaveBeenCalledWith({ token: "test_client_token" });
     expect(checkoutOpen).toHaveBeenCalledWith({
       items: [{ priceId: "pri_monthly123", quantity: 1 }],
       customData: { licenkit_checkout_verification: "vfy_one_time_secret" },

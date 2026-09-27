@@ -400,14 +400,16 @@ POST   /api/v1/admin/billing/providers/:providerId/test
 
 Paddle Provider 配置四类互不替代的凭证：
 
-- `client_side_token`：必填、与 `sandbox|live` 环境匹配，作为公开字段返回给 Paddle.js；它不是 Secret；
+- `client_side_token`：必填、与 `sandbox|live` 环境匹配；LicenKit 记录该公开 Token，并在 Sandbox Admin Checkout 测试中返回给官方 Paddle.js。正式产品页仍自行嵌入对应 Live Token；它不是 Secret；
 - Platform Webhook Secret：必填、加密保存，只验证 Paddle `traffic_source=platform` 正式业务目标发来的原始 Webhook；
 - Simulator Webhook Secret：必填、加密保存，只验证另一条 `traffic_source=simulation` 测试目标发来的原始 Webhook；
 - Paddle API Key：可选、加密保存，只在启用服务器端 API 能力时需要；Get Customer/对账至少要求 `customer.read`，托管客户门户要求 `customer_portal_session.write`。
 
 管理 API 返回 `client_side_token` 的值或可用状态，但两类 Webhook Secret 与 API Key 写入后只返回是否已配置，不返回明文。基础购买、事件履约和发码不能要求 API Key；没有 API Key 时 Customer 映射通过 Webhook 收敛。
 
-`provider` 和 `environment` 是连接身份，创建后不可 PATCH；切换 Sandbox/Live 必须创建另一条 Provider。PATCH 只允许轮换同一连接的 Client-side Token、两类 Webhook Secret、可选 API Key 或修改状态。Platform 与 Simulator Secret 分别维护版本；任一 Secret 轮换后，只使对应入口在旧版本下形成的验证证据失效。这样已有外部 Customer、Transaction、Subscription 和事件 ID 不会被重新解释到另一环境。
+管理后台把“编辑支付通道”和“检查本地配置”分开：编辑入口负责更新公开 Token、修改两类 Webhook Secret、替换或移除 API Key 以及启停通道；检查入口只读取已保存配置和验证证据，不在诊断界面修改凭证。
+
+`provider` 和 `environment` 是连接身份，创建后不可 PATCH；切换 Sandbox/Live 必须创建另一条 Provider。PATCH 只允许修改同一连接的 Client-side Token、两类 Webhook Secret、可选 API Key 或状态。Platform 与 Simulator Secret 分别维护内部版本；任一 Secret 修改后，只使对应入口在修改前形成的验证证据失效。这样已有外部 Customer、Transaction、Subscription 和事件 ID 不会被重新解释到另一环境。
 
 启用 Customer API 读穿后，LicenKit 服务端可以发起 Paddle Billing REST API 请求；它不是基础路径，也不是回调 Paddle Webhook：
 
@@ -999,7 +1001,7 @@ Simulator 入口复用完全相同的原始请求体验签和 Paddle Envelope �
 
 只有 Inbound Event 已可靠持久化才返回 2xx。签名无效返回 4xx，数据库写入失败返回 5xx 让 Paddle 重试；事件已持久化后的 Customer API 超时、依赖未齐或履约失败不再改变本次接收响应，由内部状态机和 Scheduled Worker 重试，避免把 Paddle 重投当作内部任务队列。
 
-当前必需事件由该 Provider 下未归档 Offer 的购买类型决定。仅有一次性购买时为 5 类：`customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在任一订阅 Offer 时再加入 `subscription.created`、`subscription.updated`，共 7 类。Platform 与 Simulator Destination 必须订阅同一份当前清单，管理员必须在 Paddle Simulator 中为每一类分别发送 Single event；一次模拟事件不能证明其他事件可被解析。Simulator Secret 轮换后必须重新完成全部当前必需事件测试；新增订阅 Offer 后只会新增尚未验证的订阅事件要求。
+当前必需事件由该 Provider 下未归档 Offer 的购买类型决定。仅有一次性购买时为 5 类：`customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在任一订阅 Offer 时再加入 `subscription.created`、`subscription.updated`，共 7 类。Platform 与 Simulator Destination 必须订阅同一份当前清单，管理员必须在 Paddle Simulator 中为每一类分别发送 Single event；一次模拟事件不能证明其他事件可被解析。Simulator Secret 修改后必须重新完成全部当前必需事件测试；新增订阅 Offer 后只会新增尚未验证的订阅事件要求。
 
 逐事件 Simulator 证据只用于验证测试目标和共享解析合同，不证明 Platform Destination 已正确订阅这些事件。正式入口的 `webhook_verified_at` 只能由当前 Platform Secret 下收到的真实 `traffic_source=platform` 事件形成；完整的正式业务闭环仍需在 Sandbox 通过真实 Checkout 验证，并在 Live 上线后观察真实事件。LicenKit 不要求 API Key 才能读取远端订阅配置，也不把 API Key 当作 Webhook 完整性的替代品。
 
