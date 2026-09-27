@@ -242,17 +242,18 @@ export type ReadinessState = "ready" | "not_ready" | "stale";
 export interface ReadinessCheck { key: string; label?: string; status: ReadinessState; checkedAt?: IsoDateTime | null; lastSucceededAt?: IsoDateTime | null; error?: ErrorSnapshot | null; action?: string | null }
 export interface ReadinessReport { checkoutAvailable: boolean; checks: ReadinessCheck[] }
 export interface ProviderTestResult {
+  providerId: Identifier;
   provider: "paddle";
   environment: BillingEnvironment;
   clientSideTokenValid: boolean;
   webhookSecretDecryptable: boolean;
-  signatureSampleVerified: boolean | null;
+  webhookVerifiedAt: IsoDateTime | null;
   apiKeyConfigured: boolean;
 }
 export interface BillingProvider {
   id: Identifier; provider: "paddle"; environment: BillingEnvironment; status: "active" | "disabled" | "configuration_error";
   clientSideToken?: string; clientSideTokenConfigured?: boolean; webhookSecretConfigured: boolean; apiKeyConfigured: boolean;
-  apiCapabilities?: string[]; updatedAt?: IsoDateTime; readiness?: ReadinessReport;
+  webhookVerifiedAt?: IsoDateTime | null; apiCapabilities?: string[]; updatedAt?: IsoDateTime; readiness?: ReadinessReport;
 }
 export interface BillingOffer {
   id: Identifier; billingProviderId: Identifier; externalPriceId: string; productId: Identifier; productName?: string;

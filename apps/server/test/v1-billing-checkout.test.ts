@@ -136,6 +136,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       id: providerId,
       client_side_token: "test_client_token_v1",
       webhook_secret_configured: true,
+      webhook_verified_at: null,
       api_key_configured: false,
       created_at: nowIso,
       updated_at: nowIso,
@@ -170,9 +171,27 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       environment: "live",
       client_side_token: "live_admin_client_token_v1",
       webhook_secret_configured: true,
+      webhook_verified_at: null,
       api_key_configured: false,
     });
     expectNoCamelCaseKeys(createBody);
+
+    const configurationCheckResponse = await admin.request(`http://test/providers/${providerId}/test`, {
+      method: "POST",
+    }, testEnv.env);
+    expect(configurationCheckResponse.status).toBe(200);
+    const configurationCheckBody = await configurationCheckResponse.json() as any;
+    expect(configurationCheckBody.data).toEqual({
+      provider_id: providerId,
+      provider: "paddle",
+      environment: "sandbox",
+      client_side_token_valid: true,
+      webhook_secret_decryptable: true,
+      webhook_verified_at: null,
+      api_key_configured: false,
+    });
+    expect(configurationCheckBody.data).not.toHaveProperty("signature_sample_verified");
+    expectNoCamelCaseKeys(configurationCheckBody);
 
     testEnv.sqliteDb.prepare("UPDATE billing_offers SET status = 'draft' WHERE id = 'off_one'").run();
     const verificationResponse = await admin.request("http://test/offers/off_one/verification-config", {
@@ -320,11 +339,21 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(duplicate.body.data.payload_refreshed).toBe(false);
     expect(duplicate.body.data).not.toHaveProperty("payloadRefreshed");
     const rows = testEnv.sqliteDb.prepare(
-      "SELECT payload_ciphertext, payload_hash FROM inbound_events WHERE external_event_id = ?",
-    ).all("evt_customer_signature") as Array<{ payload_ciphertext: string; payload_hash: string }>;
+      `SELECT payload_ciphertext, payload_hash, webhook_secret_version
+       FROM inbound_events WHERE external_event_id = ?`,
+    ).all("evt_customer_signature") as Array<{
+      payload_ciphertext: string;
+      payload_hash: string;
+      webhook_secret_version: number;
+    }>;
     expect(rows).toHaveLength(1);
     expect(rows[0].payload_ciphertext).not.toContain("signed@example.test");
     expect(rows[0].payload_hash).toBe(await sha256Hex(payload));
+    expect(rows[0].webhook_secret_version).toBe(1);
+
+    const providersAfterWebhook = await billingAdminApp().request("http://test/providers", {}, testEnv.env);
+    const providersAfterWebhookBody = await providersAfterWebhook.json() as any;
+    expect(providersAfterWebhookBody.data.items[0].webhook_verified_at).toEqual(expect.any(String));
 
     const conflicting = await postEvent(eventPayload("evt_customer_signature", "customer.updated", {
       id: "ctm_signature1",
@@ -336,6 +365,64 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(conflicting.response.status).toBe(409);
     expect(conflicting.body.error.code).toBe("BILLING_WEBHOOK_EVENT_ID_CONFLICT");
     expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM inbound_events").get()).toEqual({ count: 1 });
+  });
+
+  it("invalidates webhook verification evidence when the secret rotates", async () => {
+    const originalPayload = eventPayload("evt_before_secret_rotation", "customer.updated", {
+      id: "ctm_before_rotation",
+      email: "before-rotation@example.test",
+      status: "active",
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    expect((await postEvent(originalPayload)).response.status).toBe(200);
+
+    const admin = billingAdminApp();
+    const beforeRotationResponse = await admin.request(`http://test/providers/${providerId}/test`, {
+      method: "POST",
+    }, testEnv.env);
+    const beforeRotationBody = await beforeRotationResponse.json() as any;
+    expect(beforeRotationBody.data.webhook_verified_at).toEqual(expect.any(String));
+
+    const rotatedSecret = "pdl_ntfsec_v2_rotated_secret_123456789";
+    const rotationResponse = await admin.request(`http://test/providers/${providerId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ webhook_secret: rotatedSecret }),
+    }, testEnv.env);
+    expect(rotationResponse.status).toBe(200);
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT webhook_secret_version FROM billing_providers WHERE id = ?",
+    ).get(providerId)).toEqual({ webhook_secret_version: 2 });
+
+    const afterRotationResponse = await admin.request(`http://test/providers/${providerId}/test`, {
+      method: "POST",
+    }, testEnv.env);
+    const afterRotationBody = await afterRotationResponse.json() as any;
+    expect(afterRotationBody.data.webhook_verified_at).toBeNull();
+
+    const oldSecretEvent = eventPayload("evt_old_secret_after_rotation", "customer.updated", {
+      id: "ctm_old_secret_after_rotation",
+      email: "old-secret@example.test",
+      status: "active",
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    expect((await postEvent(oldSecretEvent)).response.status).toBe(401);
+
+    const retriedWithRotatedSecret = await postEvent(originalPayload, rotatedSecret);
+    expect(retriedWithRotatedSecret.response.status).toBe(200);
+    expect(retriedWithRotatedSecret.body.data.duplicate).toBe(true);
+    expect(testEnv.sqliteDb.prepare(
+      `SELECT webhook_secret_version
+       FROM inbound_events WHERE external_event_id = 'evt_before_secret_rotation'`,
+    ).get()).toEqual({ webhook_secret_version: 2 });
+
+    const verifiedAgainResponse = await admin.request(`http://test/providers/${providerId}/test`, {
+      method: "POST",
+    }, testEnv.env);
+    const verifiedAgainBody = await verifiedAgainResponse.json() as any;
+    expect(verifiedAgainBody.data.webhook_verified_at).toEqual(expect.any(String));
   });
 
   it("refreshes an expired payload only for the identical unfinished Paddle event", async () => {

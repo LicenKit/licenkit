@@ -537,7 +537,15 @@ export interface BillingDictionary {
   providerEnvLive: string;
   providerStatusActive: string;
   providerStatusDisabled: string;
-  btnTestProvider: string;
+  btnCheckProviderConfiguration: string;
+  modalProviderCheckDesc: string;
+  checkClientTokenFormat: string;
+  checkWebhookSecretReadable: string;
+  checkApiKeyConfigured: string;
+  webhookVerified: string;
+  webhookUnverified: string;
+  webhookVerifiedAt: string;
+  webhookVerificationHint: string;
   btnVerifyReadiness: string;
   btnActivateOffer: string;
   btnArchiveOffer: string;

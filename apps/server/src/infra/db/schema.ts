@@ -318,6 +318,7 @@ export const billingProviders = sqliteTable(
     environment: text("environment").notNull(),
     clientSideToken: text("client_side_token").notNull(),
     webhookSecretCiphertext: text("webhook_secret_ciphertext").notNull(),
+    webhookSecretVersion: integer("webhook_secret_version").notNull().default(1),
     apiSecretCiphertext: text("api_secret_ciphertext"),
     status: text("status").notNull().default("active"),
     createdAt: text("created_at").notNull(),
@@ -957,6 +958,7 @@ export const inboundEvents = sqliteTable(
       .notNull()
       .references(() => instances.id, restrictReference),
     billingProviderId: text("billing_provider_id").notNull(),
+    webhookSecretVersion: integer("webhook_secret_version"),
     externalEventId: text("external_event_id").notNull(),
     externalEventType: text("external_event_type").notNull(),
     externalCustomerId: text("external_customer_id"),
@@ -1004,6 +1006,12 @@ export const inboundEvents = sqliteTable(
       table.instanceId,
       table.billingProviderId,
       table.externalEventType,
+      sql`${table.receivedAt} desc`,
+    ),
+    index("idx_inbound_events_webhook_verification").on(
+      table.instanceId,
+      table.billingProviderId,
+      table.webhookSecretVersion,
       sql`${table.receivedAt} desc`,
     ),
     index("idx_inbound_events_customer")

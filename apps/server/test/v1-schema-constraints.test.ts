@@ -15,6 +15,13 @@ function createDb() {
   return db;
 }
 
+function applyMigrationFile(db: Database.Database, file: string): void {
+  const rawSql = fs.readFileSync(path.join(drizzleDir, file), "utf-8");
+  for (const statement of rawSql.split("--> statement-breakpoint").map((item) => item.trim()).filter(Boolean)) {
+    db.exec(statement);
+  }
+}
+
 function columns(db: Database.Database, table: string): string[] {
   return (db.pragma(`table_info(${table})`) as Array<{ name: string }>).map((row) => row.name);
 }
@@ -65,10 +72,10 @@ function insertDelivery(
   );
 }
 
-describe("User and Instance initial database schema", () => {
-  it("contains exactly one executable initial migration", () => {
+describe("User and Instance database schema", () => {
+  it("contains the initial schema and forward webhook verification migration", () => {
     expect(fs.readdirSync(drizzleDir).filter((file) => file.endsWith(".sql")).sort())
-      .toEqual(["0000_v1_initial.sql"]);
+      .toEqual(["0000_v1_initial.sql", "0001_webhook_verification_evidence.sql"]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
@@ -81,6 +88,34 @@ describe("User and Instance initial database schema", () => {
       "deployment_bootstrap", "admin_sessions",
     ]));
     expect(tables).not.toEqual(expect.arrayContaining(["accounts", "system_settings"]));
+  });
+
+  it("migrates an existing billing provider without recreating the database", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    applyMigrationFile(db, "0000_v1_initial.sql");
+    db.prepare(
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_existing', 'Existing', 'https://site.example.test',
+         'https://admin.example.test', 'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO billing_providers (
+         id, instance_id, provider, environment, client_side_token,
+         webhook_secret_ciphertext, status, created_at, updated_at
+       ) VALUES ('bpr_existing', 'ins_existing', 'paddle', 'sandbox',
+         'test_existing_token', 'ciphertext', 'active', ?, ?)`,
+    ).run(now, now);
+
+    applyMigrationFile(db, "0001_webhook_verification_evidence.sql");
+
+    expect(db.prepare(
+      `SELECT id, webhook_secret_version
+       FROM billing_providers WHERE id = 'bpr_existing'`,
+    ).get()).toEqual({ id: "bpr_existing", webhook_secret_version: 1 });
+    expect(columns(db, "inbound_events")).toContain("webhook_secret_version");
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
   });
 
   it("keeps User global, Session Instance-free, and the fresh database uninitialized", () => {

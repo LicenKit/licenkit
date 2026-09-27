@@ -19,6 +19,7 @@ export interface BillingProviderRecord {
   environment: BillingEnvironment;
   client_side_token: string;
   webhook_secret_ciphertext: string;
+  webhook_secret_version: number;
   api_secret_ciphertext: string | null;
   status: "active" | "disabled";
   created_at: string;

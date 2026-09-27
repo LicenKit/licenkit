@@ -314,6 +314,7 @@ export function toProviderRecord(row: BillingOfferReadinessRow): BillingProvider
     environment: row.provider_environment,
     client_side_token: row.client_side_token,
     webhook_secret_ciphertext: "",
+    webhook_secret_version: 1,
     api_secret_ciphertext: null,
     status: row.provider_status,
     created_at: row.provider_updated_at,

@@ -85,20 +85,22 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
 
   await c.env.DB.prepare(
     `INSERT INTO inbound_events (
-       id, instance_id, billing_provider_id, external_event_id, external_event_type,
+       id, instance_id, billing_provider_id, webhook_secret_version,
+       external_event_id, external_event_type,
        external_customer_id, external_transaction_id, external_subscription_id,
        external_adjustment_id, external_occurred_at, payload_ciphertext,
        payload_hash, payload_expires_at, status, attempt_count, next_attempt_at,
        received_at, updated_at
      ) VALUES (
-       ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-       'pending', 0, ?14, ?14, ?14
+       ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+       'pending', 0, ?15, ?15, ?15
      )
      ON CONFLICT(instance_id, billing_provider_id, external_event_id) DO NOTHING`,
   ).bind(
     inboundEventId,
     route.instance_id,
     route.id,
+    route.webhook_secret_version,
     event.event_id,
     event.event_type,
     references.externalCustomerId,
@@ -113,7 +115,8 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
   ).run();
 
   const persisted = await c.env.DB.prepare(
-    `SELECT id, status, payload_ciphertext, payload_hash, payload_expires_at, received_at
+    `SELECT id, status, payload_ciphertext, payload_hash, payload_expires_at,
+            webhook_secret_version, received_at
      FROM inbound_events
      WHERE instance_id = ?1 AND billing_provider_id = ?2 AND external_event_id = ?3
      LIMIT 1`,
@@ -123,6 +126,7 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
     payload_ciphertext: string | null;
     payload_hash: string;
     payload_expires_at: string;
+    webhook_secret_version: number | null;
     received_at: string;
   }>();
   if (!persisted) {
@@ -141,6 +145,24 @@ async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProvid
       409,
       { provider: "paddle", external_event_id: event.event_id, billing_provider_id: route.id },
     );
+  }
+
+  if (
+    duplicate
+    && (persisted.webhook_secret_version === null
+      || persisted.webhook_secret_version < route.webhook_secret_version)
+  ) {
+    await c.env.DB.prepare(
+      `UPDATE inbound_events
+       SET webhook_secret_version = ?1
+       WHERE instance_id = ?2 AND id = ?3 AND payload_hash = ?4
+         AND (webhook_secret_version IS NULL OR webhook_secret_version < ?1)`,
+    ).bind(
+      route.webhook_secret_version,
+      route.instance_id,
+      persisted.id,
+      payloadHash,
+    ).run();
   }
 
   let payloadRefreshed = false;
@@ -224,7 +246,7 @@ async function findPaddleProviderByEnvironment(
   return c.env.DB.prepare(
     `SELECT provider.id, provider.instance_id, provider.provider, provider.environment,
             provider.client_side_token, provider.webhook_secret_ciphertext,
-            provider.api_secret_ciphertext, provider.status,
+            provider.webhook_secret_version, provider.api_secret_ciphertext, provider.status,
             provider.created_at, provider.updated_at
      FROM billing_providers AS provider
      JOIN instances AS instance ON instance.id = provider.instance_id

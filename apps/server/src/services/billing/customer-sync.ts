@@ -47,7 +47,8 @@ export async function getBillingProvider(
 ): Promise<BillingProviderRecord | null> {
   const row = await db.prepare(
     `SELECT id, instance_id, provider, environment, client_side_token,
-            webhook_secret_ciphertext, api_secret_ciphertext, status, created_at, updated_at
+            webhook_secret_ciphertext, webhook_secret_version,
+            api_secret_ciphertext, status, created_at, updated_at
      FROM billing_providers
      WHERE instance_id = ?1 AND id = ?2
      LIMIT 1`,
