@@ -120,7 +120,6 @@ describe("unified Client API contract", () => {
 
     const result = await apiValidate({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -133,7 +132,6 @@ describe("unified Client API contract", () => {
     });
 
     expect(body).toEqual({
-      instance_id: "ins_1",
       product_id: "prd_1",
       fingerprint: "device-fingerprint",
       release_version: "2.4.0",
@@ -169,7 +167,6 @@ describe("unified Client API contract", () => {
 
     const context = {
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -224,7 +221,6 @@ describe("unified Client API contract", () => {
     }), { status: 200, headers: { "content-type": "application/json" } })));
     const params = {
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -262,7 +258,6 @@ describe("unified Client API contract", () => {
     })));
     await expect(apiValidate({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -286,7 +281,6 @@ describe("unified Client API contract", () => {
     }), { status: 200, headers: { "content-type": "application/json" } })));
     await expect(apiValidate({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -344,7 +338,6 @@ describe("unified Client API contract", () => {
     })));
     await expect(apiActivate({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       licenseKey: "LK-SECRET-VALUE-123",
       fingerprint: "device-fingerprint",
@@ -358,7 +351,6 @@ describe("unified Client API contract", () => {
     });
     await expect(apiDeactivate({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       activationId: "act_1",
       machineToken: "mtk_secret_value_123",
@@ -392,7 +384,6 @@ describe("signed credential verification", () => {
       meta: { request_id: "req_signed" },
     };
     const context = {
-      instanceId: "ins_1",
       productId: "prd_1",
       activationId: "act_1",
       fingerprint: "device-fingerprint",
@@ -433,7 +424,6 @@ describe("signed credential verification", () => {
       update,
       { key_v1: signed.publicKey },
       {
-        instanceId: "ins_1",
         productId: "prd_1",
         activationId: "act_1",
         fingerprint: "device-fingerprint",
@@ -452,14 +442,13 @@ describe("signed credential verification", () => {
     const current = await signedToken();
     const verified = await verifySignedLicenseToken(current.token, current.publicKey);
     expect(evaluateSignedLicenseClaims(verified.claims, {
-      instanceId: "ins_other",
-      productId: "prd_1",
+      productId: "prd_other",
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
       releasePlatform: "macos-universal",
       nowSeconds: current.claims.iat,
-    })).toMatchObject({ valid: false, code: "TOKEN_INSTANCE_MISMATCH" });
+    })).toMatchObject({ valid: false, code: "TOKEN_PRODUCT_MISMATCH" });
   });
 
   it("keeps License and update entitlement bounds independent from the online window", async () => {
@@ -471,7 +460,6 @@ describe("signed credential verification", () => {
     const updateEnded = await signedToken({ rat: 2_000, upd: 1_999, lexp: null });
     const updateClaims = (await verifySignedLicenseToken(updateEnded.token, updateEnded.publicKey)).claims;
     expect(evaluateSignedLicenseClaims(updateClaims, {
-      instanceId: "ins_1",
       productId: "prd_1",
       activationId: "act_1",
       fingerprint: "device-fingerprint",
@@ -502,7 +490,6 @@ describe("local credential state and periodic verification", () => {
     const state = activeState();
     saveStoredLicense({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       releaseVersion: "2.4.0",
       releasePlatform: "macos-universal",
@@ -524,7 +511,6 @@ describe("local credential state and periodic verification", () => {
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(getLicenseFilePath(), JSON.stringify({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       releaseVersion: "2.4.0",
       releasePlatform: "macos-universal",
@@ -550,7 +536,6 @@ describe("local credential state and periodic verification", () => {
     const oldValidation = new Date(Date.now() - 3601 * 1000).toISOString();
     saveStoredLicense({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       releaseVersion: "2.4.0",
       releasePlatform: "macos-universal",
@@ -601,7 +586,6 @@ describe("local credential state and periodic verification", () => {
     };
     saveStoredLicense({
       serverUrl: "https://license.example.com",
-      instanceId: "ins_1",
       productId: "prd_1",
       releaseVersion: "2.4.0",
       releasePlatform: "macos-universal",

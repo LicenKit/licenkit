@@ -19,7 +19,6 @@ cli
 cli
   .command("activate <key>", "Activate a license key and bind current device seat")
   .option("-s, --server <url>", "LicenKit API server URL (default: http://localhost:8787)")
-  .option("-i, --instance <instanceId>", "LicenKit Instance ID")
   .option("-p, --product <productId>", "LicenKit Product ID")
   .option("-r, --release <version>", "Immutable Product Release version")
   .option("--release-platform <platform>", "Immutable Product Release artifact platform")

@@ -18,22 +18,18 @@ SDK 不决定商业权益，不自行延长 License，也不会把网络失败�
 ```swift
 let configuration = LicenKitConfiguration(
     serverURL: URL(string: "https://license.example.com")!,
-    instanceID: "3Jd9K_aP0qUwbL6F7sTn2Q",
     productID: "prd_01...",
-    releaseVersion: "2.4.0",
-    releasePlatform: "macos-universal",
-    trustedSigningKeys: [
-        "key_01...": "base64-encoded-ed25519-public-key"
-    ]
+    signingPublicKey: "base64-encoded-ed25519-public-key"
 )
 
 LicenKit.configure(with: configuration)
 ```
 
-- `instanceID` 是 Instance 的稳定内部 ID，HTTP 字段为 `instance_id`，Signed License Token Claim 为 `ins`；旧 `accountID`、`account_id` 和 `acc` 不作为别名接受。
-- `releaseVersion` 与 `releasePlatform` 是当前 App 构建身份。服务端据此查询受信 Product Release；客户端不提交 `released_at`。
-- `opaque` 模式可以把 `trustedSigningKeys` 留空。
-- `signed` 模式必须随 App 的受信发布链内置服务端 `signing_key_id` 对应的 Ed25519 公钥。运行时从同一个授权服务下载的公钥不能自动成为信任根。
+- `productID` 来自 Admin 产品页；它全局唯一，Server 据此解析所属 Instance。
+- SDK 从宿主 App 的 `CFBundleShortVersionString` 读取 Release 版本，并从主可执行文件推导 `macos-arm64`、`macos-x86_64` 或 `macos-universal`。
+- `opaque` 模式可以省略 `signingPublicKey`。
+- `signed` 模式必须内置 Admin 产品页交付的 Ed25519 公钥。运行时从授权服务下载的公钥不能自动成为信任根。
+- 请求超时固定为 SDK 内部 15 秒；Keychain 使用当前 App 私有命名空间，不需要 Helper、多 Target 或 Access Group 配置。
 
 ## 3. 最小调用路径
 

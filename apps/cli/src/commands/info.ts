@@ -16,7 +16,7 @@ export async function infoCommand(): Promise<void> {
   }
   console.log(pc.bold(pc.cyan("Local authorization")));
   console.log("  " + pc.gray("Activation ID:") + " " + stored.activationId);
-  console.log("  " + pc.gray("Instance / Product:") + " " + stored.instanceId + " / " + stored.productId);
+  console.log("  " + pc.gray("Product:") + " " + stored.productId);
   console.log("  " + pc.gray("Credential mode:") + " " + stored.credentialMode);
   console.log("  " + pc.gray("Release:") + " " + stored.releaseVersion + " (" + stored.releasePlatform + ")");
   for (const line of describeEntitlementState(stored.lastEntitlementState)) console.log("  " + line);

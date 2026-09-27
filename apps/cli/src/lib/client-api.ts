@@ -589,7 +589,6 @@ export async function requestClientApi<T>(
 
 export interface ClientContext {
   serverUrl: string;
-  instanceId: string;
   productId: string;
   fingerprint: string;
   devicePlatform: string;
@@ -606,7 +605,6 @@ export async function apiActivate(params: ActivateParams): Promise<ActivationRes
   return requestClientApi(params.serverUrl, "/api/v1/client/activate", {
     method: "POST",
     body: JSON.stringify({
-      instance_id: params.instanceId,
       product_id: params.productId,
       license_key: params.licenseKey,
       fingerprint: params.fingerprint,
@@ -631,7 +629,6 @@ export async function apiValidate(params: ValidateParams): Promise<ValidateRespo
   return requestClientApi(params.serverUrl, "/api/v1/client/validate", {
     method: "POST",
     body: JSON.stringify({
-      instance_id: params.instanceId,
       product_id: params.productId,
       fingerprint: params.fingerprint,
       release_version: params.releaseVersion,
@@ -643,7 +640,6 @@ export async function apiValidate(params: ValidateParams): Promise<ValidateRespo
 
 export interface DeactivateParams {
   serverUrl: string;
-  instanceId: string;
   productId: string;
   activationId: string;
   machineToken: string;
@@ -660,7 +656,6 @@ export async function apiDeactivate(params: DeactivateParams): Promise<Deactivat
   return requestClientApi(params.serverUrl, "/api/v1/client/deactivate", {
     method: "POST",
     body: JSON.stringify({
-      instance_id: params.instanceId,
       product_id: params.productId,
       activation_id: params.activationId,
       machine_token: params.machineToken,

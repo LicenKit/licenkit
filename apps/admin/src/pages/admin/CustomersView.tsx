@@ -179,7 +179,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
               />
             </div>
             <Button variant="secondary" type="submit">
-              <Search className="size-4" />{t.common.actions}
+              <Search className="size-4" />{t.common.search}
             </Button>
           </form>
 

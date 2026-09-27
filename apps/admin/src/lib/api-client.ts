@@ -233,9 +233,16 @@ export interface InstanceInvitation {
 }
 export interface AdminSession { user: User; instance: Instance; membership: InstanceMembership; expiresAt?: IsoDateTime }
 export interface TrialConfiguration { enabled: boolean; durationSeconds?: number; features: string[] }
+export interface ProductSigningKey {
+  id: Identifier;
+  algorithm: "Ed25519";
+  publicKey: string;
+  status: "active" | "retired" | "revoked";
+}
 export interface Product {
   id: Identifier; name: string; description?: string | null; status: "active" | "archived";
-  billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration; createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
+  billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration; signingKey?: ProductSigningKey | null;
+  createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
 }
 export interface ProductRelease {
   id: Identifier; productId: Identifier; version: string; platform: string; description?: string | null; downloadUrl?: string | null;

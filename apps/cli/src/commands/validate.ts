@@ -18,7 +18,6 @@ export async function validateCommand(): Promise<void> {
     const fingerprint = await getMachineFingerprint();
     const response = await apiValidate({
       serverUrl: stored.serverUrl,
-      instanceId: stored.instanceId,
       productId: stored.productId,
       fingerprint,
       releaseVersion: stored.releaseVersion,
@@ -62,7 +61,6 @@ export async function validateCommand(): Promise<void> {
             response.credential_update,
             stored.trustedSigningKeys ?? {},
             {
-              instanceId: stored.instanceId,
               productId: stored.productId,
               activationId: stored.activationId,
               fingerprint,

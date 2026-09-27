@@ -84,7 +84,7 @@ const UpdateReleaseSchema = z.object({
 }).strict().refine((value) => Object.keys(value).length > 0, "at least one mutable field is required")
   .transform((value) => ({ description: value.description, downloadUrl: value.download_url }));
 
-function formatProduct(product: any) {
+function formatProduct(product: any, signingKey?: any | null) {
   return {
     id: product.id,
     instance_id: product.instanceId,
@@ -98,6 +98,12 @@ function formatProduct(product: any) {
       duration_seconds: product.trialDurationSeconds,
       features: parseFeatures(product.trialFeaturesJson),
     },
+    signing_key: signingKey?.id ? {
+      id: signingKey.id,
+      algorithm: signingKey.algorithm,
+      public_key: signingKey.publicKey,
+      status: signingKey.status,
+    } : null,
     created_at: product.createdAt,
     updated_at: product.updatedAt,
   };
@@ -126,12 +132,48 @@ async function requireProduct(db: any, instanceId: string, productId: string) {
   return product;
 }
 
+async function requireProductWithActiveSigningKey(db: any, instanceId: string, productId: string) {
+  const row = await db.select({
+    product: products,
+    signingKey: {
+      id: signingKeys.id,
+      algorithm: signingKeys.algorithm,
+      publicKey: signingKeys.publicKey,
+      status: signingKeys.status,
+    },
+  }).from(products).leftJoin(signingKeys, and(
+    eq(signingKeys.instanceId, products.instanceId),
+    eq(signingKeys.productId, products.id),
+    eq(signingKeys.status, "active"),
+  )).where(and(
+    eq(products.instanceId, instanceId),
+    eq(products.id, productId),
+  )).get();
+  if (!row) throw new NotFoundError("Product not found");
+  return row;
+}
+
 adminProductsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
   const db = getTenantDB(c);
-  const items = await db.select().from(products)
+  const items = await db.select({
+    product: products,
+    signingKey: {
+      id: signingKeys.id,
+      algorithm: signingKeys.algorithm,
+      publicKey: signingKeys.publicKey,
+      status: signingKeys.status,
+    },
+  }).from(products).leftJoin(signingKeys, and(
+    eq(signingKeys.instanceId, products.instanceId),
+    eq(signingKeys.productId, products.id),
+    eq(signingKeys.status, "active"),
+  ))
     .where(eq(products.instanceId, c.get("instanceId")!))
     .orderBy(desc(products.createdAt)).all();
-  return c.json({ success: true, data: { items: items.map(formatProduct) } });
+  return c.json({
+    success: true,
+    data: { items: items.map((item: any) => formatProduct(item.product, item.signingKey)) },
+  });
 });
 
 adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
@@ -188,7 +230,12 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     success: true,
     data: {
       ...formatProduct(created),
-      signing_key: { id: signingKeyId, public_key: keyPair.publicKeyBase64, status: "active" },
+      signing_key: {
+        id: signingKeyId,
+        algorithm: "Ed25519",
+        public_key: keyPair.publicKeyBase64,
+        status: "active",
+      },
     },
   }, 201);
 });
@@ -361,8 +408,10 @@ adminProductsRouter.post("/:productId/trials/:trialId/revoke", requireRole(["own
 });
 
 adminProductsRouter.get("/:productId", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
-  const product = await requireProduct(getTenantDB(c), c.get("instanceId")!, c.req.param("productId"));
-  return c.json({ success: true, data: formatProduct(product) });
+  const row = await requireProductWithActiveSigningKey(
+    getTenantDB(c), c.get("instanceId")!, c.req.param("productId"),
+  );
+  return c.json({ success: true, data: formatProduct(row.product, row.signingKey) });
 });
 
 adminProductsRouter.patch("/:productId", requireRole(["owner", "admin"]), async (c) => {
@@ -409,7 +458,8 @@ adminProductsRouter.patch("/:productId", requireRole(["owner", "admin"]), async 
     c, action: "product.update", resourceType: "product", resourceId: productId,
     details: { updatedFields: Object.keys(input) },
   });
-  return c.json({ success: true, data: formatProduct(await requireProduct(db, instanceId, productId)) });
+  const updated = await requireProductWithActiveSigningKey(db, instanceId, productId);
+  return c.json({ success: true, data: formatProduct(updated.product, updated.signingKey) });
 });
 
 adminProductsRouter.post("/:productId/archive", requireRole(["owner", "admin"]), async (c) => {

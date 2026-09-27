@@ -11,7 +11,6 @@ import {
 
 export interface StoredLicenseData {
   serverUrl: string;
-  instanceId: string;
   productId: string;
   releaseVersion: string;
   releasePlatform: string;
@@ -54,7 +53,6 @@ function normalizeStoredLicenseData(value: unknown): StoredLicenseData | null {
   const candidate = value as Partial<StoredLicenseData>;
   const baseIsValid = (
     typeof candidate.serverUrl === "string" &&
-    typeof candidate.instanceId === "string" &&
     typeof candidate.productId === "string" &&
     typeof candidate.releaseVersion === "string" &&
     typeof candidate.releasePlatform === "string" &&

@@ -159,10 +159,13 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
-              <Button type="submit" variant="secondary" aria-label={t.common.actions}>
-                <Search className="size-4" />
-              </Button>
             </div>
+            <Button variant="secondary" type="submit">
+              <Search className="size-4" />{t.common.search}
+            </Button>
+          </form>
+
+          <div className="filter-group">
             <Select
               className="filter-select"
               aria-label={t.email.filterAllStatuses}
@@ -175,7 +178,7 @@ export function EmailDeliveriesView({ canManage }: { canManage: boolean }) {
                 </option>
               ))}
             </Select>
-          </form>
+          </div>
           <Badge>{t.email.totalDeliveriesCount(totalItems)}</Badge>
         </div>
 

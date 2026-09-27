@@ -225,7 +225,7 @@ Cron 每分钟触发恢复流程：
 
 ## 9. 客户端激活与验证
 
-客户端配置使用 `instance_id`、Product ID、Server URL、当前构建的 Release 版本与平台，以及可选的内置签名公钥：
+客户端公共配置只使用 Server URL、全局唯一 Product ID，以及 `signed` 模式需要的内置签名公钥。Swift SDK 从宿主 App Bundle 自动读取当前构建的 Release 版本与平台；Server 从 Product ID 解析 Instance：
 
 1. 首次启动或没有本地凭据时，以 `credential.kind=none` 调用统一校验接口；服务端先确认 Release，再返回需要激活以及 Trial 可用性；
 2. 用户提交 Registration Key 后，服务端在 Instance 内查找 License，检查业务状态、包含支付宽限期的最终有效期和席位，并原子创建或复用 Activation；

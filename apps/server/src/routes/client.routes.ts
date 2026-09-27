@@ -4,6 +4,7 @@ import type { AppContext } from "../types";
 import { activateLicense, deactivateActivation } from "../services/license/activation";
 import { validateClient } from "../services/license/client-validation";
 import { claimTrial } from "../services/license/trial";
+import { NotFoundError } from "../middleware/error";
 
 export const clientRouter = new Hono<AppContext>();
 
@@ -13,7 +14,6 @@ const ReleaseFields = {
 };
 
 const ActivateSchema = z.object({
-  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   license_key: z.string().min(16).max(200),
   fingerprint: z.string().trim().min(8).max(512),
@@ -24,10 +24,11 @@ const ActivateSchema = z.object({
 
 clientRouter.post("/activate", async (c) => {
   const input = ActivateSchema.parse(await c.req.json());
+  const instanceId = await resolveProductInstance(c.env.DB, input.product_id);
   const data = await activateLicense({
     db: c.env.DB,
     env: c.env,
-    instanceId: input.instance_id,
+    instanceId,
     productId: input.product_id,
     licenseKey: input.license_key,
     fingerprint: input.fingerprint,
@@ -61,7 +62,6 @@ const CredentialSchema = z.discriminatedUnion("kind", [
 ]);
 
 const ValidateSchema = z.object({
-  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   fingerprint: z.string().trim().min(8).max(512),
   ...ReleaseFields,
@@ -70,6 +70,7 @@ const ValidateSchema = z.object({
 
 clientRouter.post("/validate", async (c) => {
   const input = ValidateSchema.parse(await c.req.json());
+  const instanceId = await resolveProductInstance(c.env.DB, input.product_id);
   const credential = input.credential.kind === "license"
     ? {
       kind: "license" as const,
@@ -86,7 +87,7 @@ clientRouter.post("/validate", async (c) => {
   const data = await validateClient({
     db: c.env.DB,
     env: c.env,
-    instanceId: input.instance_id,
+    instanceId,
     productId: input.product_id,
     fingerprint: input.fingerprint,
     releaseVersion: input.release_version,
@@ -101,7 +102,6 @@ clientRouter.post("/validate", async (c) => {
 });
 
 const TrialClaimSchema = z.object({
-  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   fingerprint: z.string().trim().min(8).max(512),
   device_platform: z.string().trim().min(1).max(100).optional(),
@@ -110,9 +110,10 @@ const TrialClaimSchema = z.object({
 
 clientRouter.post("/trials/claim", async (c) => {
   const input = TrialClaimSchema.parse(await c.req.json());
+  const instanceId = await resolveProductInstance(c.env.DB, input.product_id);
   const data = await claimTrial({
     db: c.env.DB,
-    instanceId: input.instance_id,
+    instanceId,
     productId: input.product_id,
     fingerprint: input.fingerprint,
     releaseVersion: input.release_version,
@@ -126,7 +127,6 @@ clientRouter.post("/trials/claim", async (c) => {
 });
 
 const DeactivateSchema = z.object({
-  instance_id: z.string().min(1),
   product_id: z.string().min(1),
   activation_id: z.string().min(1),
   machine_token: z.string().min(16),
@@ -135,9 +135,10 @@ const DeactivateSchema = z.object({
 
 clientRouter.post("/deactivate", async (c) => {
   const input = DeactivateSchema.parse(await c.req.json());
+  const instanceId = await resolveProductInstance(c.env.DB, input.product_id);
   const data = await deactivateActivation({
     db: c.env.DB,
-    instanceId: input.instance_id,
+    instanceId,
     productId: input.product_id,
     activationId: input.activation_id,
     machineToken: input.machine_token,
@@ -150,9 +151,9 @@ clientRouter.post("/deactivate", async (c) => {
 });
 
 clientRouter.get("/products/:productId/signing-keys", async (c) => {
-  const query = z.object({ instance_id: z.string().min(1) }).strict().parse(c.req.query());
-  const instanceId = query.instance_id;
+  z.object({}).strict().parse(c.req.query());
   const productId = c.req.param("productId");
+  const instanceId = await resolveProductInstance(c.env.DB, productId);
   const result = await c.env.DB.prepare(
     `SELECT k.id, k.algorithm, k.public_key, k.status, k.created_at, k.retired_at, k.revoked_at
      FROM signing_keys AS k
@@ -179,3 +180,12 @@ clientRouter.get("/products/:productId/signing-keys", async (c) => {
     revoked_at: key.revoked_at,
   })) } });
 });
+
+async function resolveProductInstance(db: D1Database, productId: string): Promise<string> {
+  const result = await db.prepare(
+    "SELECT instance_id FROM products WHERE id = ?1 LIMIT 1",
+  ).bind(productId).all<{ instance_id: string }>();
+  const product = result.results[0];
+  if (!product) throw new NotFoundError("Product not found");
+  return product.instance_id;
+}

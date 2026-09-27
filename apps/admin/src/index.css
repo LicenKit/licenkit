@@ -501,6 +501,10 @@ td select.input {
 .webhook-endpoint > div { display: flex; align-items: center; gap: .55rem; }
 .webhook-endpoint code { min-width: 0; flex: 1; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: 8px; background: rgba(8, 16, 29, .5); color: #bdc6ff; font-size: .75rem; overflow-wrap: anywhere; }
 .webhook-endpoint .button { flex: 0 0 auto; }
+.sdk-configuration { display: grid; gap: .45rem; }
+.sdk-configuration pre { margin: 0; padding: .85rem; border: 1px solid var(--line); border-radius: 8px; background: rgba(8, 16, 29, .5); overflow-x: auto; }
+.sdk-configuration code { color: #bdc6ff; font-size: .78rem; white-space: pre; }
+.sdk-configuration .button { justify-self: start; }
 .diagnostic-detail { display: flex; flex-direction: column; gap: 1rem; }
 .diagnostic-detail section > h3 { color: #cbd5e6; font-size: .78rem; }
 

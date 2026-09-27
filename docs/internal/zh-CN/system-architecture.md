@@ -88,7 +88,7 @@ Admin Invitation 页面属于 LicenKit；Customer Magic Link 页面属于使用�
 - 席位上限、激活、验证、停用和撤销；
 - 无需支付方式的设备 Trial Claim。
 
-Signed License Token 使用 `ins` Claim。CLI/SDK 按显式 `instanceId/instanceID` 验证，不接受旧 Claim。
+Signed License Token 使用 `ins` Claim 且不接受旧 `acc` Claim。CLI/SDK 不要求调用方配置 Instance，Server 通过全局唯一 Product ID 解析后签发 `ins`。
 
 ### M06 Billing 与 Webhook
 
@@ -167,7 +167,7 @@ Customer Session 不与 Admin Session 混用。
 
 ### 4.3 Client 请求
 
-客户端显式发送 `instance_id + product_id`。Registration Key、Machine Token 或 Trial Token 的查找和更新都同时包含 Instance；Signed License Token 本地校验 `ins`。
+客户端只显式发送全局唯一 `product_id`。Server 先据此解析 Instance，再让 Registration Key、Machine Token 或 Trial Token 的查找和更新继续使用完整 `instance_id + product_id` 数据库边界；Signed License Token 仍携带 `ins`，但客户端不再重复配置一份 Instance ID。
 
 ### 4.4 Webhook 请求
 
@@ -270,9 +270,9 @@ System Issue 是聚合视图，不覆盖业务对象的原始错误。管理员�
 ```text
 JSON / DB     instance_id
 TypeScript    instanceId
-Swift         instanceID
-Environment   LICENKIT_INSTANCE_ID
-CLI           --instance
+Client API    product_id -> Server resolves Instance
+Swift         productID
+CLI           --product
 Signed Claim  ins
 ```
 

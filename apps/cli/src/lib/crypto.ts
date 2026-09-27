@@ -202,7 +202,6 @@ export async function verifySignedLicenseToken(
 }
 
 export interface ClaimsContext {
-  instanceId: string;
   productId: string;
   activationId: string;
   fingerprint: string;
@@ -220,7 +219,6 @@ export interface ClaimsEvaluation {
 export function evaluateSignedLicenseClaims(claims: SignedLicenseClaims, context: ClaimsContext): ClaimsEvaluation {
   const now = context.nowSeconds ?? Math.floor(Date.now() / 1000);
   const comparisons: Array<[boolean, string, string]> = [
-    [claims.ins === context.instanceId, "TOKEN_INSTANCE_MISMATCH", "Token instance does not match configuration"],
     [claims.prd === context.productId, "TOKEN_PRODUCT_MISMATCH", "Token product does not match configuration"],
     [claims.act === context.activationId, "TOKEN_ACTIVATION_MISMATCH", "Token activation does not match server response"],
     [claims.fp.toLowerCase() === context.fingerprint.toLowerCase(), "TOKEN_FINGERPRINT_MISMATCH", "Token fingerprint does not match this device"],

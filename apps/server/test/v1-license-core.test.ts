@@ -510,7 +510,7 @@ describe("V1 License core contract", () => {
     expect(base64UrlToJson<any>(claimsPart)).not.toHaveProperty("acc");
   });
 
-  it("requires the Instance selector when reading Product signing keys", async () => {
+  it("resolves Product signing keys from the globally unique Product ID", async () => {
     const keyId = "key_v1_public";
     const keyPair = await generateEd25519KeyPair();
     const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {
@@ -532,23 +532,8 @@ describe("V1 License core contract", () => {
       "2026-09-01T00:00:00.000Z",
     );
     const app = clientApp();
-    const missing = await app.request(
-      `https://license.example.test/api/v1/client/products/${productId}/signing-keys`,
-      {},
-      testEnv.env,
-    );
-    expect(missing.status).toBe(400);
-
-    const wrongInstance = await app.request(
-      `https://license.example.test/api/v1/client/products/${productId}/signing-keys?instance_id=ins_other`,
-      {},
-      testEnv.env,
-    );
-    expect(wrongInstance.status).toBe(200);
-    expect(await wrongInstance.json()).toEqual({ success: true, data: { items: [] } });
-
     const selected = await app.request(
-      `https://license.example.test/api/v1/client/products/${productId}/signing-keys?instance_id=${instanceId}`,
+      `https://license.example.test/api/v1/client/products/${productId}/signing-keys`,
       {},
       testEnv.env,
     );
@@ -557,7 +542,7 @@ describe("V1 License core contract", () => {
       expect.objectContaining({ id: keyId, public_key: keyPair.publicKeyBase64, status: "active" }),
     ]);
     expect((await (await app.request(
-      `https://license.example.test/api/v1/client/products/${productId}/signing-keys?instanceId=${instanceId}`,
+      `https://license.example.test/api/v1/client/products/${productId}/signing-keys?instance_id=${instanceId}`,
       {},
       testEnv.env,
     )).json() as any).error.code).toBe("VALIDATION_ERROR");
@@ -804,7 +789,6 @@ describe("V1 License core contract", () => {
   it("uses one strict Client Validate request for no-credential Trial availability", async () => {
     const app = clientApp();
     const requestBody = {
-      instance_id: instanceId,
       product_id: productId,
       fingerprint: "sha256:none-device",
       release_version: "1.0.0",
@@ -865,7 +849,6 @@ describe("V1 License core contract", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        instance_id: instanceId,
         product_id: productId,
         fingerprint: "sha256:none-device",
         release_version: "1.0.0",
@@ -875,6 +858,13 @@ describe("V1 License core contract", () => {
       }),
     }, testEnv.env);
     expect(legacyRequest.status).toBe(400);
+
+    const legacyInstance = await app.request("https://license.example.test/api/v1/client/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...requestBody, instance_id: instanceId }),
+    }, testEnv.env);
+    expect(legacyInstance.status).toBe(400);
 
     await run(
       "UPDATE products SET trial_enabled = 0, trial_duration_seconds = NULL WHERE instance_id = ?1 AND id = ?2",
@@ -920,7 +910,6 @@ describe("V1 License core contract", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        instance_id: instanceId,
         product_id: productId,
         fingerprint,
         release_version: "1.0.0",
@@ -944,7 +933,6 @@ describe("V1 License core contract", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        instance_id: instanceId,
         product_id: productId,
         fingerprint,
         release_version: "1.0.0",
@@ -981,7 +969,6 @@ describe("V1 License core contract", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Request-Id": "req_activate_snapshot" },
       body: JSON.stringify({
-        instance_id: instanceId,
         product_id: productId,
         license_key: issued.license.licenseKey,
         fingerprint: "sha256:operation-license-device",
@@ -1007,7 +994,6 @@ describe("V1 License core contract", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Request-Id": "req_trial_snapshot" },
       body: JSON.stringify({
-        instance_id: instanceId,
         product_id: productId,
         fingerprint: "sha256:operation-trial-device",
         release_version: "1.0.0",
@@ -1031,7 +1017,6 @@ describe("V1 License core contract", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Request-Id": "req_deactivate" },
       body: JSON.stringify({
-        instance_id: instanceId,
         product_id: productId,
         activation_id: activatedBody.data.activation_id,
         machine_token: activatedBody.data.machine_token,
@@ -1062,7 +1047,6 @@ describe("V1 License core contract", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          instance_id: instanceId,
           product_id: productId,
           fingerprint,
           release_version: "1.0.0",
@@ -1158,7 +1142,6 @@ describe("V1 License core contract", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          instance_id: instanceId,
           product_id: productId,
           fingerprint,
           release_version: releaseVersion,

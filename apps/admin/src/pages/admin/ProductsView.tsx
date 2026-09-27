@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Archive, Box, CalendarPlus, FlaskConical, PackagePlus, Pencil, Plus, RefreshCw } from "lucide-react";
-import { api, type BillingEnvironment, type Product, type ProductRelease } from "../../lib/api-client";
-import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, Textarea } from "../../components/ui";
+import { Archive, Box, CalendarPlus, FlaskConical, KeyRound, PackagePlus, Pencil, Plus, RefreshCw } from "lucide-react";
+import { api, type BillingEnvironment, type Instance, type Product, type ProductRelease } from "../../lib/api-client";
+import { Badge, Button, Card, ConfirmModal, CopyValue, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, Textarea } from "../../components/ui";
 import { useI18n } from "../../lib/i18n";
 import { daysToSeconds, secondsToDays } from "../../lib/duration";
 
@@ -9,7 +9,7 @@ const emptyProduct = { name: "", description: "", billingEnvironment: "" as Bill
 const emptyProductEdit = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
 const emptyRelease = { version: "", platform: "", description: "", downloadUrl: "", artifactSha256: "", releasedAt: "" };
 
-export function ProductsView({ canWrite }: { canWrite: boolean }) {
+export function ProductsView({ canWrite, instance }: { canWrite: boolean; instance: Pick<Instance, "adminApiUrl"> }) {
   const { t, formatDate } = useI18n();
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -25,6 +25,11 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
   const [releaseForm, setReleaseForm] = useState(emptyRelease);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const selected = products.find((product) => product.id === selectedId) ?? null;
+  const swiftConfiguration = selected?.signingKey ? `let configuration = LicenKitConfiguration(
+    serverURL: URL(string: "${instance.adminApiUrl}")!,
+    productID: "${selected.id}",
+    signingPublicKey: "${selected.signingKey.publicKey}"
+)` : "";
 
   async function loadProducts() {
     setLoading(true);
@@ -195,6 +200,34 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
                     ) : null}
                   </div>
                 ) : null}
+              </Card>
+
+              <Card>
+                <div className="card-header">
+                  <div>
+                    <p className="eyebrow">{t.products.signingEyebrow}</p>
+                    <h2><KeyRound className="size-4" />{t.products.signingTitle}</h2>
+                    <p>{t.products.signingDesc}</p>
+                  </div>
+                </div>
+                {selected.signingKey ? (
+                  <div className="form-stack">
+                    <div className="metric-grid compact">
+                      <div><span>{t.products.signingKeyIdLabel}</span><strong><code>{selected.signingKey.id}</code></strong></div>
+                      <div><span>{t.products.signingAlgorithmLabel}</span><strong>{selected.signingKey.algorithm}</strong></div>
+                      <div><span>{t.products.signingStatusLabel}</span><strong><StatusBadge status={selected.signingKey.status} /></strong></div>
+                    </div>
+                    <div className="webhook-endpoint">
+                      <span className="field-label">{t.products.signingPublicKeyLabel}</span>
+                      <div><code>{selected.signingKey.publicKey}</code><CopyValue value={selected.signingKey.publicKey} label={t.products.copyPublicKey} /></div>
+                    </div>
+                    <div className="sdk-configuration">
+                      <span className="field-label">{t.products.swiftConfigLabel}</span>
+                      <pre><code>{swiftConfiguration}</code></pre>
+                      <CopyValue value={swiftConfiguration} label={t.products.copySwiftConfig} />
+                    </div>
+                  </div>
+                ) : <Notice>{t.products.signingKeyMissing}</Notice>}
               </Card>
 
               <Card>

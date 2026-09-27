@@ -55,13 +55,7 @@ Customer Session 的 `last_seen_at` 是非关键遥测：仅最终 2xx best-effo
 
 ### 3.3 客户端与站点变量
 
-公开命名统一为：
-
-```text
-LICENKIT_INSTANCE_ID
-```
-
-JSON 使用 `instance_id`，TypeScript 使用 `instanceId`，Swift 使用 `instanceID`，CLI 使用 `--instance`，Signed License Token 使用 `ins`。
+服务端内部仍使用 `instance_id` / `instanceId` 作为租户隔离键，Signed License Token 仍使用 `ins` Claim。Client API、Swift SDK 与 CLI 不接受 Instance 选择字段；它们只提交全局唯一 Product ID，由 Server 解析 Instance。
 
 不配置或接受旧别名，也不允许 Customer 请求体自行选择 Instance。
 

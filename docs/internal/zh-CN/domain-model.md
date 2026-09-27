@@ -203,11 +203,9 @@ Instance Owner 只能读取当前 Instance 的审计，不能读取成员的全�
 
 | 边界 | 形式 | 示例 |
 | --- | --- | --- |
-| 数据库、JSON | `snake_case` | `instance_id` |
-| TypeScript | `camelCase` | `instanceId` |
-| Swift | Swift 惯例 | `instanceID` |
-| 环境变量 | 大写下划线 | `LICENKIT_INSTANCE_ID` |
-| CLI | 长选项 | `--instance` |
+| 服务端数据库、内部 JSON | `snake_case` | `instance_id` |
+| 服务端 TypeScript | `camelCase` | `instanceId` |
+| Client API / Swift / CLI | 全局 Product 解析 | `product_id` / `productID` / `--product` |
 | Signed Token | 短 Claim | `ins` |
 | Customer 路由 | 固定路径 | `/customer/auth` |
 

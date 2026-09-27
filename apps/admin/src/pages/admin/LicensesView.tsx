@@ -335,7 +335,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
               />
             </div>
             <Button variant="secondary" type="submit">
-              <Search className="size-4" />{t.common.actions}
+              <Search className="size-4" />{t.common.search}
             </Button>
           </form>
 

@@ -47,21 +47,20 @@ API 错误不得丢弃上游来源。支付和邮件投递错误在管理接口�
 
 ### 2.1 Instance 标识合同
 
-Instance 只有一个稳定 ID。首次 Setup 使用 128 位安全随机数生成 22 位 Base64URL 字符串，不带类型前缀；它用于数据关联、客户端配置、签名 Token 与支付 Webhook 路由。数据库和对外 JSON 使用 `instance_id`，TypeScript 使用 `instanceId`，Swift SDK 使用 `instanceID`，环境变量使用 `LICENKIT_INSTANCE_ID`，CLI 使用 `--instance`，Signed License Token 使用 `ins` Claim。
+Instance 只有一个稳定 ID。首次 Setup 使用 128 位安全随机数生成 22 位 Base64URL 字符串，不带类型前缀；它用于服务端数据关联、签名 Token 与支付 Webhook 路由。数据库和服务端内部 JSON 使用 `instance_id`，TypeScript 使用 `instanceId`，Signed License Token 使用 `ins` Claim。Client API、Swift SDK 和 CLI 不再要求调用方重复提交 Instance；Server 通过全局唯一 Product ID 解析租户边界。
 
 系统不接受由浏览器提交的 Instance 选择字段。Admin/API Origin 唯一映射 Instance，Customer 请求再校验对应的 Customer Site Origin。Instance 不属于管理员登录凭据。
 
-CLI 激活显式使用 Instance ID，例如：
+CLI 激活只提交 Product 与构建身份，例如：
 
 ```bash
 licenkit activate LK-... \
-  --instance 3Jd9K_aP0qUwbL6F7sTn2Q \
   --product prd_01... \
   --release 2.4.0 \
   --release-platform macos-universal
 ```
 
-也可以用 `LICENKIT_INSTANCE_ID` 提供同一字段；没有旧环境变量或旧选项回退。
+CLI 不再接受 `--instance` 或 `LICENKIT_INSTANCE_ID`；服务端通过 Product ID 解析 Instance。
 
 ## 3. Initial Setup API
 
@@ -166,7 +165,7 @@ Members 与 Invitation 只允许 active Owner 管理。Owner 可以邀请邮箱�
 | --- | --- | --- | --- | --- |
 | 读取当前 Instance 非 Secret 数据 | 允许 | 允许 | 允许 | 允许 |
 | Invitation 与 Membership 管理 | 允许 | 拒绝 | 拒绝 | 拒绝 |
-| Product、Release、Trial Claim、签名密钥 | 允许 | 允许 | 拒绝 | 拒绝 |
+| Product、Release、Trial Claim 的写入与运维 | 允许 | 允许 | 拒绝 | 拒绝 |
 | License Plan、Billing Provider、Billing Customer 对账、Offer | 允许 | 允许 | 拒绝 | 拒绝 |
 | Email Integration、Binding 与人工重发 | 允许 | 允许 | 拒绝 | 拒绝 |
 | Activation 释放等低风险支持操作 | 允许 | 允许 | 允许 | 拒绝 |
@@ -208,7 +207,9 @@ Product 可以配置一组 V1 无需支付方式的设备试用规则：
 }
 ```
 
-Product 由服务端生成的 `id` 唯一标识，创建请求不接受第二套人工标识。`billing_environment` 可为 `sandbox|live|null`：`null` 表示普通支付事件不能签发正式 License；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。
+Product 由服务端生成的全局唯一 `id` 标识，创建请求不接受第二套人工标识。创建 Product 时 LicenKit 同时自动生成 Ed25519 密钥对：私钥加密后只保存在服务端，Admin 产品详情与 Product API 只返回 Key ID、算法、状态和公钥。管理员不上传、下载或查看私钥；应从 Admin 复制公钥并随 `signed` 模式 App 构建交付。
+
+`billing_environment` 可为 `sandbox|live|null`：`null` 表示普通支付事件不能签发正式 License；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。
 
 `payment_grace_seconds` 是非负整数，Product 创建默认 `0`。创建订阅 License Plan 时省略该字段会固化 Product 当时的值；非订阅 Plan 固定为 `0`。支付型订阅 License 再从 Plan 固化该值，Product 后续修改不追溯已有 Plan 或 License，Plan 后续修改也不追溯已签发 License。启用试用时 `duration_seconds` 必须显式提供正整数；V1 不使用隐式全局试用天数。修改 Product 的试用时长或功能只影响之后领取的 Trial Claim。
 
@@ -747,7 +748,6 @@ POST /api/v1/client/activate
 
 ```json
 {
-  "instance_id": "3Jd9K_aP0qUwbL6F7sTn2Q",
   "product_id": "prd_01...",
   "license_key": "LK-...",
   "fingerprint": "sha256:...",
@@ -822,11 +822,10 @@ POST /api/v1/client/activate
 POST /api/v1/client/validate
 ```
 
-请求固定携带 Instance、Product、设备指纹和当前构建的 Release 身份；`credential.kind` 决定本次校验哪种凭据：
+请求固定携带 Product、设备指纹和当前构建的 Release 身份；Server 通过全局唯一 Product ID 解析 Instance。`credential.kind` 决定本次校验哪种凭据：
 
 ```json
 {
-  "instance_id": "3Jd9K_aP0qUwbL6F7sTn2Q",
   "product_id": "prd_01...",
   "fingerprint": "sha256:...",
   "release_version": "2.4.0",
@@ -916,7 +915,6 @@ POST /api/v1/client/trials/claim
 
 ```json
 {
-  "instance_id": "3Jd9K_aP0qUwbL6F7sTn2Q",
   "product_id": "prd_01...",
   "fingerprint": "sha256:...",
   "device_platform": "macos-arm64",
@@ -965,12 +963,12 @@ Paddle 免费订阅试用不调用这两个接口。它在已验签支付事件�
 POST /api/v1/client/deactivate
 ```
 
-请求携带 `instance_id`、`product_id`、`activation_id`、`machine_token` 和 `fingerprint`。服务端成功后 Activation 进入 `deactivated` 并返回 `meta.request_id`。网络失败时 SDK 不能假装远端已经释放席位，也不能清除仍可用于重试的本地 Machine Token。若本地原本没有 License 凭据，SDK 可以返回 `wasDeactivated=false` 的本地结果，但这不是一次服务端确认。
+请求携带 `product_id`、`activation_id`、`machine_token` 和 `fingerprint`；Server 通过 Product ID 解析 Instance。服务端成功后 Activation 进入 `deactivated` 并返回 `meta.request_id`。网络失败时 SDK 不能假装远端已经释放席位，也不能清除仍可用于重试的本地 Machine Token。若本地原本没有 License 凭据，SDK 可以返回 `wasDeactivated=false` 的本地结果，但这不是一次服务端确认。
 
 ### 7.6 公钥集合
 
 ```text
-GET /api/v1/client/products/:productId/signing-keys?instance_id=3Jd9K_aP0qUwbL6F7sTn2Q
+GET /api/v1/client/products/:productId/signing-keys
 ```
 
 该接口用于诊断和密钥轮换信息发布，不能替代 App 内置的信任根。响应包含 key ID、状态和公钥，不包含私钥。

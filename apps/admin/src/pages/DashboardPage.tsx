@@ -226,7 +226,7 @@ export function DashboardPage({
           />
           <ErrorBoundary key={section} fallbackTitle={t.topbar.viewLoadFailed(current.label)}>
             {section === "overview" ? <OverviewView /> : null}
-            {section === "products" ? <ProductsView canWrite={canWrite} /> : null}
+            {section === "products" ? <ProductsView canWrite={canWrite} instance={instance} /> : null}
             {section === "license-plans" ? <LicensePlansView canWrite={canWrite} /> : null}
             {section === "licenses" ? (
               <LicensesView canManage={canWrite} canSupport={membership.role !== "viewer"} />

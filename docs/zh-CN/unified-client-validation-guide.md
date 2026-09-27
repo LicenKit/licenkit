@@ -70,13 +70,12 @@ https://github.com/LicenKit/licenkit-sdk-swift.git
 
 在写宿主代码前，先确认 Server 已存在以下数据：
 
-- 当前部署的 Instance ID；
 - App 对应的 Product ID；
 - 当前构建对应的 Product Release，包括精确的版本和工件平台；
-- 若使用 `signed` 凭据，随 App 受信发布链交付的 Ed25519 公钥和 key ID；
+- 若使用 `signed` 凭据，Admin 产品页交付的 Ed25519 公钥；
 - 若提供设备 Trial，Product 已启用 Trial 并配置时长与功能列表。
 
-`releaseVersion` 和 `releasePlatform` 是构建身份，不是用户偏好设置。发布流程应把它们固化到构建中，并与 Server 上登记的 Release 完全一致。
+Release 版本和平台是构建身份，不是用户偏好设置。SDK 从宿主 App Bundle 的 `CFBundleShortVersionString` 和主可执行文件架构读取它们；发布流程仍须保证这些值与 Server 上登记的 Release 完全一致。
 
 配置示例：
 
@@ -86,19 +85,14 @@ import LicenKit
 
 let configuration = LicenKitConfiguration(
     serverURL: URL(string: "https://license.example.com")!,
-    instanceID: "3Jd9K_aP0qUwbL6F7sTn2Q",
     productID: "prd_01...",
-    releaseVersion: "2.4.0",
-    releasePlatform: "macos-universal",
-    trustedSigningKeys: [
-        "key_01...": "<Ed25519 public key>"
-    ]
+    signingPublicKey: "<Ed25519 public key>"
 )
 
 LicenKit.configure(with: configuration)
 ```
 
-`opaque` 产品可以传空的 `trustedSigningKeys`。`signed` 产品必须内置与 Server 返回 `signing_key_id` 对应的公钥；运行时从同一个授权服务下载的公钥不能自动成为信任根。
+`opaque` 产品可以省略 `signingPublicKey`。`signed` 产品必须内置 Admin 交付的公钥；SDK 仍检查 Server 返回的 `signing_key_id` 与 Token Header 的 `kid` 一致。运行时从同一个授权服务下载的公钥不能自动成为信任根。
 
 ### `signed_token_ttl_seconds` 如何变成 Token 到期时间
 
@@ -361,7 +355,6 @@ CLI 使用与 SDK 相同的 Client API 业务状态和错误合同，适合开�
 ```bash
 licenkit activate LK-... \
   --server https://license.example.com \
-  --instance 3Jd9K_aP0qUwbL6F7sTn2Q \
   --product prd_01... \
   --release 2.4.0 \
   --release-platform macos-universal
@@ -400,7 +393,7 @@ CLI 不是宿主 App 的授权运行时。App 不应通过启动子进程调用 
 - [ ] Trial 只在用户明确操作时领取；
 - [ ] 激活或开始 Trial 成功后不追加 `validate()`；
 - [ ] 解绑失败时不清除本地凭据；
-- [ ] 将 `accountID/account_id/acc` 全部迁移为 `instanceID/instance_id/ins`；
+- [ ] 删除客户端配置、请求和 CLI 中的 `instanceID/instance_id/--instance`；确认只使用全局唯一 Product ID；
 - [ ] 测试 Release 未登记、更新权益不足、永久 License 周期校验等分支；
 - [ ] 从依赖解析结果确认使用的是包含统一合同的 SDK 版本。
 
@@ -410,7 +403,7 @@ Server 的旧 `POST /api/v1/client/trials/validate` 已由统一 `POST /api/v1/c
 
 ### 启动后总是要求激活
 
-先检查配置中的 `instanceID`、`productID`、`releaseVersion` 和 `releasePlatform` 是否与 Server 完全一致，再查看是否发生 Keychain 读取错误。不要先清空 Keychain；清空可能破坏后续解绑或 Trial 恢复所需的凭据。
+先检查配置中的 `productID`，再确认宿主 App 的 `CFBundleShortVersionString` 和可执行文件架构与 Server 登记的 Release 完全一致，并查看是否发生 Keychain 读取错误。不要先清空 Keychain；清空可能破坏后续解绑或 Trial 恢复所需的凭据。
 
 ### `validate()` 没有产生网络请求
 

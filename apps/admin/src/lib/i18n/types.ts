@@ -4,6 +4,7 @@ export type LocalePreference = SupportedLocale;
 export interface CommonDictionary {
   loading: string;
   refresh: string;
+  search: string;
   save: string;
   saving: string;
   cancel: string;
@@ -269,6 +270,17 @@ export interface ProductsDictionary {
   detailEyebrow: string;
   noDescription: string;
   productIdLabel: string;
+  signingEyebrow: string;
+  signingTitle: string;
+  signingDesc: string;
+  signingKeyIdLabel: string;
+  signingAlgorithmLabel: string;
+  signingPublicKeyLabel: string;
+  signingStatusLabel: string;
+  copyPublicKey: string;
+  swiftConfigLabel: string;
+  copySwiftConfig: string;
+  signingKeyMissing: string;
   billingEnvLabel: string;
   billingEnvNone: string;
   trialLabel: string;

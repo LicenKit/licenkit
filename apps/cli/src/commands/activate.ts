@@ -9,7 +9,6 @@ import { saveStoredLicense } from "../lib/storage";
 
 export interface ActivateOptions {
   server?: string;
-  instance?: string;
   product?: string;
   release?: string;
   releasePlatform?: string;
@@ -30,7 +29,6 @@ function devicePlatform(): string {
 export async function activateCommand(licenseKey: string, options: ActivateOptions): Promise<void> {
   try {
     const serverUrl = options.server || process.env.LICENKIT_SERVER_URL || "http://localhost:8787";
-    const instanceId = required(options.instance || process.env.LICENKIT_INSTANCE_ID, "Instance ID");
     const productId = required(options.product || process.env.LICENKIT_PRODUCT_ID, "Product ID");
     const releaseVersion = required(options.release || process.env.LICENKIT_RELEASE_VERSION, "Release version");
     const releasePlatform = required(
@@ -44,7 +42,6 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     const trustedSigningKeys = parseTrustedSigningKeys(options.signingKey);
     const response = await apiActivate({
       serverUrl,
-      instanceId,
       productId,
       licenseKey: licenseKey.trim(),
       fingerprint,
@@ -55,7 +52,6 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     });
     try {
       await verifyActivationResponse(response, trustedSigningKeys, {
-        instanceId,
         productId,
         activationId: response.activation_id,
         fingerprint,
@@ -79,7 +75,6 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
 
     saveStoredLicense({
       serverUrl,
-      instanceId,
       productId,
       releaseVersion,
       releasePlatform,

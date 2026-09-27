@@ -399,7 +399,7 @@ describe("V1 admin authorization and audit visibility", () => {
     expect((await response.json() as any).error.code).toBe("VALIDATION_ERROR");
   });
 
-  it("creates a Product with the server-generated ID as its only identifier", async () => {
+  it("creates a Product and only delivers its server-generated signing public key", async () => {
     const response = await productsApp("owner").request("http://test/", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -413,6 +413,28 @@ describe("V1 admin authorization and audit visibility", () => {
     expect(body.data.id).toMatch(/^prd_[0-9a-z]+$/);
     expect(body.data.name).toBe("ID-only Product");
     expect(body.data).not.toHaveProperty("slug");
+    expect(body.data.signing_key).toMatchObject({
+      id: expect.stringMatching(/^key_[0-9a-z]+$/),
+      algorithm: "Ed25519",
+      public_key: expect.any(String),
+      status: "active",
+    });
+    expect(body.data.signing_key).not.toHaveProperty("private_key");
+    expect(body.data.signing_key).not.toHaveProperty("private_key_ciphertext");
+
+    const persisted = testEnv.sqliteDb.prepare(
+      `SELECT source, public_key, private_key_ciphertext
+       FROM signing_keys WHERE instance_id = ? AND product_id = ? AND status = 'active'`,
+    ).get("ins_authz", body.data.id) as any;
+    expect(persisted.source).toBe("generated");
+    expect(persisted.public_key).toBe(body.data.signing_key.public_key);
+    expect(persisted.private_key_ciphertext).not.toBe("");
+
+    const listResponse = await productsApp("owner").request("http://test/", {}, testEnv.env);
+    const listed = (await listResponse.json() as any).data.items.find(
+      (item: any) => item.id === body.data.id,
+    );
+    expect(listed.signing_key).toEqual(body.data.signing_key);
     expectNoCamelCaseKeys(body);
   });
 
