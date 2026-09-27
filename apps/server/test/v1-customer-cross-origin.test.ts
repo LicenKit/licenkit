@@ -47,7 +47,6 @@ describe("V1 Customer cross-Origin boundary", () => {
           },
           instance: {
             name: "Cross Origin",
-            slug: "cross-origin",
             customer_site_url: siteOrigin,
             admin_api_url: API_ORIGIN,
           },
@@ -226,7 +225,6 @@ describe("V1 Customer cross-Origin boundary", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          instance_slug: "cross-origin",
           email: "buyer@example.test",
           turnstile_token: "turnstile-token",
         }),

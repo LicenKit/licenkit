@@ -61,7 +61,6 @@ export interface AcceptedInvitationSession {
   instance: {
     id: string;
     name: string;
-    slug: string;
     customer_site_url: string;
     admin_api_url: string;
     status: string;
@@ -90,7 +89,6 @@ export interface InvitationAcceptanceResult {
 interface InstanceRow {
   id: string;
   name: string;
-  slug: string;
   site_url: string;
   admin_api_url: string;
   status: string;
@@ -143,7 +141,7 @@ function response(row: InvitationRow, nowIso?: string): InvitationResponse {
 async function readInstance(db: D1Database, instanceId: string): Promise<InstanceRow> {
   const result = await db
     .prepare(
-      `SELECT id, name, slug, site_url, admin_api_url, status
+      `SELECT id, name, site_url, admin_api_url, status
        FROM instances WHERE id = ?1 AND status = 'active' LIMIT 1`,
     )
     .bind(instanceId)
@@ -607,7 +605,7 @@ async function readAcceptanceCandidate(
               invitation.email AS invitation_email,
               invitation.role AS invitation_role,
               invitation.delivery_id,
-              instance.id, instance.name, instance.slug, instance.site_url,
+              instance.id, instance.name, instance.site_url,
               instance.admin_api_url, instance.status
        FROM instance_invitations AS invitation
        JOIN instances AS instance
@@ -878,7 +876,6 @@ export async function acceptInstanceInvitation(input: {
     instance: {
       id: candidate.id,
       name: candidate.name,
-      slug: candidate.slug,
       customer_site_url: candidate.site_url,
       admin_api_url: candidate.admin_api_url,
       status: candidate.status,

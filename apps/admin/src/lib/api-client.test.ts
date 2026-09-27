@@ -33,6 +33,60 @@ describe("Admin API JSON boundary", () => {
     });
   });
 
+  it("创建 Paddle 连接时只发送服务端创建契约允许的字段", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      data: { id: "bpr_test", provider: "paddle", environment: "sandbox", status: "active" },
+    }), {
+      status: 201,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.admin.billing.providers.create({
+      provider: "paddle",
+      environment: "sandbox",
+      clientSideToken: "test_client_token",
+      webhookSecret: "pdl_ntfset_test_secret",
+      apiKey: "pdl_sdbx_apikey_test",
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      provider: "paddle",
+      environment: "sandbox",
+      client_side_token: "test_client_token",
+      webhook_secret: "pdl_ntfset_test_secret",
+      api_key: "pdl_sdbx_apikey_test",
+    });
+  });
+
+  it("更新 Product 时只发送可编辑字段并保留 slug 不可变", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      data: { id: "prd_test", slug: "desktop-app", name: "Desktop Pro" },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.admin.products.update("prd_test", {
+      name: "Desktop Pro",
+      description: "Updated",
+      billingEnvironment: "live",
+      trial: { enabled: true, durationSeconds: 604_800, features: ["sync"] },
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: "Desktop Pro",
+      description: "Updated",
+      billing_environment: "live",
+      trial: { enabled: true, duration_seconds: 604_800, features: ["sync"] },
+    });
+  });
+
   it("递归转换数组对象并保持已有 snake_case 字段稳定", () => {
     expect(snakeize({ customerSiteUrl: "https://example.test", adminApiUrl: "https://license.example.test", setup_token: "secret", items: [{ productId: "prd_1" }] })).toEqual({
       customer_site_url: "https://example.test",

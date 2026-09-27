@@ -1,13 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, CircleDollarSign, FlaskConical, Plus, RefreshCw, ShieldQuestion } from "lucide-react";
-import { api, type BillingAdjustment, type BillingEnvironment, type BillingOffer, type BillingProvider, type BillingSubscription, type LicensePlan, type Product, type ProviderTestResult, type ReadinessReport } from "../../lib/api-client";
+import { api, type BillingAdjustment, type BillingEnvironment, type BillingOffer, type BillingProvider, type BillingSubscription, type Instance, type LicensePlan, type Product, type ProviderTestResult, type ReadinessReport } from "../../lib/api-client";
 import { openVerificationCheckout } from "../../lib/verification-checkout";
-import { Badge, Button, Card, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge } from "../../components/ui";
+import { Badge, Button, Card, CopyValue, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge } from "../../components/ui";
 import { useI18n } from "../../lib/i18n";
+import { buildPaddleWebhookUrl } from "../../lib/billing-webhook";
 
 type Tab = "providers" | "offers" | "subscriptions" | "adjustments";
 
-export function BillingView({ canManage }: { canManage: boolean }) {
+export function BillingView({ canManage, instance }: { canManage: boolean; instance: Pick<Instance, "id" | "adminApiUrl"> }) {
   const { t, formatDate } = useI18n();
   const [tab, setTab] = useState<Tab>("providers");
   const [providers, setProviders] = useState<BillingProvider[]>([]);
@@ -25,6 +26,7 @@ export function BillingView({ canManage }: { canManage: boolean }) {
   const [offerForm, setOfferForm] = useState({ billingProviderId: "", externalPriceId: "", productId: "", licensePlanId: "", purchaseType: "one_time" as "one_time" | "subscription" });
   const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
   const [verificationPending, setVerificationPending] = useState<{ offerId: string; expiresAt: string } | null>(null);
+  const webhookUrl = buildPaddleWebhookUrl(instance.adminApiUrl, instance.id, providerForm.environment);
 
   const [resolvingAdjustment, setResolvingAdjustment] = useState<BillingAdjustment | null>(null);
   const [adjustmentAction, setAdjustmentAction] = useState<"no_action" | "keep_suspended" | "reinstate" | "revoke" | "security_reset">("keep_suspended");
@@ -55,7 +57,7 @@ export function BillingView({ canManage }: { canManage: boolean }) {
   async function createProvider(event: FormEvent) {
     event.preventDefault(); setSaving(true); setError(null);
     try {
-      await api.admin.billing.providers.create({ provider: "paddle", environment: providerForm.environment, clientSideToken: providerForm.clientSideToken.trim(), webhookSecret: providerForm.webhookSecret, apiKey: providerForm.apiKey || undefined, status: "active" });
+      await api.admin.billing.providers.create({ provider: "paddle", environment: providerForm.environment, clientSideToken: providerForm.clientSideToken.trim(), webhookSecret: providerForm.webhookSecret, apiKey: providerForm.apiKey || undefined });
       setProviderModal(false); setProviderForm({ environment: "sandbox", clientSideToken: "", webhookSecret: "", apiKey: "" }); await load();
     } catch (caught) { setError(caught) } finally { setSaving(false) }
   }
@@ -173,7 +175,7 @@ export function BillingView({ canManage }: { canManage: boolean }) {
       {tab === "adjustments" ? <Card><div className="card-header"><div><p className="eyebrow">{t.billing.tabAdjustments}</p><h2>{t.billing.tabAdjustments}</h2><p>{t.billing.adjustmentsEmptyDesc}</p></div><Badge>{adjustments.length}</Badge></div>{adjustments.length === 0 ? <EmptyState title={t.billing.adjustmentsEmptyTitle} description={t.billing.adjustmentsEmptyDesc} /> : <div className="table-wrap"><table><thead><tr><th>{t.billing.tableColAdjExternalId}</th><th>{t.billing.tableColAdjGatewayStatus}</th><th>{t.billing.tableColAdjAmount}</th><th>{t.billing.tableColAdjSystemEffect}</th><th>{t.billing.tableColAdjReviewStatus}</th><th>{t.common.actions}</th></tr></thead><tbody>{adjustments.map((item) => <tr key={item.id}><td><strong>{item.externalAdjustmentId}</strong><small>{item.provider}</small></td><td>{item.action} · {item.type} · {item.status}</td><td>{item.amount || "—"} {item.currencyCode || ""}</td><td>{item.automaticEffect || t.billing.adjNoAutomaticEffect}<small>{item.licenseId || t.billing.adjUnlinkedLicense}</small></td><td><StatusBadge status={item.reviewStatus} /></td><td>{canManage && item.reviewStatus === "open" ? <Button variant="secondary" loading={saving} onClick={() => { setResolvingAdjustment(item); setAdjustmentAction("keep_suspended"); setAdjustmentReason(""); }}>{t.billing.modalResolveTitle}</Button> : null}</td></tr>)}</tbody></table></div>}</Card> : null}
 
       <Modal open={providerModal} onClose={() => setProviderModal(false)} title={t.billing.modalProviderTitle} description={t.billing.modalProviderDesc}>
-        <form className="form-stack" onSubmit={createProvider}><Field label={t.billing.fieldEnv}><Select value={providerForm.environment} onChange={(event) => setProviderForm({ ...providerForm, environment: event.target.value as BillingEnvironment })}><option value="sandbox">{t.billing.providerEnvSandbox}</option><option value="live">{t.billing.providerEnvLive}</option></Select></Field><Field label={t.billing.fieldClientToken} hint={t.billing.fieldClientTokenHint}><Input value={providerForm.clientSideToken} onChange={(event) => setProviderForm({ ...providerForm, clientSideToken: event.target.value })} autoComplete="off" required /></Field><Field label={t.billing.fieldWebhookSecret} hint={t.billing.fieldWebhookSecretHint}><Input type="password" value={providerForm.webhookSecret} onChange={(event) => setProviderForm({ ...providerForm, webhookSecret: event.target.value })} autoComplete="new-password" required /></Field><Field label={t.billing.fieldApiKey} hint={t.billing.fieldApiKeyHint}><Input type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} autoComplete="new-password" /></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setProviderModal(false)}>{t.common.cancel}</Button><Button type="submit" loading={saving}>{t.billing.btnCreateProvider}</Button></div></form>
+        <form className="form-stack" onSubmit={createProvider}><Field label={t.billing.fieldEnv}><Select value={providerForm.environment} onChange={(event) => setProviderForm({ ...providerForm, environment: event.target.value as BillingEnvironment })}><option value="sandbox">{t.billing.providerEnvSandbox}</option><option value="live">{t.billing.providerEnvLive}</option></Select></Field><Field label={t.billing.fieldClientToken} hint={t.billing.fieldClientTokenHint}><Input value={providerForm.clientSideToken} onChange={(event) => setProviderForm({ ...providerForm, clientSideToken: event.target.value })} autoComplete="off" required /></Field><Field label={t.billing.fieldWebhookSecret} hint={t.billing.fieldWebhookSecretHint}><Input type="password" value={providerForm.webhookSecret} onChange={(event) => setProviderForm({ ...providerForm, webhookSecret: event.target.value })} autoComplete="new-password" required /></Field><div className="webhook-endpoint"><span className="field-label">{t.billing.fieldWebhookUrl}</span><div><code>{webhookUrl}</code><CopyValue value={webhookUrl} /></div><span className="field-hint">{t.billing.fieldWebhookUrlHint}</span></div><Field label={t.billing.fieldApiKey} hint={t.billing.fieldApiKeyHint}><Input type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} autoComplete="new-password" /></Field><div className="form-actions"><Button variant="secondary" type="button" onClick={() => setProviderModal(false)}>{t.common.cancel}</Button><Button type="submit" loading={saving}>{t.billing.btnCreateProvider}</Button></div></form>
       </Modal>
 
       <Modal open={offerModal} onClose={() => setOfferModal(false)} title={t.billing.modalOfferTitle} description={t.billing.modalOfferDesc}>

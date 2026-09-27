@@ -16,7 +16,7 @@ LicenKit 只部署 API、Scheduled Worker 和 `/admin` 管理控制台，不提�
 LicenKit 根据 `customerSiteUrl` 生成以下 Magic Link：
 
 ```text
-{customerSiteUrl}/customer/{instance_slug}/auth#token={oneTimeToken}
+{customerSiteUrl}/customer/auth#token={oneTimeToken}
 ```
 
 因此使用方必须让这个路径落到自己的 Magic Link 消费页面。LicenKit 部署本身不会处理该页面路由。
@@ -27,8 +27,8 @@ LicenKit 根据 `customerSiteUrl` 生成以下 Magic Link：
 | --- | --- |
 | 产品与价格页 | 静态维护产品、方案、展示价格和 Paddle Price ID；直接使用 Paddle.js 打开 Checkout，不查询 LicenKit 产品或方案列表。 |
 | 购买结果页 | 只展示 Paddle Checkout 结果和后续提示；不能把浏览器回调当作付款或发证成功。 |
-| Magic Link 请求页 | 获取 Turnstile Sitekey，完成 Widget 后提交 Instance slug、邮箱和 Turnstile Token；无论邮箱是否存在都展示相同结果。 |
-| Magic Link 落地页 | 匹配 `/customer/:instance_slug/auth`；从 URL Fragment 读取一次性 Token，立即清理地址栏，并在用户明确操作后提交消费请求。 |
+| Magic Link 请求页 | 获取 Turnstile Sitekey，完成 Widget 后提交邮箱和 Turnstile Token；无论邮箱是否存在都展示相同结果。 |
+| Magic Link 落地页 | 匹配 `/customer/auth`；从 URL Fragment 读取一次性 Token，立即清理地址栏，并在用户明确操作后提交消费请求。 |
 | Customer Portal 首页 | 读取当前 Customer 和 License 列表；未认证时引导到 Magic Link 请求页。 |
 | License 详情页 | 展示 License 条款、Activation 和 Subscription；只显示服务端允许的动作。 |
 | 最近认证页面或状态 | 服务端返回 `CUSTOMER_RECENT_AUTH_REQUIRED` 时重新请求 Magic Link，不能用普通确认弹窗替代认证。 |
@@ -45,8 +45,8 @@ LicenKit 根据 `customerSiteUrl` 生成以下 Magic Link：
 | 方法与路径 | 请求/用途 | 鉴权要求 |
 | --- | --- | --- |
 | `GET /customer/auth/config` | 返回公开的 `turnstile_site_key`。 | 请求 Host 必须匹配 Instance 的 `admin_api_url`；跨 Origin 时精确匹配该 Instance 的 `customer_site_url` Origin；无 Session；`Cache-Control: no-store`。 |
-| `POST /customer/auth/magic-link` | `{ instance_slug, email, turnstile_token }`；请求发送 Magic Link。 | 同时匹配 Instance 的 Admin/API Origin、Customer Site Origin 和 slug；服务端验证 Turnstile。公开响应固定为 `accepted=true`，不能据此判断邮箱是否存在。 |
-| `POST /customer/auth/magic-link/consume` | `{ instance_slug, token }`；消费一次性 Token 并建立 Customer Session。 | 同时匹配 Instance 的 Admin/API Origin、Customer Site Origin 和 slug；成功后设置 Session、Instance、CSRF Cookie，并在响应中返回 `csrf_token`。 |
+| `POST /customer/auth/magic-link` | `{ email, turnstile_token }`；请求发送 Magic Link。 | 由 Admin/API Origin 唯一确定 Instance，并匹配 Customer Site Origin；服务端验证 Turnstile。公开响应固定为 `accepted=true`，不能据此判断邮箱是否存在。 |
+| `POST /customer/auth/magic-link/consume` | `{ token }`；消费一次性 Token 并建立 Customer Session。 | 由 Admin/API Origin 唯一确定 Instance，并匹配 Customer Site Origin；成功后设置 Session、Instance、CSRF Cookie，并在响应中返回 `csrf_token`。 |
 | `GET /customer/auth/csrf-token` | 页面刷新后取回当前 Session 已绑定的 CSRF Token。 | 跨 Origin 时精确匹配 Instance 的 Customer Site Origin，同 Origin 时校验请求 URL Origin；有效 Customer Session、CSRF Cookie 与 Session Hash 一致；`Cache-Control: no-store`。 |
 | `POST /customer/auth/logout` | 吊销当前 Customer Session 并清除 Cookie。 | Customer Session、精确匹配 Instance 的 Customer Site Origin、CSRF。 |
 

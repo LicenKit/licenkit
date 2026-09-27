@@ -150,8 +150,8 @@ describe("Instance, Membership, Profile and Invitation API", () => {
     testEnv = createTestEnv({ ENVIRONMENT: "test" });
     const ownerHash = await hashPassword(OWNER_PASSWORD);
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES (?, 'Membership Test', 'membership-test', ?, ?, 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Membership Test', ?, ?, 'active', ?, ?)`,
     ).run(INSTANCE_ID, CUSTOMER_SITE_URL, ORIGIN, NOW, NOW);
     testEnv.sqliteDb.prepare(
       `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
@@ -193,7 +193,6 @@ describe("Instance, Membership, Profile and Invitation API", () => {
     expect(instancePayload.data).toMatchObject({
       id: INSTANCE_ID,
       name: "Membership Test",
-      slug: "membership-test",
       customer_site_url: CUSTOMER_SITE_URL,
       admin_api_url: ORIGIN,
       status: "active",

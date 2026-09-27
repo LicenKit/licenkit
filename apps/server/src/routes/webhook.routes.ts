@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { ulid } from "ulid";
 import type { AppContext } from "../types";
 import { AppError, NotFoundError } from "../middleware/error";
@@ -28,32 +28,7 @@ function inboundPayloadTtlSeconds(value: string | undefined): number {
   return parsed;
 }
 
-/**
- * Paddle receipt boundary. This route verifies the raw request and durably
- * records one immutable Inbound Event. After that durable boundary it invokes
- * the same processor used by the Scheduled Worker; the HTTP response never
- * waits for fulfillment to finish.
- */
-webhookRouter.post("/payments/:instanceSlug/:billingProviderId", async (c) => {
-  const instanceSlug = c.req.param("instanceSlug");
-  const billingProviderId = c.req.param("billingProviderId");
-  const route = await c.env.DB.prepare(
-    `SELECT provider.id, provider.instance_id, provider.provider, provider.environment,
-            provider.client_side_token, provider.webhook_secret_ciphertext,
-            provider.api_secret_ciphertext, provider.status,
-            provider.created_at, provider.updated_at
-     FROM billing_providers AS provider
-     JOIN instances AS instance ON instance.id = provider.instance_id
-     WHERE instance.slug = ?1
-       AND instance.status = 'active'
-       AND provider.instance_id = instance.id
-       AND provider.id = ?2
-       AND provider.provider = 'paddle'
-       AND provider.status = 'active'
-     LIMIT 1`,
-  ).bind(instanceSlug, billingProviderId).first<BillingProviderRecord>();
-  if (!route) throw new NotFoundError("Paddle webhook destination was not found.");
-
+async function receivePaddleWebhook(c: Context<AppContext>, route: BillingProviderRecord) {
   const rawBody = await c.req.text();
   const signatureHeader = c.req.header("paddle-signature");
   if (!rawBody || !signatureHeader) {
@@ -61,7 +36,7 @@ webhookRouter.post("/payments/:instanceSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_SIGNATURE_OR_BODY_MISSING",
       "Paddle-Signature and a raw request body are required.",
       400,
-      { provider: "paddle", billing_provider_id: billingProviderId },
+      { provider: "paddle", billing_provider_id: route.id },
     );
   }
 
@@ -71,7 +46,7 @@ webhookRouter.post("/payments/:instanceSlug/:billingProviderId", async (c) => {
       "BILLING_WEBHOOK_SIGNATURE_INVALID",
       "Paddle webhook signature verification failed.",
       401,
-      { provider: "paddle", billing_provider_id: billingProviderId },
+      { provider: "paddle", billing_provider_id: route.id },
     );
   }
 
@@ -239,4 +214,42 @@ webhookRouter.post("/payments/:instanceSlug/:billingProviderId", async (c) => {
       payload_refreshed: payloadRefreshed,
     },
   }, 200);
+}
+
+async function findPaddleProviderByEnvironment(
+  c: Context<AppContext>,
+  instanceId: string,
+  environment: "sandbox" | "live",
+): Promise<BillingProviderRecord | null> {
+  return c.env.DB.prepare(
+    `SELECT provider.id, provider.instance_id, provider.provider, provider.environment,
+            provider.client_side_token, provider.webhook_secret_ciphertext,
+            provider.api_secret_ciphertext, provider.status,
+            provider.created_at, provider.updated_at
+     FROM billing_providers AS provider
+     JOIN instances AS instance ON instance.id = provider.instance_id
+     WHERE instance.id = ?1
+       AND instance.status = 'active'
+       AND provider.instance_id = instance.id
+       AND provider.provider = 'paddle'
+       AND provider.environment = ?2
+       AND provider.status = 'active'
+     LIMIT 1`,
+  ).bind(instanceId, environment).first<BillingProviderRecord>();
+}
+
+/**
+ * Paddle receipt boundary. This route resolves one active Paddle connection,
+ * verifies the raw request, and durably records one immutable Inbound Event. The
+ * environment route is stable before a connection is created and maps to the
+ * single Paddle connection allowed for that Instance and environment.
+ */
+webhookRouter.post("/payments/:instanceId/paddle/:environment", async (c) => {
+  const environment = c.req.param("environment");
+  if (environment !== "sandbox" && environment !== "live") {
+    throw new NotFoundError("Paddle webhook destination was not found.");
+  }
+  const route = await findPaddleProviderByEnvironment(c, c.req.param("instanceId"), environment);
+  if (!route) throw new NotFoundError("Paddle webhook destination was not found.");
+  return receivePaddleWebhook(c, route);
 });

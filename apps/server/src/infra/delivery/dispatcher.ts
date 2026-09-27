@@ -52,13 +52,11 @@ interface DeliveryRow {
   binding_id: string | null;
   binding_contract_version: number | null;
   provider_template_ref: string | null;
-  instance_slug: string;
   site_url: string;
 }
 
 interface TestConfigurationRow {
   instance_name: string;
-  instance_slug: string;
   site_url: string;
   integration_id: string;
   provider: string;
@@ -297,7 +295,7 @@ async function loadDelivery(
               binding.id AS binding_id,
               binding.contract_version AS binding_contract_version,
               binding.provider_template_ref,
-              instance.slug AS instance_slug, instance.site_url
+              instance.site_url
        FROM email_deliveries AS delivery
        JOIN instances AS instance ON instance.id = delivery.instance_id
        LEFT JOIN email_integrations AS integration
@@ -364,7 +362,6 @@ async function materializeDelivery(
     parseJsonObject(variablesSerialized, "EMAIL_DELIVERY_VARIABLES_INVALID"),
     {
       trustedSiteUrl: row.site_url,
-      expectedInstanceSlug: row.instance_slug,
       authenticatedPreparedDelivery: true,
       environment: input.env.ENVIRONMENT,
     },
@@ -448,7 +445,6 @@ function testVariables(
     }
     values.access_url = buildCustomerPortalAccessUrl({
       trustedSiteUrl: configuration.site_url,
-      instanceSlug: configuration.instance_slug,
       oneTimeToken: `mlk_${"0".repeat(64)}`,
       environment,
     });
@@ -473,7 +469,6 @@ function testVariables(
     {
       trustedSiteUrl: configuration.site_url,
       trustedAdminOrigin: adminOrigin,
-      expectedInstanceSlug: configuration.instance_slug,
       environment,
     },
   );
@@ -485,8 +480,7 @@ export async function testEmailConfiguration(
 ): Promise<TestEmailConfigurationResult> {
   const result = await input.db
     .prepare(
-      `SELECT instance.name AS instance_name, instance.slug AS instance_slug,
-              instance.site_url,
+      `SELECT instance.name AS instance_name, instance.site_url,
               integration.id AS integration_id, integration.provider,
               integration.credential_ciphertext,
               integration.default_from_email, integration.default_from_name,

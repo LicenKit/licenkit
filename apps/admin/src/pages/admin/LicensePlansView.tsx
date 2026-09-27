@@ -18,14 +18,15 @@ import {
   formatDurationSeconds,
 } from "../../components/ui";
 import { useI18n } from "../../lib/i18n";
+import { daysToSeconds, secondsToDays } from "../../lib/duration";
 
 const emptyForm = {
   productId: "", name: "", licenseModel: "perpetual" as LicenseModel, credentialMode: "opaque" as CredentialMode,
-  maxActivations: "1", features: "", updateWindowSeconds: "", defaultTermSeconds: "",
-  signedTokenTtlSeconds: "2592000", paymentGraceSeconds: "",
+  maxActivations: "1", features: "", updateWindowDays: "", defaultTermDays: "",
+  signedTokenTtlDays: "30", paymentGraceDays: "",
 };
 
-export const MIN_SIGNED_TOKEN_TTL_SECONDS = 1;
+export const MIN_SIGNED_TOKEN_TTL_DAYS = 1;
 
 export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
   const { t } = useI18n();
@@ -55,18 +56,23 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
 
   function openEditModal() {
     if (!selected) return;
-    setEditForm({
-      productId: selected.productId,
-      name: selected.name,
-      licenseModel: selected.licenseModel,
-      credentialMode: selected.credentialMode,
-      maxActivations: String(selected.maxActivations),
-      features: selected.features.join(", "),
-      updateWindowSeconds: selected.updateWindowSeconds !== null && selected.updateWindowSeconds !== undefined ? String(selected.updateWindowSeconds) : "",
-      defaultTermSeconds: selected.defaultTermSeconds !== null && selected.defaultTermSeconds !== undefined ? String(selected.defaultTermSeconds) : "",
-      signedTokenTtlSeconds: String(selected.signedTokenTtlSeconds || 2592000),
-      paymentGraceSeconds: selected.paymentGraceSeconds !== undefined && selected.paymentGraceSeconds !== null ? String(selected.paymentGraceSeconds) : "",
-    });
+    try {
+      setEditForm({
+        productId: selected.productId,
+        name: selected.name,
+        licenseModel: selected.licenseModel,
+        credentialMode: selected.credentialMode,
+        maxActivations: String(selected.maxActivations),
+        features: selected.features.join(", "),
+        updateWindowDays: selected.updateWindowSeconds !== null && selected.updateWindowSeconds !== undefined ? secondsToDays(selected.updateWindowSeconds) : "",
+        defaultTermDays: selected.defaultTermSeconds !== null && selected.defaultTermSeconds !== undefined ? secondsToDays(selected.defaultTermSeconds) : "",
+        signedTokenTtlDays: secondsToDays(selected.signedTokenTtlSeconds || 2_592_000),
+        paymentGraceDays: selected.paymentGraceSeconds !== undefined && selected.paymentGraceSeconds !== null ? secondsToDays(selected.paymentGraceSeconds) : "",
+      });
+    } catch (caught) {
+      setError(caught);
+      return;
+    }
     setEditModalOpen(true);
   }
 
@@ -76,10 +82,10 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
       await api.admin.licensePlans.create({
         productId: form.productId, name: form.name.trim(), licenseModel: form.licenseModel, credentialMode: form.credentialMode,
         maxActivations: Number(form.maxActivations), features: form.features.split(",").map((item) => item.trim()).filter(Boolean),
-        updateWindowSeconds: form.licenseModel === "perpetual" && form.updateWindowSeconds ? Number(form.updateWindowSeconds) : null,
-        defaultTermSeconds: form.licenseModel === "fixed_term" ? Number(form.defaultTermSeconds) : null,
-        signedTokenTtlSeconds: form.credentialMode === "signed" ? Number(form.signedTokenTtlSeconds) : 0,
-        paymentGraceSeconds: form.licenseModel === "subscription" && form.paymentGraceSeconds !== "" ? Number(form.paymentGraceSeconds) : undefined,
+        updateWindowSeconds: form.licenseModel === "perpetual" && form.updateWindowDays ? daysToSeconds(form.updateWindowDays) : null,
+        defaultTermSeconds: form.licenseModel === "fixed_term" ? daysToSeconds(form.defaultTermDays) : null,
+        signedTokenTtlSeconds: form.credentialMode === "signed" ? daysToSeconds(form.signedTokenTtlDays) : 0,
+        paymentGraceSeconds: form.licenseModel === "subscription" && form.paymentGraceDays !== "" ? daysToSeconds(form.paymentGraceDays) : undefined,
       });
       setModalOpen(false); setForm({ ...emptyForm, productId: products[0]?.id || "" }); await load();
     } catch (caught) { setError(caught) } finally { setSaving(false) }
@@ -98,16 +104,16 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
         maxActivations: Number(editForm.maxActivations),
         features: editForm.features.split(",").map((item) => item.trim()).filter(Boolean),
         updateWindowSeconds: editForm.licenseModel === "perpetual"
-          ? (editForm.updateWindowSeconds ? Number(editForm.updateWindowSeconds) : null)
+          ? (editForm.updateWindowDays ? daysToSeconds(editForm.updateWindowDays) : null)
           : null,
         defaultTermSeconds: editForm.licenseModel === "fixed_term"
-          ? Number(editForm.defaultTermSeconds)
+          ? daysToSeconds(editForm.defaultTermDays)
           : null,
         signedTokenTtlSeconds: editForm.credentialMode === "signed"
-          ? Number(editForm.signedTokenTtlSeconds)
+          ? daysToSeconds(editForm.signedTokenTtlDays)
           : 0,
-        paymentGraceSeconds: editForm.licenseModel === "subscription" && editForm.paymentGraceSeconds !== ""
-          ? Number(editForm.paymentGraceSeconds)
+        paymentGraceSeconds: editForm.licenseModel === "subscription" && editForm.paymentGraceDays !== ""
+          ? daysToSeconds(editForm.paymentGraceDays)
           : 0,
       });
       setEditModalOpen(false);
@@ -290,22 +296,22 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
           </div>
           {form.licenseModel === "perpetual" ? (
             <Field label={t.licensePlans.fieldUpdateWindow} hint={t.licensePlans.fieldUpdateWindowHint}>
-              <Input type="number" min="1" value={form.updateWindowSeconds} onChange={(event) => setForm({ ...form, updateWindowSeconds: event.target.value })} placeholder={t.licensePlans.placeholderUpdateWindow} />
+              <Input type="number" min="1" step="1" value={form.updateWindowDays} onChange={(event) => setForm({ ...form, updateWindowDays: event.target.value })} placeholder={t.licensePlans.placeholderUpdateWindow} />
             </Field>
           ) : null}
           {form.licenseModel === "fixed_term" ? (
             <Field label={t.licensePlans.fieldDefaultTerm} hint={t.licensePlans.fieldDefaultTermHint}>
-              <Input type="number" min="1" value={form.defaultTermSeconds} onChange={(event) => setForm({ ...form, defaultTermSeconds: event.target.value })} placeholder={t.licensePlans.placeholderTermSeconds} required />
+              <Input type="number" min="1" step="1" value={form.defaultTermDays} onChange={(event) => setForm({ ...form, defaultTermDays: event.target.value })} placeholder={t.licensePlans.placeholderTermDays} required />
             </Field>
           ) : null}
           {form.licenseModel === "subscription" ? (
             <Field label={t.licensePlans.fieldPaymentGrace} hint={t.licensePlans.fieldPaymentGraceHint}>
-              <Input type="number" min="0" value={form.paymentGraceSeconds} onChange={(event) => setForm({ ...form, paymentGraceSeconds: event.target.value })} placeholder={t.licensePlans.placeholderGraceSeconds} />
+              <Input type="number" min="0" step="1" value={form.paymentGraceDays} onChange={(event) => setForm({ ...form, paymentGraceDays: event.target.value })} placeholder={t.licensePlans.placeholderGraceDays} />
             </Field>
           ) : null}
           {form.credentialMode === "signed" ? (
             <Field label={t.licensePlans.fieldTokenTtl} hint={t.licensePlans.fieldTokenTtlHint}>
-              <Input type="number" min={MIN_SIGNED_TOKEN_TTL_SECONDS} value={form.signedTokenTtlSeconds} onChange={(event) => setForm({ ...form, signedTokenTtlSeconds: event.target.value })} required />
+              <Input type="number" min={MIN_SIGNED_TOKEN_TTL_DAYS} step="1" value={form.signedTokenTtlDays} onChange={(event) => setForm({ ...form, signedTokenTtlDays: event.target.value })} required />
             </Field>
           ) : null}
           <div className="form-actions">
@@ -345,22 +351,22 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
           </Field>
           {editForm.licenseModel === "perpetual" ? (
             <Field label={t.licensePlans.fieldUpdateWindow} hint={t.licensePlans.fieldUpdateWindowHint}>
-              <Input type="number" min="1" value={editForm.updateWindowSeconds} onChange={(event) => setEditForm({ ...editForm, updateWindowSeconds: event.target.value })} placeholder={t.licensePlans.placeholderUpdateWindow} />
+              <Input type="number" min="1" step="1" value={editForm.updateWindowDays} onChange={(event) => setEditForm({ ...editForm, updateWindowDays: event.target.value })} placeholder={t.licensePlans.placeholderUpdateWindow} />
             </Field>
           ) : null}
           {editForm.licenseModel === "fixed_term" ? (
             <Field label={t.licensePlans.fieldDefaultTerm} hint={t.licensePlans.fieldDefaultTermHint}>
-              <Input type="number" min="1" value={editForm.defaultTermSeconds} onChange={(event) => setEditForm({ ...editForm, defaultTermSeconds: event.target.value })} placeholder={t.licensePlans.placeholderTermSeconds} required />
+              <Input type="number" min="1" step="1" value={editForm.defaultTermDays} onChange={(event) => setEditForm({ ...editForm, defaultTermDays: event.target.value })} placeholder={t.licensePlans.placeholderTermDays} required />
             </Field>
           ) : null}
           {editForm.licenseModel === "subscription" ? (
             <Field label={t.licensePlans.fieldPaymentGrace} hint={t.licensePlans.fieldPaymentGraceHint}>
-              <Input type="number" min="0" value={editForm.paymentGraceSeconds} onChange={(event) => setEditForm({ ...editForm, paymentGraceSeconds: event.target.value })} placeholder={t.licensePlans.placeholderGraceSeconds} />
+              <Input type="number" min="0" step="1" value={editForm.paymentGraceDays} onChange={(event) => setEditForm({ ...editForm, paymentGraceDays: event.target.value })} placeholder={t.licensePlans.placeholderGraceDays} />
             </Field>
           ) : null}
           {editForm.credentialMode === "signed" ? (
             <Field label={t.licensePlans.fieldTokenTtl} hint={t.licensePlans.fieldTokenTtlHint}>
-              <Input type="number" min={MIN_SIGNED_TOKEN_TTL_SECONDS} value={editForm.signedTokenTtlSeconds} onChange={(event) => setEditForm({ ...editForm, signedTokenTtlSeconds: event.target.value })} required />
+              <Input type="number" min={MIN_SIGNED_TOKEN_TTL_DAYS} step="1" value={editForm.signedTokenTtlDays} onChange={(event) => setEditForm({ ...editForm, signedTokenTtlDays: event.target.value })} required />
             </Field>
           ) : null}
           <div className="form-actions">

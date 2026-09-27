@@ -35,8 +35,8 @@ describe("V1 Customer Magic Link request contract", () => {
     } as any);
     const now = new Date().toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES (?, 'Magic Link', 'magic', 'https://site.example.test/site', ?, 'active', ?, ?)`
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Magic Link', 'https://site.example.test/site', ?, 'active', ?, ?)`
     ).run(instanceId, API_ORIGIN, now, now);
     testEnv.sqliteDb.prepare(
       `INSERT INTO customers (id, instance_id, email, name, status, created_at, updated_at)
@@ -69,7 +69,7 @@ describe("V1 Customer Magic Link request contract", () => {
           "Content-Type": "application/json",
           "CF-Connecting-IP": "203.0.113.10",
         },
-        body: JSON.stringify({ instance_slug: "magic", email, turnstile_token: turnstileToken }),
+        body: JSON.stringify({ email, turnstile_token: turnstileToken }),
       },
       testEnv.env,
       executionContext,
@@ -147,7 +147,7 @@ describe("V1 Customer Magic Link request contract", () => {
       {
         method: "POST",
         headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
-        body: JSON.stringify({ instance_slug: "magic", token }),
+        body: JSON.stringify({ token }),
       },
       testEnv.env,
     );
@@ -191,14 +191,14 @@ describe("V1 Customer Magic Link request contract", () => {
     expect((await missing.json() as any).error.code).toBe("TURNSTILE_CONFIGURATION_ERROR");
   });
 
-  it("accepts only the public instance_slug selector", async () => {
+  it("rejects a client-supplied Instance selector", async () => {
     const response = await customerAuthApp().request(
       `${API_ORIGIN}/api/v1/customer/auth/magic-link`,
       {
         method: "POST",
         headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({
-          instanceSlug: "magic",
+          instance_id: instanceId,
           email: "buyer@example.test",
           turnstile_token: "legacy-instance-selector",
         }),
@@ -217,7 +217,6 @@ describe("V1 Customer Magic Link request contract", () => {
         method: "POST",
         headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({
-          instance_slug: "magic",
           email: "buyer@example.test",
           turnstileToken: "legacy-turnstile-field",
         }),
@@ -328,7 +327,6 @@ describe("V1 Customer Magic Link request contract", () => {
           "CF-Connecting-IP": "127.0.0.1",
         },
         body: JSON.stringify({
-          instance_slug: "magic",
           email: "buyer@example.test",
           turnstile_token: "turnstile-localhost-http",
         }),
@@ -341,7 +339,7 @@ describe("V1 Customer Magic Link request contract", () => {
     expect(response.status).toBe(200);
     expect(providerRequests).toHaveLength(1);
     expect(providerRequests[0].template.variables.access_url).toMatch(
-      /^http:\/\/localhost:4321\/site\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
+      /^http:\/\/localhost:4321\/site\/customer\/auth#token=mlk_[0-9a-f]{64}$/,
     );
     expect(deliveryRows()).toHaveLength(1);
     expect(deliveryRows()[0].status).toBe("accepted");
@@ -367,7 +365,6 @@ describe("V1 Customer Magic Link request contract", () => {
         method: "POST",
         headers: { Origin: configuredOrigin, "Content-Type": "application/json" },
         body: JSON.stringify({
-          instance_slug: "magic",
           email: "buyer@example.test",
           turnstile_token: "turnstile-rejected-http",
         }),
@@ -504,7 +501,7 @@ describe("V1 Customer Magic Link request contract", () => {
         instance_name: "Magic Link",
         expires_at: expect.stringMatching(/Z$/),
         access_url: expect.stringMatching(
-          /^https:\/\/site\.example\.test\/site\/customer\/magic\/auth#token=mlk_[0-9a-f]{64}$/,
+          /^https:\/\/site\.example\.test\/site\/customer\/auth#token=mlk_[0-9a-f]{64}$/,
         ),
       },
     });
@@ -621,7 +618,7 @@ describe("V1 Customer Magic Link request contract", () => {
       {
         method: "POST",
         headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
-        body: JSON.stringify({ instance_slug: "magic", token: originalToken }),
+        body: JSON.stringify({ token: originalToken }),
       },
       testEnv.env,
     );
@@ -662,7 +659,7 @@ describe("V1 Customer Magic Link request contract", () => {
       {
         method: "POST",
         headers: { Origin: CUSTOMER_SITE_ORIGIN, "Content-Type": "application/json" },
-        body: JSON.stringify({ instance_slug: "magic", token: originalToken }),
+        body: JSON.stringify({ token: originalToken }),
       },
       testEnv.env,
     );

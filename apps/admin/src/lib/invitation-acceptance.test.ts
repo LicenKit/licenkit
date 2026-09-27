@@ -4,7 +4,7 @@ import { acceptInvitationForExistingUser } from "./invitation-acceptance";
 
 const session: AdminSession = {
   user: { id: "usr_owner", name: "Owner", email: "owner@example.test" },
-  instance: { id: "ins_main", name: "Main", slug: "main", customerSiteUrl: "https://site.example.test", adminApiUrl: "https://license.example.test", status: "active" },
+  instance: { id: "3Jd9K_aP0qUwbL6F7sTn2Q", name: "Main", customerSiteUrl: "https://site.example.test", adminApiUrl: "https://license.example.test", status: "active" },
   membership: { role: "owner", status: "active" },
 };
 

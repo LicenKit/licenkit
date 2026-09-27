@@ -15,7 +15,6 @@ interface AdminSessionRow {
   name: string;
   instance_id: string;
   instance_name: string;
-  instance_slug: string;
   instance_site_url: string;
   role: InstanceRole;
 }
@@ -152,14 +151,14 @@ export const adminSessionAuth: MiddlewareHandler<AppContext> = async (c, next) =
     c.env.DB
       .prepare(
         `WITH active_instance AS (
-           SELECT id, name, slug, site_url
+           SELECT id, name, site_url
            FROM instances
            WHERE status = 'active'
          )
          SELECT s.id AS session_id, s.csrf_token_hash,
                 u.id AS user_id, u.email, u.name,
                 instance.id AS instance_id, instance.name AS instance_name,
-                instance.slug AS instance_slug, instance.site_url AS instance_site_url,
+                instance.site_url AS instance_site_url,
                 membership.role
          FROM admin_sessions AS s
          JOIN users AS u ON u.id = s.user_id

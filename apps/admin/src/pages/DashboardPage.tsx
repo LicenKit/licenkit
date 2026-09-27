@@ -180,7 +180,7 @@ export function DashboardPage({
             <span>{instance.name.slice(0, 1).toUpperCase()}</span>
             <div>
               <strong>{instance.name}</strong>
-              <small>{instance.slug}</small>
+              <small>{instance.id}</small>
             </div>
           </div>
           <button
@@ -232,7 +232,7 @@ export function DashboardPage({
               <LicensesView canManage={canWrite} canSupport={membership.role !== "viewer"} />
             ) : null}
             {section === "customers" ? <CustomersView canManage={canWrite} /> : null}
-            {section === "billing" ? <BillingView canManage={canWrite} /> : null}
+            {section === "billing" ? <BillingView canManage={canWrite} instance={instance} /> : null}
             {section === "email-hub" ? <EmailHubView canManage={canWrite} /> : null}
             {section === "operations" ? (
               <OperationsView

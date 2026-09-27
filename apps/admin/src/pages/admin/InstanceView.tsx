@@ -65,7 +65,7 @@ export function InstanceView({ initialInstance }: { initialInstance: Instance })
           <DefinitionList
             items={[
               { label: t.settings.instanceNameLabel, value: instance.name },
-              { label: t.settings.instanceSlugLabel, value: <code>{instance.slug}</code> },
+              { label: t.settings.instanceIdLabel, value: <code>{instance.id}</code> },
               {
                 label: t.settings.adminApiUrlLabel,
                 value: (

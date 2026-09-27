@@ -3626,13 +3626,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "slug": {
-          "name": "slug",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "site_url": {
           "name": "site_url",
           "type": "text",
@@ -3677,23 +3670,12 @@
             "admin_api_url"
           ],
           "isUnique": true
-        },
-        "uq_instances_slug": {
-          "name": "uq_instances_slug",
-          "columns": [
-            "slug"
-          ],
-          "isUnique": true
         }
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
-        "ck_instances_slug": {
-          "name": "ck_instances_slug",
-          "value": "length(\"instances\".\"slug\") > 0\n        and \"instances\".\"slug\" = lower(\"instances\".\"slug\")\n        and \"instances\".\"slug\" not glob '*[^a-z0-9-]*'\n        and \"instances\".\"slug\" not like '-%'\n        and \"instances\".\"slug\" not like '%-'"
-        },
         "ck_instances_status": {
           "name": "ck_instances_status",
           "value": "\"instances\".\"status\" in ('active', 'suspended', 'archived')"

@@ -177,7 +177,7 @@ export function Modal({ open, title, description, children, onClose, wide = fals
 
   if (!open) return null;
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose() }}>
+    <div className="modal-backdrop" role="presentation">
       <section ref={dialogRef} tabIndex={-1} className={clsx("modal", wide && "modal-wide")} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}>
         <header className="modal-header">
           <div>

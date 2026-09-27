@@ -266,7 +266,7 @@ Issue 只聚合业务错误，不代替业务对象状态，不保存 Deployment
 3. 业务唯一索引包含 `instance_id`；
 4. 关联对象使用 `instance_id + object_id` 复合外键；
 5. 幂等、租约、状态更新和删除都不能只按对象 ID；
-6. Webhook 先由 `instance_slug` 解析 Instance，再在该边界内选择 Provider；
+6. Webhook 先由路径中的 Instance ID 解析 Instance，再在该边界内选择 Provider；
 7. Scheduled Worker 可以跨 Instance 发现任务，但必须逐 Instance 分页处理。
 
 仅凭全局唯一 ID 仍然不能省略 Instance 条件；复合条件同时承担隔离证明和代码审计线索。

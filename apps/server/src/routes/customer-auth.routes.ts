@@ -33,18 +33,15 @@ export const customerAuthRouter = new Hono<AppContext>();
 customerAuthRouter.use("*", requireCustomerSiteOrigin);
 
 const MagicLinkRequestSchema = z.object({
-  instance_slug: z.string().trim().toLowerCase().min(1).max(63),
   email: z.string().email().max(320),
   turnstile_token: z.string().trim().min(1).max(2048),
 }).strict().transform((value) => ({
-  instanceSlug: value.instance_slug,
   email: value.email,
   turnstileToken: value.turnstile_token,
 }));
 const ConsumeSchema = z.object({
-  instance_slug: z.string().trim().toLowerCase().min(1).max(63),
   token: z.string().min(32).max(256),
-}).strict().transform((value) => ({ instanceSlug: value.instance_slug, token: value.token }));
+}).strict();
 
 async function preserveEnumerationTiming(startedAt: number): Promise<void> {
   const jitter = crypto.getRandomValues(new Uint8Array(1))[0] % 26;
@@ -88,13 +85,13 @@ customerAuthRouter.post(
     getStorageEncryptionKey(c.env);
     const instanceResult = await c.env.DB
       .prepare(
-        `SELECT id, slug, site_url
+        `SELECT id, site_url
          FROM instances
-         WHERE slug = ?1 AND id = ?2 AND status = 'active'
+         WHERE id = ?1 AND status = 'active'
          LIMIT 1`,
       )
-      .bind(input.instanceSlug, requestInstanceId)
-      .all<{ id: string; slug: string; site_url: string }>();
+      .bind(requestInstanceId)
+      .all<{ id: string; site_url: string }>();
     const instance = instanceResult.results[0];
     if (!instance) {
       await preserveEnumerationTiming(startedAt);
@@ -158,7 +155,7 @@ customerAuthRouter.post(
       const link = await prepareOneTimeLink({
         tokenPrefix: "mlk",
         trustedUrl: siteUrl,
-        path: `/customer/${encodeURIComponent(instance.slug)}/auth`,
+        path: "/customer/auth",
         pathBase: "trusted_path",
         environment: c.env.ENVIRONMENT,
       });
@@ -322,10 +319,10 @@ customerAuthRouter.post(
       .prepare(
         `SELECT id
          FROM instances
-         WHERE slug = ?1 AND id = ?2 AND status = 'active'
+         WHERE id = ?1 AND status = 'active'
          LIMIT 1`
       )
-      .bind(input.instanceSlug, requestInstanceId)
+      .bind(requestInstanceId)
       .all<{ id: string }>();
     const instance = instanceResult.results[0];
     if (!instance) {

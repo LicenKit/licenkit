@@ -166,7 +166,6 @@ export interface SetupStatus { initialized: boolean }
 export interface User { id: Identifier; name: string; email: string; createdAt?: IsoDateTime; updatedAt?: IsoDateTime }
 export interface Instance {
   id: Identifier;
-  slug: string;
   name: string;
   customerSiteUrl: string;
   adminApiUrl: string;
@@ -410,7 +409,7 @@ export const api = {
   setup: {
     status: () => request<SetupStatus>("/setup/status", { scope: "public" }),
     verifyToken: (setupToken: string) => request<{ valid: true }>("/setup/verify-token", { method: "POST", body: { setupToken }, scope: "public" }),
-    complete: (body: { setupToken: string; user: { name: string; email: string; password: string }; instance: { name: string; slug: string; customerSiteUrl: string; adminApiUrl: string } }) => request<AdminSession>("/setup", {
+    complete: (body: { setupToken: string; user: { name: string; email: string; password: string }; instance: { name: string; customerSiteUrl: string; adminApiUrl: string } }) => request<AdminSession>("/setup", {
       method: "POST",
       body: {
         setupToken: body.setupToken,
@@ -456,7 +455,13 @@ export const api = {
       list: () => request<ListResponse<Product>>("/admin/products", { scope: "admin" }),
       get: (id: string) => request<Product>(`/admin/products/${encodeURIComponent(id)}`, { scope: "admin" }),
       create: (body: { slug: string; name: string; description?: string | null; billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration }) => request<Product>("/admin/products", { method: "POST", body, scope: "admin" }),
-      update: (id: string, body: Partial<Omit<Product, "id" | "createdAt" | "updatedAt">>) => request<Product>(`/admin/products/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
+      update: (id: string, body: {
+        name?: string;
+        description?: string | null;
+        billingEnvironment?: BillingEnvironment | null;
+        paymentGraceSeconds?: number;
+        trial?: TrialConfiguration;
+      }) => request<Product>(`/admin/products/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
       archive: (id: string) => request<Product>(`/admin/products/${encodeURIComponent(id)}/archive`, { method: "POST", scope: "admin" }),
       releases: {
         list: (productId: string) => request<ListResponse<ProductRelease>>(`/admin/products/${encodeURIComponent(productId)}/releases`, { scope: "admin" }),
@@ -539,7 +544,7 @@ export const api = {
     billing: {
       providers: {
         list: () => request<ListResponse<BillingProvider>>("/admin/billing/providers", { scope: "admin" }),
-        create: (body: { provider: "paddle"; environment: BillingEnvironment; clientSideToken: string; webhookSecret: string; apiKey?: string; status?: "active" | "disabled" }) => request<BillingProvider>("/admin/billing/providers", { method: "POST", body, scope: "admin" }),
+        create: (body: { provider: "paddle"; environment: BillingEnvironment; clientSideToken: string; webhookSecret: string; apiKey?: string }) => request<BillingProvider>("/admin/billing/providers", { method: "POST", body, scope: "admin" }),
         update: (id: string, body: { clientSideToken?: string; webhookSecret?: string; apiKey?: string | null; status?: "active" | "disabled" }) => request<BillingProvider>(`/admin/billing/providers/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
         test: (id: string) => request<ProviderTestResult>(`/admin/billing/providers/${encodeURIComponent(id)}/test`, { method: "POST", scope: "admin" }),
       },

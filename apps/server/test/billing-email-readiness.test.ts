@@ -36,8 +36,8 @@ describe("Billing Email Delivery Readiness", () => {
   beforeEach(() => {
     testEnv = createTestEnv();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES (?, 'Billing Email', 'billing-email', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Billing Email', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run(INSTANCE_ID, NOW.toISOString(), NOW.toISOString());
   });
 

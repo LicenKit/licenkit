@@ -59,12 +59,11 @@ Customer Session 的 `last_seen_at` 是非关键遥测：仅最终 2xx best-effo
 
 ```text
 LICENKIT_INSTANCE_ID
-VITE_LICENKIT_INSTANCE_SLUG
 ```
 
-JSON 使用 `instance_id/instance_slug`，TypeScript 使用 `instanceId/instanceSlug`，Swift 使用 `instanceID/instanceSlug`，CLI 使用 `--instance`，Signed License Token 使用 `ins`。
+JSON 使用 `instance_id`，TypeScript 使用 `instanceId`，Swift 使用 `instanceID`，CLI 使用 `--instance`，Signed License Token 使用 `ins`。
 
-不配置或接受旧别名。配置 `instance_id` 时不能用公开 Slug 代替，反之亦然。
+不配置或接受旧别名，也不允许 Customer 请求体自行选择 Instance。
 
 ### 3.4 Cloudflare Bindings
 
@@ -178,7 +177,7 @@ corepack pnpm run db:migrate:remote
 - Admin、Customer、Client、Webhook 都不能跨 Instance 读取或修改；
 - 唯一约束允许不同 Instance 使用相同业务 Slug/外部 ID，只在本 Instance 冲突；
 - 复合外键拒绝跨 Instance Customer/Product/Plan/License/Delivery 关联；
-- Webhook 由路径中的 `instance_slug` 先解析 Instance；
+- Webhook 由路径中的 Instance ID 先解析 Instance；
 - Signed License Token 的 `ins` 不匹配返回 Instance 专用错误；
 - CLI/SDK 不接受旧 Claim 或旧参数。
 

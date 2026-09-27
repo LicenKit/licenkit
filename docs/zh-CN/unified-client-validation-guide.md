@@ -86,7 +86,7 @@ import LicenKit
 
 let configuration = LicenKitConfiguration(
     serverURL: URL(string: "https://license.example.com")!,
-    instanceID: "ins_01...",
+    instanceID: "3Jd9K_aP0qUwbL6F7sTn2Q",
     productID: "prd_01...",
     releaseVersion: "2.4.0",
     releasePlatform: "macos-universal",
@@ -361,7 +361,7 @@ CLI 使用与 SDK 相同的 Client API 业务状态和错误合同，适合开�
 ```bash
 licenkit activate LK-... \
   --server https://license.example.com \
-  --instance ins_01... \
+  --instance 3Jd9K_aP0qUwbL6F7sTn2Q \
   --product prd_01... \
   --release 2.4.0 \
   --release-platform macos-universal

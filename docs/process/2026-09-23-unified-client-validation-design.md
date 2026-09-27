@@ -423,7 +423,7 @@ POST /api/v1/client/trials/validate
 
 ```json
 {
-  "instance_id": "ins_01...",
+  "instance_id": "3Jd9K_aP0qUwbL6F7sTn2Q",
   "product_id": "prd_01...",
   "fingerprint": "sha256:...",
   "release_version": "2.4.0",

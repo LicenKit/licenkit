@@ -52,7 +52,6 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
   const [ownerEmail, setOwnerEmail] = useState("");
   const [password, setPassword] = useState("");
   const [instanceName, setInstanceName] = useState("");
-  const [instanceSlug, setInstanceSlug] = useState("");
   const [adminApiUrl, setAdminApiUrl] = useState(() => window.location.origin);
   const [customerSiteUrl, setCustomerSiteUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -88,7 +87,6 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
         user: { name: ownerName.trim(), email: ownerEmail.trim(), password },
         instance: {
           name: instanceName.trim(),
-          slug: instanceSlug.trim(),
           adminApiUrl: adminApiUrl.trim(),
           customerSiteUrl: customerSiteUrl.trim(),
         },
@@ -226,15 +224,6 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
               placeholder={t.setup.step3InstanceNamePlaceholder}
               required
               autoFocus
-            />
-          </Field>
-          <Field label={t.setup.step3InstanceSlugLabel} hint={t.setup.step3InstanceSlugHint}>
-            <Input
-              value={instanceSlug}
-              onChange={(event) => setInstanceSlug(event.target.value.toLowerCase())}
-              pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
-              placeholder={t.setup.step3InstanceSlugPlaceholder}
-              required
             />
           </Field>
           <Field label={t.setup.step3AdminApiUrlLabel} hint={t.setup.step3AdminApiUrlHint}>

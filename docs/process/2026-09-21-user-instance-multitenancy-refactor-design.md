@@ -40,11 +40,11 @@ Account 在这个关系中没有独立的数据、行为或权限职责。继续
 9. 自部署无论版本都只开放一个 Instance；未来 SaaS 可以在同一部署承载多个 Instance。
 10. 核心数据模型按多租户设计，自部署只在产品入口和运行约束上限制 Instance 数量。
 11. 管理员登录只使用邮箱和密码，实例标识不属于登录凭据。
-12. Instance 内部 ID 与公开实例标识是两个字段：数据库和对外 JSON 使用 `instance_id/instance_slug`，TypeScript、Swift 等代码内部使用 `instanceId/instanceSlug`。
+12. Instance 只有一个由 Setup 生成的 22 位 Base64URL 随机 ID：数据库和对外 JSON 使用 `instance_id`，TypeScript 使用 `instanceId`，Swift 使用 `instanceID`。
 13. 首次 Setup 使用三个独立布局：验证 Token、创建首位管理员用户、创建首个 Instance。
 14. 三个布局只是用户流程；最终以一个 D1 原子批次创建 User、Instance、Owner Membership、Session、Setup 审计和 Deployment Bootstrap 完成凭据。
 15. `deployment_bootstrap` 使用固定单例键和完成时间表达整个 D1 已完成首次 Setup，不保存随机 `bootstrap_id`、Token Hash 或可变状态。
-16. 删除 `system_settings`；实例名称、实例标识和 Site URL 直接进入 `instances`，不增加 `instance_settings`。
+16. 删除 `system_settings`；实例名称、Admin/API URL 和 Customer Site URL 直接进入 `instances`，不增加 `instance_settings`。
 17. 不保留独立的 `scheduler_health`，不因 Scheduler 状态或 System Issue 禁止管理员操作产品。
 18. `system_issues` 只记录可归属明确 Instance 的业务错误；Deployment 级异常由部署平台界面和运行日志反馈，不写入业务数据库。
 19. 删除 `default_subscription_payment_grace_seconds`；每个 Product 自己设置支付宽限期，默认 `0`，并在创建订阅 Plan 和签发 License 时逐级固化。
@@ -184,13 +184,13 @@ SaaS：  Deployment 1 ─── N Instance
 
 ### 5.1 `accounts`
 
-目标模型删除整张表，不保留 Account 兼容实体或别名。新建 `instances` 时使用新的 Instance ID、名称、标识、Site URL、状态和时间，不复用旧 Account 数据。
+目标模型删除整张表，不保留 Account 兼容实体或别名。新建 `instances` 时使用新的随机 Instance ID、名称、Admin/API URL、Customer Site URL、状态和时间，不复用旧 Account 数据。
 
 | 当前字段 | 新模型处理 | 原因 |
 | --- | --- | --- |
 | `id` | 删除；新建 `instances.id` | 不保留旧协议或数据兼容 |
 | `name` | 删除；新建 `instances.name` | 目标模型没有独立 Account/Organization |
-| `slug` | 由新的 `instances.slug` 取代 | 真实语义是公开实例标识 |
+| `slug` | 删除 | Instance 不再维护第二套人工标识 |
 | `status` | 由新的 `instances.status` 取代 | 状态属于业务空间 |
 | `default_subscription_payment_grace_seconds` | 删除 | 宽限期由 Product 自己设置，默认 `0` |
 | `created_at` / `updated_at` | 删除；新 Instance 生成自己的时间 | 不迁移旧生命周期 |
@@ -636,24 +636,18 @@ Customer 页面 Origin 来自请求 Admin/API Origin 所匹配 Instance 的 `sit
 
 ## 9. 公开合同与命名
 
-Instance ID 与 Instance Slug 是两个不同标识：
-
-- `instance_id` 是稳定、不面向人类阅读的内部 ID，用于数据关联、客户端配置和签名 Token；
-- `instance_slug` 是 URL-safe 的公开实例标识，用于 Customer Portal、Magic Link 和支付 Webhook 路由。
+Instance 只使用一个稳定、不面向人类阅读的随机 ID，用于数据关联、客户端配置、签名 Token 和支付 Webhook 路由。Customer Portal 与 Magic Link 由 Admin/API Origin 唯一确定 Instance。
 
 数据库与对外 JSON 统一使用 `snake_case`：
 
 ```text
 account_id        -> instance_id
-account_slug      -> instance_slug
-VITE_LICENKIT_ACCOUNT_SLUG -> VITE_LICENKIT_INSTANCE_SLUG
 ```
 
 TypeScript、Swift 等代码内部使用各自语言惯用的 `camelCase`：
 
 ```text
 accountId         -> instanceId
-accountSlug       -> instanceSlug
 ```
 
 当返回完整 Instance 对象时，不重复添加前缀：
@@ -661,8 +655,7 @@ accountSlug       -> instanceSlug
 ```json
 {
   "instance": {
-    "id": "ins_01...",
-    "slug": "tidest"
+    "id": "3Jd9K_aP0qUwbL6F7sTn2Q"
   }
 }
 ```
@@ -671,7 +664,7 @@ accountSlug       -> instanceSlug
 
 - Client API 请求与响应中的 `account_id`；
 - Customer Magic Link 请求与消费；
-- `/customer/{instance_slug}/auth`；
+- `/customer/auth`；
 - 支付 Webhook 路径；
 - 邮件合同中的访问 URL；
 - Customer Site 配置；
@@ -774,8 +767,8 @@ Admin、Customer、Client、Webhook、CLI、SDK、环境变量、Signed License 
 
 ### 阶段四：公开合同与文档
 
-- 数据库列和对外 JSON 中的 `account_id`、`account_slug` 全面改为 `instance_id`、`instance_slug`；
-- TypeScript、Swift 等代码内部的 `accountId`、`accountSlug` 全面改为 `instanceId`、`instanceSlug`；
+- 数据库列和对外 JSON 中的租户标识统一为 `instance_id`；
+- TypeScript、Swift 等代码内部的租户标识统一为 `instanceId`、`instanceID`；
 - 同步更新 API Client 类型、CLI、环境变量、SDK、Signed License Token Claim、Cookie、测试和界面文案；
 - 在根 `wrangler.jsonc` 显式配置 Workers Observability，并把远程 Cron Trigger、Cron Events 和 Workers Logs 的检查加入部署验收；
 - 更新 `docs/zh-CN` 和 `docs/internal`；

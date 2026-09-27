@@ -1,10 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Archive, Box, CalendarPlus, FlaskConical, PackagePlus, Plus, RefreshCw } from "lucide-react";
+import { Archive, Box, CalendarPlus, FlaskConical, PackagePlus, Pencil, Plus, RefreshCw } from "lucide-react";
 import { api, type BillingEnvironment, type Product, type ProductRelease } from "../../lib/api-client";
 import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, Textarea } from "../../components/ui";
 import { useI18n } from "../../lib/i18n";
+import { daysToSeconds, secondsToDays } from "../../lib/duration";
 
-const emptyProduct = { slug: "", name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationSeconds: "", trialFeatures: "" };
+const emptyProduct = { slug: "", name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
+const emptyProductEdit = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
 const emptyRelease = { version: "", platform: "", description: "", downloadUrl: "", artifactSha256: "", releasedAt: "" };
 
 export function ProductsView({ canWrite }: { canWrite: boolean }) {
@@ -16,8 +18,10 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [productModal, setProductModal] = useState(false);
+  const [editProductModal, setEditProductModal] = useState(false);
   const [releaseModal, setReleaseModal] = useState(false);
   const [productForm, setProductForm] = useState(emptyProduct);
+  const [editProductForm, setEditProductForm] = useState(emptyProductEdit);
   const [releaseForm, setReleaseForm] = useState(emptyRelease);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const selected = products.find((product) => product.id === selectedId) ?? null;
@@ -46,9 +50,48 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
       const created = await api.admin.products.create({
         slug: productForm.slug.trim(), name: productForm.name.trim(), description: productForm.description.trim() || null,
         billingEnvironment: productForm.billingEnvironment || null,
-        trial: { enabled: productForm.trialEnabled, durationSeconds: productForm.trialEnabled ? Number(productForm.trialDurationSeconds) : undefined, features: productForm.trialFeatures.split(",").map((item) => item.trim()).filter(Boolean) },
+        trial: { enabled: productForm.trialEnabled, durationSeconds: productForm.trialEnabled ? daysToSeconds(productForm.trialDurationDays) : undefined, features: productForm.trialFeatures.split(",").map((item) => item.trim()).filter(Boolean) },
       });
       setProductModal(false); setProductForm(emptyProduct); await loadProducts(); setSelectedId(created.id);
+    } catch (caught) { setError(caught) } finally { setSaving(false) }
+  }
+
+  function openEditProduct() {
+    if (!selected) return;
+    try {
+      setEditProductForm({
+        name: selected.name,
+        description: selected.description ?? "",
+        billingEnvironment: selected.billingEnvironment ?? "",
+        trialEnabled: selected.trial?.enabled ?? false,
+        trialDurationDays: selected.trial?.enabled && selected.trial.durationSeconds !== undefined
+          ? secondsToDays(selected.trial.durationSeconds)
+          : "",
+        trialFeatures: selected.trial?.features.join(",") ?? "",
+      });
+      setEditProductModal(true);
+    } catch (caught) {
+      setError(caught);
+    }
+  }
+
+  async function updateProduct(event: FormEvent) {
+    event.preventDefault();
+    if (!selected) return;
+    setSaving(true); setError(null);
+    try {
+      await api.admin.products.update(selected.id, {
+        name: editProductForm.name.trim(),
+        description: editProductForm.description.trim() || null,
+        billingEnvironment: editProductForm.billingEnvironment || null,
+        trial: {
+          enabled: editProductForm.trialEnabled,
+          durationSeconds: editProductForm.trialEnabled ? daysToSeconds(editProductForm.trialDurationDays) : undefined,
+          features: editProductForm.trialFeatures.split(",").map((item) => item.trim()).filter(Boolean),
+        },
+      });
+      setEditProductModal(false);
+      await loadProducts();
     } catch (caught) { setError(caught) } finally { setSaving(false) }
   }
 
@@ -140,11 +183,16 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
                     <p>{t.products.trialNoticeDesc(selected.trial.features.join(", ") || t.products.allFeatures)}</p>
                   </Notice>
                 ) : null}
-                {canWrite && selected.status === "active" ? (
+                {canWrite ? (
                   <div className="button-row">
-                    <Button variant="danger" onClick={() => setArchiveConfirmOpen(true)} loading={saving}>
-                      <Archive className="size-4" />{t.products.archiveProduct}
+                    <Button variant="secondary" onClick={openEditProduct} loading={saving}>
+                      <Pencil className="size-4" />{t.products.editProduct}
                     </Button>
+                    {selected.status === "active" ? (
+                      <Button variant="danger" onClick={() => setArchiveConfirmOpen(true)} loading={saving}>
+                        <Archive className="size-4" />{t.products.archiveProduct}
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
               </Card>
@@ -218,13 +266,45 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
           </label>
           {productForm.trialEnabled ? (
             <div className="form-grid">
-              <Field label={t.products.fieldTrialDuration} hint={t.products.fieldTrialDurationHint}><Input type="number" min="1" value={productForm.trialDurationSeconds} onChange={(event) => setProductForm({ ...productForm, trialDurationSeconds: event.target.value })} placeholder={t.products.placeholderTrialDuration} required /></Field>
+              <Field label={t.products.fieldTrialDuration} hint={t.products.fieldTrialDurationHint}><Input type="number" min="1" step="1" value={productForm.trialDurationDays} onChange={(event) => setProductForm({ ...productForm, trialDurationDays: event.target.value })} placeholder={t.products.placeholderTrialDuration} required /></Field>
               <Field label={t.products.fieldTrialFeatures} hint={t.products.fieldTrialFeaturesHint}><Input value={productForm.trialFeatures} onChange={(event) => setProductForm({ ...productForm, trialFeatures: event.target.value })} placeholder="pro_export,batch" /></Field>
             </div>
           ) : null}
           <div className="form-actions">
             <Button variant="secondary" type="button" onClick={() => setProductModal(false)}>{t.common.cancel}</Button>
             <Button type="submit" loading={saving}><PackagePlus className="size-4" />{t.products.btnCreateProduct}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={editProductModal} onClose={() => setEditProductModal(false)} title={t.products.modalEditTitle} description={t.products.modalEditDesc}>
+        <form className="form-stack" onSubmit={updateProduct}>
+          <Field label={t.products.fieldName}><Input value={editProductForm.name} onChange={(event) => setEditProductForm({ ...editProductForm, name: event.target.value })} required /></Field>
+          <Field label={t.products.fieldDesc}><Textarea value={editProductForm.description} onChange={(event) => setEditProductForm({ ...editProductForm, description: event.target.value })} rows={3} placeholder={t.products.fieldDescPlaceholder} /></Field>
+          <Field label={t.products.fieldBillingEnv}>
+            <Select value={editProductForm.billingEnvironment} onChange={(event) => setEditProductForm({ ...editProductForm, billingEnvironment: event.target.value as BillingEnvironment | "" })}>
+              <option value="">{t.products.billingEnvOptionNone}</option>
+              <option value="sandbox">{t.products.billingEnvOptionSandbox}</option>
+              <option value="live">{t.products.billingEnvOptionLive}</option>
+            </Select>
+          </Field>
+          <label className="check-row">
+            <input type="checkbox" checked={editProductForm.trialEnabled} onChange={(event) => setEditProductForm({ ...editProductForm, trialEnabled: event.target.checked })} />
+            <FlaskConical className="size-4" />
+            <span>
+              <strong>{t.products.fieldTrialCheck}</strong>
+              <small>{t.products.fieldTrialCheckHint}</small>
+            </span>
+          </label>
+          {editProductForm.trialEnabled ? (
+            <div className="form-grid">
+              <Field label={t.products.fieldTrialDuration} hint={t.products.fieldTrialDurationHint}><Input type="number" min="1" step="1" value={editProductForm.trialDurationDays} onChange={(event) => setEditProductForm({ ...editProductForm, trialDurationDays: event.target.value })} placeholder={t.products.placeholderTrialDuration} required /></Field>
+              <Field label={t.products.fieldTrialFeatures} hint={t.products.fieldTrialFeaturesHint}><Input value={editProductForm.trialFeatures} onChange={(event) => setEditProductForm({ ...editProductForm, trialFeatures: event.target.value })} placeholder="pro_export,batch" /></Field>
+            </div>
+          ) : null}
+          <div className="form-actions">
+            <Button variant="secondary" type="button" onClick={() => setEditProductModal(false)}>{t.common.cancel}</Button>
+            <Button type="submit" loading={saving}><Pencil className="size-4" />{t.products.btnSaveProduct}</Button>
           </div>
         </form>
       </Modal>

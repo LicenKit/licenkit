@@ -51,7 +51,6 @@ function setupBody(suffix = "primary") {
     },
     instance: {
       name: `Example ${suffix}`,
-      slug: `example-${suffix}`,
       customer_site_url: `${CUSTOMER_SITE_ORIGIN}/site/`,
       admin_api_url: ORIGIN,
     },
@@ -157,14 +156,14 @@ describe("V1 deployment setup and administrator identity", () => {
       user: { name: "Owner primary", email: "owner-primary@example.test" },
       instance: {
         name: "Example primary",
-        slug: "example-primary",
         customer_site_url: `${CUSTOMER_SITE_ORIGIN}/site`,
         admin_api_url: ORIGIN,
         status: "active",
       },
       membership: { role: "owner", status: "active" },
     });
-    expect(payload.data.instance.id).toMatch(/^ins_/);
+    expect(payload.data.instance.id).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(payload.data.instance).not.toHaveProperty("slug");
     expect(payload.data.user.id).toMatch(/^usr_/);
 
     expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM users").get()).toEqual({ count: 1 });
@@ -361,7 +360,7 @@ describe("V1 deployment setup and administrator identity", () => {
     expect((await postJson(app, "/api/v1/setup", body, testEnv.env)).status).toBe(201);
 
     const legacyLogin = await postJson(app, "/api/v1/admin/auth/login", {
-      accountSlug: body.instance.slug,
+      accountSlug: "removed-instance-selector",
       email: body.user.email,
       password: body.user.password,
     }, testEnv.env);
@@ -376,7 +375,7 @@ describe("V1 deployment setup and administrator identity", () => {
     expectOnlySnakeCaseJsonKeys(loginPayload);
     expect(loginPayload.data).toMatchObject({
       user: { email: body.user.email },
-      instance: { slug: body.instance.slug },
+      instance: { id: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/) },
       membership: { role: "owner", status: "active" },
     });
     expect(login.headers.get("set-cookie")).not.toContain("licenkit-admin-account");

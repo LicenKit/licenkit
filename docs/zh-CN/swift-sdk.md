@@ -18,7 +18,7 @@ SDK 不决定商业权益，不自行延长 License，也不会把网络失败�
 ```swift
 let configuration = LicenKitConfiguration(
     serverURL: URL(string: "https://license.example.com")!,
-    instanceID: "ins_01...",
+    instanceID: "3Jd9K_aP0qUwbL6F7sTn2Q",
     productID: "prd_01...",
     releaseVersion: "2.4.0",
     releasePlatform: "macos-universal",

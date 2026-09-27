@@ -85,8 +85,8 @@ describe("Admin Email API", () => {
     vi.unstubAllGlobals();
     testEnv = createTestEnv({ ENVIRONMENT: "test", STORAGE_ENCRYPTION_KEY_ID: "test-primary" });
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES (?, 'Email Admin', 'email-admin', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Email Admin', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run(INSTANCE_ID, NOW, NOW);
     testEnv.sqliteDb.prepare(
       `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)

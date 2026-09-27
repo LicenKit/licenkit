@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { ulid } from "ulid";
 import type { AppContext } from "../types";
-import { hashPassword, timingSafeEqual } from "../infra/crypto";
+import { bufferToBase64, hashPassword, timingSafeEqual } from "../infra/crypto";
 import { AppError, UnauthorizedError } from "../middleware/error";
 import { requireAdminAppOrigin, setupGuard } from "../middleware/auth";
 import {
@@ -37,7 +37,6 @@ const SetupSchema = z.object({
   }).strict(),
   instance: z.object({
     name: z.string().trim().min(1).max(120),
-    slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(63),
     customer_site_url: z.string().trim().url().max(2048),
     admin_api_url: z.string().trim().url().max(2048),
   }).strict(),
@@ -130,6 +129,13 @@ function requireValidSetupToken(configuredValue: string | undefined, submittedVa
   }
 }
 
+function createInstanceId(): string {
+  return bufferToBase64(crypto.getRandomValues(new Uint8Array(16)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
 setupRouter.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
   await next();
@@ -175,7 +181,7 @@ setupRouter.post(
       adminApiUrl,
       c.env.ENVIRONMENT,
     );
-    const instanceId = `ins_${ulid().toLowerCase()}`;
+    const instanceId = createInstanceId();
     const userId = `usr_${ulid().toLowerCase()}`;
     const sessionId = `ase_${ulid().toLowerCase()}`;
     const email = input.user.email.trim().toLowerCase();
@@ -197,7 +203,6 @@ setupRouter.post(
         instance: {
           id: instanceId,
           name: input.instance.name,
-          slug: input.instance.slug,
           customerSiteUrl,
           adminApiUrl,
         },
@@ -265,7 +270,6 @@ setupRouter.post(
           instance: {
             id: instanceId,
             name: input.instance.name,
-            slug: input.instance.slug,
             customer_site_url: customerSiteUrl,
             admin_api_url: adminApiUrl,
             status: "active",

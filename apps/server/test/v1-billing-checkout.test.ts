@@ -72,8 +72,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     testEnv.env.DB = testEnv.d1;
     const db = testEnv.sqliteDb;
     db.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES (?, 'Billing V1', 'billing-v1', 'https://licenses.example.test', 'https://admin.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'Billing V1', 'https://licenses.example.test', 'https://admin.example.test', 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO users (id, email, password_hash, name, created_at, updated_at)
@@ -192,11 +192,11 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expectNoCamelCaseKeys(verificationBody);
   });
 
-  async function postEvent(rawBody: string, secret = webhookSecret, destinationProviderId = providerId) {
+  async function postEvent(rawBody: string, secret = webhookSecret) {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = await computeHmacSha256(`${timestamp}:${rawBody}`, secret);
     const response = await app.request(
-      `/api/v1/webhooks/payments/billing-v1/${destinationProviderId}`,
+      `/api/v1/webhooks/payments/${instanceId}/paddle/sandbox`,
       {
         method: "POST",
         headers: { "content-type": "application/json", "paddle-signature": `ts=${timestamp};h1=${signature}` },
@@ -216,6 +216,15 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       now: processingNow,
     });
   }
+
+  it("exposes only the standard Paddle environment webhook route", async () => {
+    const legacyResponse = await app.request(
+      `/api/v1/webhooks/payments/billing-v1/${providerId}`,
+      { method: "POST" },
+      testEnv.env,
+    );
+    expect(legacyResponse.status).toBe(404);
+  });
 
   function seedLinkedCustomer(externalCustomerId = "ctm_buyer1", email = "buyer@example.test"): void {
     testEnv.sqliteDb.prepare(
@@ -606,15 +615,14 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
   it("selects only Instances with due Billing work and still reaches a late Instance", async () => {
     const db = testEnv.sqliteDb;
     const insertInstance = db.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'https://licenses.example.test', ?, 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, ?, 'https://licenses.example.test', ?, 'active', ?, ?)`,
     );
     for (let index = 0; index < 105; index++) {
       const suffix = String(index).padStart(3, "0");
       insertInstance.run(
         `acc_page_${suffix}`,
         `Page ${suffix}`,
-        `page-${suffix}`,
         `https://license-page-${suffix}.example.test`,
         nowIso,
         nowIso,

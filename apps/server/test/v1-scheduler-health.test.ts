@@ -33,8 +33,8 @@ describe("V1 readiness without Scheduler persistence", () => {
        VALUES ('usr_system_owner', 'owner@example.test', 'unused', 'Owner', ?, ?)`,
     ).run("2026-09-19T11:00:00.000Z", "2026-09-19T11:00:00.000Z");
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES ('ins_system', 'System', 'system', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_system', 'System', 'https://site.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run("2026-09-19T11:00:00.000Z", "2026-09-19T11:00:00.000Z");
     testEnv.sqliteDb.prepare(
       `INSERT INTO instance_memberships (

@@ -27,7 +27,7 @@ Admin 只在当前页面内存保存 Token。刷新、关闭标签页或返回�
 
 ### 1.3 页面三：收集首个 Instance
 
-收集实例名称、实例标识和 Site URL。实例标识只能使用小写字母、数字和短横线，用于 Customer、Magic Link 和 Webhook 地址。
+收集实例名称、Admin/API URL 和 Customer Site URL。Instance ID 由服务端使用 128 位安全随机数自动生成，用户不填写。
 
 最终一次提交：
 
@@ -44,7 +44,6 @@ Content-Type: application/json
   },
   "instance": {
     "name": "Tidest Licensing",
-    "slug": "tidest",
     "admin_api_url": "https://license.tidest.app",
     "customer_site_url": "https://tidest.app"
   }
@@ -143,7 +142,7 @@ Owner 可以修改 Membership 角色、暂停、恢复或软移除：
 
 ### 5.1 请求链接
 
-Customer Site 使用 Instance Slug 请求 Magic Link。服务端先解析 Instance，再在 `instance_id + email` 范围查找 Customer，执行防枚举、冷却和 Turnstile 等公开入口保护。
+Customer Site 不提交 Instance 选择字段。服务端由请求的 Admin/API Origin 唯一解析 Instance，再在 `instance_id + email` 范围查找 Customer，执行防枚举、冷却和 Turnstile 等公开入口保护。
 
 Challenge 与 Delivery 在数据库中先创建，再调用 Provider。URL 使用 Fragment；Customer Site 负责立即清理 Fragment、只在内存保存 Token，并通过明确 POST 消费。
 
@@ -157,11 +156,11 @@ Challenge 与 Delivery 在数据库中先创建，再调用 Provider。URL 使�
 
 ### 6.1 从产品页到 Checkout
 
-Customer Site 由使用方实现。页面从自身配置得到 `instance_slug` 和 Offer，不从可篡改的客户端参数决定 Product 或 Plan。Checkout 成功页只显示支付提交状态；License 签发以已验签 Webhook 履约为准。
+Customer Site 由使用方实现。页面从自身配置得到 Paddle Offer 信息，不从可篡改的客户端参数决定 Product 或 Plan。Customer API 由 Admin/API Origin 唯一确定 Instance。Checkout 成功页只显示支付提交状态；License 签发以已验签 Webhook 履约为准。
 
 ### 6.2 Webhook 接收
 
-Webhook 路径携带 `instance_slug`。服务端：
+Webhook 路径携带 Instance ID。服务端：
 
 1. 解析 Instance；
 2. 在该 Instance 内选择 Provider 配置；
@@ -250,7 +249,7 @@ LicenKit 提供 Customer、Magic Link、License/Activation 和 Billing API 合�
 
 使用方 Customer Site 必须实现：
 
-- `/customer/{instance_slug}/auth` 对应的登录入口或自身等价路由；
+- `/customer/auth` 对应的登录入口或自身等价路由；
 - Fragment Token 读取、立即清理和内存保管；
 - License、设备和订阅管理界面；
 - 对 API 原始错误码的安全展示或支持 ID 关联。

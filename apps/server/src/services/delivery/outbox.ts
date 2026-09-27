@@ -53,7 +53,6 @@ export interface ValidateEmailDeliveryConfigurationInput {
 
 interface InstanceEmailContextRow {
   name: string;
-  slug: string;
   site_url: string;
 }
 
@@ -88,7 +87,7 @@ async function instanceEmailContext(
 ): Promise<InstanceEmailContextRow> {
   const result = await db
     .prepare(
-      `SELECT instance.name, instance.slug, instance.site_url
+      `SELECT instance.name, instance.site_url
        FROM instances AS instance
        WHERE instance.id = ?1
        LIMIT 1`,
@@ -162,7 +161,6 @@ export async function prepareEmailNotificationDelivery(
     {
       trustedSiteUrl: instance.site_url,
       trustedAdminOrigin: input.trustedAdminOrigin,
-      expectedInstanceSlug: instance.slug,
       environment: input.env.ENVIRONMENT,
     },
   );

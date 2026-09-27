@@ -99,7 +99,7 @@ Signed License Token 使用 `ins` Claim。CLI/SDK 按显式 `instanceId/instance
 - 幂等、乱序保护和履约；
 - Sandbox 闭环验证。
 
-Webhook 路径先使用 `instance_slug` 解析 Instance，然后只在该边界内选择 Provider 和处理对象。
+Webhook 路径先使用 Instance ID 解析 Instance，然后只在该边界内选择 Provider 和处理对象。
 
 ### M07 Email Delivery
 
@@ -171,7 +171,7 @@ Customer Session 不与 Admin Session 混用。
 
 ### 4.4 Webhook 请求
 
-`instance_slug` 来自路径，不从 Event Payload 猜测。服务端在该 Instance 内定位 Provider，使用原始 Body 验签，再以 Instance 范围的幂等键持久化。
+Instance ID 来自路径，不从 Event Payload 猜测。服务端在该 Instance 内定位 Provider，使用原始 Body 验签，再以 Instance 范围的幂等键持久化。
 
 ## 5. 写入边界与事务
 
@@ -258,7 +258,7 @@ System Issue 是聚合视图，不覆盖业务对象的原始错误。管理员�
 
 ### 10.2 Instance 配置
 
-- `instances`：名称、Slug、Admin/API URL、Customer Site URL、只读状态；
+- `instances`：随机 ID、名称、Admin/API URL、Customer Site URL、只读状态；
 - Billing/Email 凭据：Admin 写入后加密存储；
 - Product：支付环境、宽限期、试用；
 - Plan：授权条款快照。
@@ -268,10 +268,10 @@ System Issue 是聚合视图，不覆盖业务对象的原始错误。管理员�
 ### 10.3 公开命名
 
 ```text
-JSON / DB     instance_id, instance_slug
-TypeScript    instanceId, instanceSlug
-Swift         instanceID, instanceSlug
-Environment   LICENKIT_INSTANCE_ID, VITE_LICENKIT_INSTANCE_SLUG
+JSON / DB     instance_id
+TypeScript    instanceId
+Swift         instanceID
+Environment   LICENKIT_INSTANCE_ID
 CLI           --instance
 Signed Claim  ins
 ```

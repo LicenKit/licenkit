@@ -80,7 +80,6 @@ describe("email contract registry", () => {
           ? {
               trustedSiteUrl: "https://license.example.com",
               trustedAdminOrigin: "https://license.example.com",
-              expectedInstanceSlug: "example-team",
             }
           : {},
       );
@@ -182,11 +181,10 @@ describe("email contract registry", () => {
     const trustedSiteUrl = "https://license.example.com/site";
     const accessUrl = buildCustomerPortalAccessUrl({
       trustedSiteUrl,
-      instanceSlug: "example-team",
       oneTimeToken: `mlk_${"0".repeat(64)}`,
     });
     expect(accessUrl).toBe(
-      `https://license.example.com/site/customer/example-team/auth#token=mlk_${"0".repeat(64)}`,
+      `https://license.example.com/site/customer/auth#token=mlk_${"0".repeat(64)}`,
     );
     expect(
       validateEmailNotificationVariables(
@@ -197,7 +195,7 @@ describe("email contract registry", () => {
           access_url: accessUrl,
           expires_at: "2026-10-19T10:15:00.000Z",
         },
-        { trustedSiteUrl, expectedInstanceSlug: "example-team" },
+        { trustedSiteUrl },
       ),
     ).toMatchObject({ access_url: accessUrl });
     expectCode(
@@ -220,18 +218,18 @@ describe("email contract registry", () => {
           1,
           {
             instance_name: "Example Team",
-            access_url: `https://evil.example/customer/example-team/auth#token=${"0".repeat(64)}`,
+            access_url: `https://evil.example/customer/auth#token=${"0".repeat(64)}`,
             expires_at: "2026-10-19T10:15:00.000Z",
           },
-          { trustedSiteUrl, expectedInstanceSlug: "example-team" },
+          { trustedSiteUrl },
         ),
       "EMAIL_ACCESS_URL_UNTRUSTED",
     );
     for (const untrustedAccessUrl of [
-      `https://license.example.com/site/customer/other-team/auth#token=mlk_${"0".repeat(64)}`,
-      `https://license.example.com/site/customer/example-team/auth#token=mlk_${"g".repeat(64)}`,
-      `https://license.example.com/site/customer/example-team/auth?source=email#token=mlk_${"0".repeat(64)}`,
-      `https://user:password@license.example.com/site/customer/example-team/auth#token=mlk_${"0".repeat(64)}`,
+      `https://license.example.com/site/customer/other/auth#token=mlk_${"0".repeat(64)}`,
+      `https://license.example.com/site/customer/auth#token=mlk_${"g".repeat(64)}`,
+      `https://license.example.com/site/customer/auth?source=email#token=mlk_${"0".repeat(64)}`,
+      `https://user:password@license.example.com/site/customer/auth#token=mlk_${"0".repeat(64)}`,
     ]) {
       expectCode(
         () =>
@@ -243,7 +241,7 @@ describe("email contract registry", () => {
               access_url: untrustedAccessUrl,
               expires_at: "2026-10-19T10:15:00.000Z",
             },
-            { trustedSiteUrl, expectedInstanceSlug: "example-team" },
+            { trustedSiteUrl },
           ),
         "EMAIL_ACCESS_URL_UNTRUSTED",
       );
@@ -252,7 +250,6 @@ describe("email contract registry", () => {
       () =>
         buildCustomerPortalAccessUrl({
           trustedSiteUrl,
-          instanceSlug: "example-team",
           oneTimeToken: `mlk_${"A".repeat(64)}`,
         }),
       "EMAIL_PORTAL_TOKEN_INVALID",
@@ -263,12 +260,11 @@ describe("email contract registry", () => {
     const token = `mlk_${"0".repeat(64)}`;
     const accessUrl = buildCustomerPortalAccessUrl({
       trustedSiteUrl: "http://localhost:4321/site",
-      instanceSlug: "example-team",
       oneTimeToken: token,
       environment: "development",
     });
     expect(accessUrl).toBe(
-      `http://localhost:4321/site/customer/example-team/auth#token=${token}`,
+      `http://localhost:4321/site/customer/auth#token=${token}`,
     );
     expect(validateEmailNotificationVariables(
       "customer.portal_access_requested",
@@ -280,7 +276,6 @@ describe("email contract registry", () => {
       },
       {
         trustedSiteUrl: "http://localhost:4321/site",
-        expectedInstanceSlug: "example-team",
         environment: "development",
       },
     )).toMatchObject({ access_url: accessUrl });
@@ -294,7 +289,6 @@ describe("email contract registry", () => {
       expectCode(
         () => buildCustomerPortalAccessUrl({
           ...input,
-          instanceSlug: "example-team",
           oneTimeToken: token,
         }),
         "EMAIL_TRUSTED_SITE_URL_INVALID",

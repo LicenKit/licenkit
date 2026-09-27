@@ -73,9 +73,6 @@ export interface SetupDictionary {
   step3SectionSubtitle: string;
   step3InstanceNameLabel: string;
   step3InstanceNamePlaceholder: string;
-  step3InstanceSlugLabel: string;
-  step3InstanceSlugHint: string;
-  step3InstanceSlugPlaceholder: string;
   step3AdminApiUrlLabel: string;
   step3AdminApiUrlHint: string;
   step3AdminApiUrlPlaceholder: string;
@@ -164,7 +161,7 @@ export interface SettingsDictionary {
   instanceDescription: string;
   instanceSectionTitle: string;
   instanceNameLabel: string;
-  instanceSlugLabel: string;
+  instanceIdLabel: string;
   adminApiUrlLabel: string;
   customerSiteUrlLabel: string;
   instanceStatusLabel: string;
@@ -281,6 +278,7 @@ export interface ProductsDictionary {
   trialNoticeTitle: string;
   trialNoticeDesc: (features: string) => string;
   allFeatures: string;
+  editProduct: string;
   archiveProduct: string;
   archiveConfirmTitle: string;
   archiveConfirmDesc: (name: string) => string;
@@ -298,6 +296,8 @@ export interface ProductsDictionary {
   downloadLink: string;
   modalCreateTitle: string;
   modalCreateDesc: string;
+  modalEditTitle: string;
+  modalEditDesc: string;
   fieldName: string;
   fieldSlug: string;
   fieldDesc: string;
@@ -313,6 +313,7 @@ export interface ProductsDictionary {
   fieldTrialFeatures: string;
   fieldTrialFeaturesHint: string;
   btnCreateProduct: string;
+  btnSaveProduct: string;
   modalReleaseTitle: string;
   modalReleaseDesc: string;
   fieldVersion: string;
@@ -388,8 +389,8 @@ export interface LicensePlansDictionary {
   modalEditDesc: string;
   btnSaveNewRevision: string;
   placeholderUpdateWindow: string;
-  placeholderTermSeconds: string;
-  placeholderGraceSeconds: string;
+  placeholderTermDays: string;
+  placeholderGraceDays: string;
 }
 
 export interface LicensesDictionary {
@@ -550,6 +551,8 @@ export interface BillingDictionary {
   fieldClientTokenHint: string;
   fieldWebhookSecret: string;
   fieldWebhookSecretHint: string;
+  fieldWebhookUrl: string;
+  fieldWebhookUrlHint: string;
   fieldApiKey: string;
   fieldApiKeyHint: string;
   btnCreateProvider: string;

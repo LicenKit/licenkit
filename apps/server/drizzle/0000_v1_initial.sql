@@ -566,21 +566,14 @@ CREATE UNIQUE INDEX `uq_instance_memberships_invitation` ON `instance_membership
 CREATE TABLE `instances` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
-	`slug` text NOT NULL,
 	`site_url` text NOT NULL,
 	`admin_api_url` text NOT NULL,
 	`status` text DEFAULT 'active' NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
-	CONSTRAINT "ck_instances_slug" CHECK(length("instances"."slug") > 0
-        and "instances"."slug" = lower("instances"."slug")
-        and "instances"."slug" not glob '*[^a-z0-9-]*'
-        and "instances"."slug" not like '-%'
-        and "instances"."slug" not like '%-'),
 	CONSTRAINT "ck_instances_status" CHECK("instances"."status" in ('active', 'suspended', 'archived'))
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `uq_instances_slug` ON `instances` (`slug`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_instances_admin_api_url` ON `instances` (`admin_api_url`);--> statement-breakpoint
 CREATE TABLE `license_key_rotations` (
 	`id` text PRIMARY KEY NOT NULL,

@@ -28,10 +28,7 @@ User 是使用邮箱和密码登录 Admin 的全局身份：
 
 Instance 是授权业务空间，也是唯一的租户隔离边界。Product、Customer、License、支付、邮件、Customer Session、System Issue 和实例审计都必须归属明确的 Instance。
 
-Instance 有两种标识：
-
-- `instance_id`：稳定内部 ID，用于数据关联、客户端配置和签名 Token；
-- `instance_slug`：URL-safe 的公开标识，用于 Customer Portal、Magic Link 和支付 Webhook 路由。
+Instance 只有一个稳定 ID：首次 Setup 生成不带类型前缀的 22 位 Base64URL 随机字符串，用于数据关联、客户端配置、签名 Token 和支付 Webhook 路由。Customer Portal 与 Magic Link 由 Admin/API Origin 唯一解析 Instance，不再使用第二套人工标识。
 
 当前自部署版创建的唯一 Instance 保持 `active`。Admin 可以展示状态，但不提供修改状态的 API 或界面；`suspended/archived` 仅为未来 SaaS 控制面预留。
 
@@ -206,21 +203,20 @@ Instance Owner 只能读取当前 Instance 的审计，不能读取成员的全�
 
 | 边界 | 形式 | 示例 |
 | --- | --- | --- |
-| 数据库、JSON | `snake_case` | `instance_id`、`instance_slug` |
-| TypeScript | `camelCase` | `instanceId`、`instanceSlug` |
-| Swift | Swift 惯例 | `instanceID`、`instanceSlug` |
-| 环境变量 | 大写下划线 | `LICENKIT_INSTANCE_ID`、`VITE_LICENKIT_INSTANCE_SLUG` |
+| 数据库、JSON | `snake_case` | `instance_id` |
+| TypeScript | `camelCase` | `instanceId` |
+| Swift | Swift 惯例 | `instanceID` |
+| 环境变量 | 大写下划线 | `LICENKIT_INSTANCE_ID` |
 | CLI | 长选项 | `--instance` |
 | Signed Token | 短 Claim | `ins` |
-| Customer 路由 | URL 参数 | `/customer/{instance_slug}/auth` |
+| Customer 路由 | 固定路径 | `/customer/auth` |
 
 返回完整对象时不重复前缀：
 
 ```json
 {
   "instance": {
-    "id": "ins_01...",
-    "slug": "tidest"
+    "id": "3Jd9K_aP0qUwbL6F7sTn2Q"
   }
 }
 ```

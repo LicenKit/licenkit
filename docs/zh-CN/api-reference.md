@@ -45,17 +45,17 @@
 
 API 错误不得丢弃上游来源。支付和邮件投递错误在管理接口中应返回 provider、external event ID 或 Delivery ID、HTTP 状态及脱敏后的原始错误。
 
-### 2.1 Instance 命名合同
+### 2.1 Instance 标识合同
 
-Instance 内部 ID 与公开标识是两个不同字段：`instance_id` 用于数据关联、客户端配置和签名 Token；`instance_slug` 用于 Customer、Magic Link 与支付 Webhook 路由。数据库和对外 JSON 使用 `instance_id/instance_slug`，TypeScript/Swift 使用 `instanceId/instanceSlug`，环境变量使用 `LICENKIT_INSTANCE_ID` 与 `VITE_LICENKIT_INSTANCE_SLUG`，CLI 使用 `--instance`，Swift SDK 使用 `instanceID`，Signed License Token 使用 `ins` Claim。
+Instance 只有一个稳定 ID。首次 Setup 使用 128 位安全随机数生成 22 位 Base64URL 字符串，不带类型前缀；它用于数据关联、客户端配置、签名 Token 与支付 Webhook 路由。数据库和对外 JSON 使用 `instance_id`，TypeScript 使用 `instanceId`，Swift SDK 使用 `instanceID`，环境变量使用 `LICENKIT_INSTANCE_ID`，CLI 使用 `--instance`，Signed License Token 使用 `ins` Claim。
 
-旧 `account_id`、`account_slug`、`accountId`、`accountSlug`、`LICENKIT_ACCOUNT_ID`、`VITE_LICENKIT_ACCOUNT_SLUG`、`--account`、`accountID` 与 `acc` Claim 均不作为别名接受。Instance 不属于管理员登录凭据。
+系统不接受由浏览器提交的 Instance 选择字段。Admin/API Origin 唯一映射 Instance，Customer 请求再校验对应的 Customer Site Origin。Instance 不属于管理员登录凭据。
 
 CLI 激活显式使用 Instance ID，例如：
 
 ```bash
 licenkit activate LK-... \
-  --instance ins_01... \
+  --instance 3Jd9K_aP0qUwbL6F7sTn2Q \
   --product prd_01... \
   --release 2.4.0 \
   --release-platform macos-universal
@@ -73,7 +73,7 @@ POST /api/v1/setup/verify-token
 POST /api/v1/setup
 ```
 
-Setup 使用三个独立页面：第一步只验证部署 Token；第二步收集首位 User 的显示名称、邮箱和密码；第三步收集首个 Instance 的名称、实例标识、LicenKit Admin/API 地址与 Customer Site 地址。前两步不写数据库，Token 只保存在当前页面内存，刷新或关闭后必须重新验证。
+Setup 使用三个独立页面：第一步只验证部署 Token；第二步收集首位 User 的显示名称、邮箱和密码；第三步收集首个 Instance 的名称、LicenKit Admin/API 地址与 Customer Site 地址。前两步不写数据库，Token 只保存在当前页面内存，刷新或关闭后必须重新验证。Instance ID 由服务端在最终提交时自动生成。
 
 第一步请求：
 
@@ -95,7 +95,6 @@ Setup 使用三个独立页面：第一步只验证部署 Token；第二步收�
   },
   "instance": {
     "name": "Example Studio Licensing",
-    "slug": "example-studio",
     "admin_api_url": "https://license.example.com",
     "customer_site_url": "https://www.example.com"
   }
@@ -140,7 +139,7 @@ POST /api/v1/admin/invitations/:invitationId/resend
 POST /api/v1/invitations/accept
 ```
 
-`GET /admin/instance` 对四种 active 角色开放，只读返回当前 Instance 的名称、实例标识、`admin_api_url`、`customer_site_url` 和状态。当前自部署不提供 Instance 状态修改接口；`suspended/archived` 的修改主体属于未来 SaaS 控制面。
+`GET /admin/instance` 对四种 active 角色开放，只读返回当前 Instance 的 ID、名称、`admin_api_url`、`customer_site_url` 和状态。当前自部署不提供 Instance 状态修改接口；`suspended/archived` 的修改主体属于未来 SaaS 控制面。
 
 Profile 只操作当前 User：显示名称可修改，邮箱只读，不存在修改邮箱 API。修改密码必须验证当前密码，并在同一个原子写入中替换密码 Hash、写 identity 审计并撤销该 User 除当前请求外的其他 Admin Session；撤销对该 User 所属的全部 Instance 生效。
 
@@ -153,7 +152,7 @@ Members 与 Invitation 只允许 active Owner 管理。Owner 可以邀请邮箱�
 ```json
 {
   "user": { "id": "usr_01...", "name": "Alex", "email": "alex@example.com" },
-  "instance": { "id": "ins_01...", "slug": "example-studio", "name": "Example Studio", "admin_api_url": "https://license.example.com", "customer_site_url": "https://www.example.com", "status": "active" },
+  "instance": { "id": "3Jd9K_aP0qUwbL6F7sTn2Q", "name": "Example Studio", "admin_api_url": "https://license.example.com", "customer_site_url": "https://www.example.com", "status": "active" },
   "membership": { "role": "owner", "status": "active" },
   "expires_at": "2026-09-28T10:00:00Z"
 }
@@ -590,7 +589,6 @@ POST /api/v1/customer/auth/magic-link
 
 ```json
 {
-  "instance_slug": "example-studio",
   "email": "buyer@example.com",
   "turnstile_token": "一次性 Turnstile Token"
 }
@@ -615,7 +613,7 @@ Turnstile 验证与共享邮件凭证预检通过后才查询 Customer。有效 
 
 Turnstile 已通过、Customer 不存在、Customer 存在但命中冷却、成功创建新链接四个分支的公开响应保持相同，不包含 Customer ID、Challenge ID、冷却剩余时间或是否已发送邮件，并使用相同的缓存头、最短响应时间策略和小幅随机抖动。Magic Link 请求页可以加载 Turnstile 官方资源；携带 Magic Link Token 的 `/auth#token=...` 落地页仍不得加载任何第三方资源。
 
-通知中的 URL 使用 Instance 路径与 Fragment 携带 Token，例如 `https://site.example.com/customer/example-studio/auth#token=...`。落地页不得加载第三方资源，设置 `Referrer-Policy: no-referrer`、`Cache-Control: no-store`，并使用只允许站点资源且 `connect-src` 精确包含 LicenKit API Origin 的严格 Content Security Policy。页面读取 Token 后立即用 `history.replaceState` 清除 Fragment。GET 或页面加载不得消费 Challenge；用户显式点击“继续登录”后才发起消费 POST，避免邮件扫描器提前消费。
+通知中的 URL 使用固定 Customer Auth 路径与 Fragment 携带 Token，例如 `https://site.example.com/customer/auth#token=...`。落地页不得加载第三方资源，设置 `Referrer-Policy: no-referrer`、`Cache-Control: no-store`，并使用只允许站点资源且 `connect-src` 精确包含 LicenKit API Origin 的严格 Content Security Policy。页面读取 Token 后立即用 `history.replaceState` 清除 Fragment。GET 或页面加载不得消费 Challenge；用户显式点击“继续登录”后才发起消费 POST，避免邮件扫描器提前消费。
 
 ### 5.2 消费 Magic Link
 
@@ -625,14 +623,13 @@ POST /api/v1/customer/auth/magic-link/consume
 
 ```json
 {
-  "instance_slug": "example-studio",
   "token": "mlk_..."
 }
 ```
 
 服务端对 Token 计算哈希，并在同一 D1 原子批次中写入 `consumed_at` 和与该 Challenge 唯一绑定的 Customer Session。Challenge 的一次性终态必须由数据库约束或 Trigger 在争用失败时直接抛错并回滚整个批次，不能在批次提交后检查条件更新的 `0` 行结果。并发消费最多一个请求成功；失败方不得留下 Session、审计、Delivery 更新或其他副作用。
 
-服务端先以当前请求的 Admin/API Origin 找到 Instance，再要求请求中的 `instance_slug` 属于该 Instance，随后用 `instance_id + token_hash` 查询 Challenge。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie、Instance Cookie 和 CSRF Cookie；三者都不设置 `Domain`。响应正文同时返回 `csrf_token`，服务端只保存 Session 与 CSRF Token 的 Hash。后续会话按 `instance_id + session_token_hash` 查询：跨 Origin 请求要求 Origin 精确等于该 Instance 的 `customer_site_url` Origin；浏览器普通同 Origin GET 允许缺少 Origin，但请求 URL Origin 必须与它相同。状态写入始终要求精确 Origin、`X-CSRF-Token` Header、CSRF Cookie 和当前 Session Hash 四者一致。只有最终 2xx 会 best-effort 更新 `last_seen_at`；更新失败记录 `CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED`，但保留已完成的业务响应，3xx/4xx 不更新。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
+服务端先以当前请求的 Admin/API Origin 找到 Instance，再用该 `instance_id + token_hash` 查询 Challenge；请求体不能选择或覆盖 Instance。成功响应创建默认 7 天有效的服务端 Session，并设置 HttpOnly、Secure、SameSite=Lax 的 host-only Session Cookie、Instance Cookie 和 CSRF Cookie；三者都不设置 `Domain`。响应正文同时返回 `csrf_token`，服务端只保存 Session 与 CSRF Token 的 Hash。后续会话按 `instance_id + session_token_hash` 查询：跨 Origin 请求要求 Origin 精确等于该 Instance 的 `customer_site_url` Origin；浏览器普通同 Origin GET 允许缺少 Origin，但请求 URL Origin 必须与它相同。状态写入始终要求精确 Origin、`X-CSRF-Token` Header、CSRF Cookie 和当前 Session Hash 四者一致。只有最终 2xx 会 best-effort 更新 `last_seen_at`；更新失败记录 `CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED`，但保留已完成的业务响应，3xx/4xx 不更新。过期、已消费、已吊销、无效 Token 或 disabled Customer 返回统一的 `CUSTOMER_MAGIC_LINK_INVALID`，不能暴露具体匹配状态。
 
 ```text
 GET  /api/v1/customer/auth/csrf-token
@@ -745,7 +742,7 @@ POST /api/v1/client/activate
 
 ```json
 {
-  "instance_id": "ins_01...",
+  "instance_id": "3Jd9K_aP0qUwbL6F7sTn2Q",
   "product_id": "prd_01...",
   "license_key": "LK-...",
   "fingerprint": "sha256:...",
@@ -824,7 +821,7 @@ POST /api/v1/client/validate
 
 ```json
 {
-  "instance_id": "ins_01...",
+  "instance_id": "3Jd9K_aP0qUwbL6F7sTn2Q",
   "product_id": "prd_01...",
   "fingerprint": "sha256:...",
   "release_version": "2.4.0",
@@ -914,7 +911,7 @@ POST /api/v1/client/trials/claim
 
 ```json
 {
-  "instance_id": "ins_01...",
+  "instance_id": "3Jd9K_aP0qUwbL6F7sTn2Q",
   "product_id": "prd_01...",
   "fingerprint": "sha256:...",
   "device_platform": "macos-arm64",
@@ -968,7 +965,7 @@ POST /api/v1/client/deactivate
 ### 7.6 公钥集合
 
 ```text
-GET /api/v1/client/products/:productId/signing-keys?instance_id=ins_01...
+GET /api/v1/client/products/:productId/signing-keys?instance_id=3Jd9K_aP0qUwbL6F7sTn2Q
 ```
 
 该接口用于诊断和密钥轮换信息发布，不能替代 App 内置的信任根。响应包含 key ID、状态和公钥，不包含私钥。
@@ -976,14 +973,14 @@ GET /api/v1/client/products/:productId/signing-keys?instance_id=ins_01...
 ## 8. Payment Inbound Webhook
 
 ```text
-POST /api/v1/webhooks/payments/:instance_slug/:billingProviderId
+POST /api/v1/webhooks/payments/:instanceId/paddle/:environment
 ```
 
-V1 的首个真实实现是 Paddle；同一路由和处理顺序同时用于 Paddle Sandbox 与 Live，只由 Billing Provider 配置区分环境。
+V1 的支付渠道是 Paddle，`:environment` 只能是 `sandbox` 或 `live`。回调地址在创建支付通道前即可由 Instance 的 Admin/API 地址、Instance ID 和 Paddle 环境确定；同一 Instance 的每个 Paddle 环境只允许一条 Billing Provider 配置。
 
 处理顺序固定为：
 
-1. 根据 `instance_slug` 解析 Instance，再以 `instance_id + billing_provider_id` 读取唯一 provider 和 environment 配置；
+1. 根据路径中的 Instance ID 读取 Instance，再以 `instance_id + provider=paddle + environment` 读取唯一 Billing Provider 配置；
 2. 对原始请求体执行渠道签名验证；
 3. 提取稳定的外部事件 ID；
 4. 提取事件中存在的外部 Customer、Transaction、Subscription 与 Adjustment ID，并尝试写入 Inbound Event；
@@ -992,7 +989,7 @@ V1 的首个真实实现是 Paddle；同一路由和处理顺序同时用于 Pad
 7. 请求后立即尝试履约以降低延迟；
 8. 即时处理未完成时，由 Scheduled Worker 根据同一条 Inbound Event 恢复。
 
-Billing Provider ID 只用于路由配置，不能替代验签，也不从请求体接受 `instance_id`。所有已注册 provider，以及未来新增的 custom Adapter，都必须验签。没有签名配置时返回配置错误，不得继续处理。
+路径中的 Paddle 环境只用于定位该 Instance 的支付通道配置，不能替代验签，也不从请求体接受 `instance_id`。Sandbox 与 Live 使用同一处理流程，区别只来自对应环境的 Billing Provider 配置。没有签名配置时返回配置错误，不得继续处理。
 
 只有 Inbound Event 已可靠持久化才返回 2xx。签名无效返回 4xx，数据库写入失败返回 5xx 让 Paddle 重试；事件已持久化后的 Customer API 超时、依赖未齐或履约失败不再改变本次接收响应，由内部状态机和 Scheduled Worker 重试，避免把 Paddle 重投当作内部任务队列。
 

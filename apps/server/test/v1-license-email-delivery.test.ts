@@ -67,8 +67,8 @@ describe("License email business paths", () => {
     testEnv = createTestEnv({ STORAGE_ENCRYPTION_KEY_ID: "test-primary" });
     const nowIso = NOW.toISOString();
     testEnv.sqliteDb.prepare(
-      `INSERT INTO instances (id, name, slug, site_url, admin_api_url, status, created_at, updated_at)
-       VALUES (?, 'License Email Instance', 'license-email', 'https://license.example.test', 'https://license.example.test', 'active', ?, ?)`,
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES (?, 'License Email Instance', 'https://license.example.test', 'https://license.example.test', 'active', ?, ?)`,
     ).run(INSTANCE_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO users (

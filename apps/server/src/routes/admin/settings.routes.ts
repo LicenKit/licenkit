@@ -14,7 +14,7 @@ adminInstanceRouter.get(
     const instanceId = c.get("instanceId")!;
     const result = await c.env.DB
       .prepare(
-        `SELECT id, name, slug, site_url AS customer_site_url, admin_api_url,
+        `SELECT id, name, site_url AS customer_site_url, admin_api_url,
                 status, created_at, updated_at
          FROM instances
          WHERE id = ?1
@@ -24,7 +24,6 @@ adminInstanceRouter.get(
       .all<{
         id: string;
         name: string;
-        slug: string;
         customer_site_url: string;
         admin_api_url: string;
         status: "active" | "suspended" | "archived";

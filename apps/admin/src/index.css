@@ -497,6 +497,10 @@ td select.input {
 .readiness-list strong { font-size: .75rem; }
 .readiness-list small { color: var(--faint); font-size: .72rem; }
 .endpoint-url { display: flex; align-items: center; gap: .4rem; overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+.webhook-endpoint { display: flex; flex-direction: column; gap: .45rem; }
+.webhook-endpoint > div { display: flex; align-items: center; gap: .55rem; }
+.webhook-endpoint code { min-width: 0; flex: 1; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: 8px; background: rgba(8, 16, 29, .5); color: #bdc6ff; font-size: .75rem; overflow-wrap: anywhere; }
+.webhook-endpoint .button { flex: 0 0 auto; }
 .diagnostic-detail { display: flex; flex-direction: column; gap: 1rem; }
 .diagnostic-detail section > h3 { color: #cbd5e6; font-size: .78rem; }
 

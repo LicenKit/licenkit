@@ -43,19 +43,15 @@ export interface EmailVariableValidationContext {
   readonly authenticatedPreparedDelivery?: boolean;
   /** Runtime environment used by the narrow local-loopback HTTP exception. */
   readonly environment?: string;
-  /** The current Instance slug expected in a customer portal access URL. */
-  readonly expectedInstanceSlug?: string;
 }
 
 export interface CustomerPortalAccessUrlInput {
   readonly trustedSiteUrl: string;
-  readonly instanceSlug: string;
   readonly oneTimeToken: string;
   readonly environment?: string;
 }
 
 const EMAIL_SCHEMA = z.string().email().max(320);
-const INSTANCE_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const LICENKIT_PRODUCT_ID_PATTERN = /^prd_[0-9a-hjkmnp-tv-z]{26}$/;
 const LICENKIT_LICENSE_ID_PATTERN = /^lic_[0-9a-hjkmnp-tv-z]{26}$/;
 const LICENSE_KEY_PATTERN = /^LK-[0-9A-HJKMNP-TV-Z]{6}(?:-[0-9A-HJKMNP-TV-Z]{6}){3}-[0-9A-HJKMNP-TV-Z]{2}$/;
@@ -191,7 +187,7 @@ const PORTAL_ACCESS_VARIABLES = Object.freeze([
     maxLength: 2048,
     description: "由 LicenKit 可信站点配置生成且包含一次性 Token 的完整访问地址",
     example:
-      "https://license.example.com/customer/example-team/auth#token=mlk_0000000000000000000000000000000000000000000000000000000000000000",
+      "https://license.example.com/customer/auth#token=mlk_0000000000000000000000000000000000000000000000000000000000000000",
   }),
   variable({
     name: "expires_at",
@@ -371,16 +367,6 @@ export function buildCustomerPortalAccessUrl(
   input: CustomerPortalAccessUrlInput,
 ): string {
   const siteUrl = parseTrustedSiteUrl(input.trustedSiteUrl, input.environment);
-  if (
-    !INSTANCE_SLUG_PATTERN.test(input.instanceSlug) ||
-    input.instanceSlug.length > 63
-  ) {
-    throw contractError(
-      "EMAIL_PORTAL_INSTANCE_SLUG_INVALID",
-      "The Instance slug for the customer portal access URL is invalid.",
-      { field: "instanceSlug" },
-    );
-  }
   if (!CUSTOMER_PORTAL_TOKEN_PATTERN.test(input.oneTimeToken)) {
     throw contractError(
       "EMAIL_PORTAL_TOKEN_INVALID",
@@ -391,7 +377,7 @@ export function buildCustomerPortalAccessUrl(
 
   const pathPrefix = siteUrl.pathname === "/" ? "" : siteUrl.pathname;
   const accessUrl = new URL(siteUrl.origin);
-  accessUrl.pathname = `${pathPrefix}/customer/${encodeURIComponent(input.instanceSlug)}/auth`;
+  accessUrl.pathname = `${pathPrefix}/customer/auth`;
   accessUrl.hash = `token=${encodeURIComponent(input.oneTimeToken)}`;
   return accessUrl.toString();
 }
@@ -433,23 +419,6 @@ function assertTrustedPortalAccessUrl(
       { variable: "access_url" },
     );
   }
-  if (!context.expectedInstanceSlug) {
-    throw contractError(
-      "EMAIL_EXPECTED_INSTANCE_SLUG_REQUIRED",
-      "The expected Instance slug is required to validate access_url.",
-      { variable: "access_url" },
-    );
-  }
-  if (
-    !INSTANCE_SLUG_PATTERN.test(context.expectedInstanceSlug) ||
-    context.expectedInstanceSlug.length > 63
-  ) {
-    throw contractError(
-      "EMAIL_EXPECTED_INSTANCE_SLUG_INVALID",
-      "The expected Instance slug used to validate access_url is invalid.",
-      { variable: "access_url" },
-    );
-  }
   const siteUrl = parseTrustedSiteUrl(context.trustedSiteUrl, context.environment);
   let accessUrl: URL;
   try {
@@ -469,7 +438,7 @@ function assertTrustedPortalAccessUrl(
   const token = accessUrl.hash.startsWith("#token=")
     ? accessUrl.hash.slice("#token=".length)
     : "";
-  const expectedPath = `/customer/${context.expectedInstanceSlug}/auth`;
+  const expectedPath = "/customer/auth";
   if (
     !isTrustedUrlProtocolAllowed(accessUrl, context.environment) ||
     accessUrl.origin !== siteUrl.origin ||
