@@ -69,8 +69,15 @@ const TemplateBindingSchema = z.object({
 
 const DefaultTemplateInstallSchema = z.object({
   full_access_api_key: z.string().min(1).max(2048),
-}).strict().transform((input) => ({
+  notification_type: z.string().trim().min(1).max(120).optional(),
+  contract_version: z.number().int().min(1).optional(),
+}).strict().refine(
+  (input) => Boolean(input.notification_type) === Boolean(input.contract_version),
+  "notification_type and contract_version must be provided together",
+).transform((input) => ({
   fullAccessApiKey: input.full_access_api_key,
+  notificationType: input.notification_type,
+  contractVersion: input.contract_version,
 }));
 
 export const EmailConfigurationTestSchema = z.object({
@@ -588,7 +595,9 @@ adminEmailIntegrationsRouter.post(
       );
     }
 
-    const contracts = listEmailNotificationContracts();
+    const contracts = input.notificationType && input.contractVersion
+      ? [getEmailNotificationContract(input.notificationType, input.contractVersion)]
+      : listEmailNotificationContracts();
     const existingResult = await c.env.DB.prepare(
       `SELECT id, email_integration_id, notification_type, contract_version,
               provider_template_ref, status, created_at, updated_at
@@ -617,16 +626,39 @@ adminEmailIntegrationsRouter.post(
         continue;
       }
 
-      const installed = await installResendDefaultTemplate({
-        apiKey: input.fullAccessApiKey,
-        integrationId,
-        contract,
-        example: getEmailProviderTemplateExample(
-          "resend",
-          contract.notificationType,
-          contract.version,
-        ),
-      });
+      let installed: Awaited<ReturnType<typeof installResendDefaultTemplate>>;
+      try {
+        installed = await installResendDefaultTemplate({
+          apiKey: input.fullAccessApiKey,
+          integrationId,
+          contract,
+          example: getEmailProviderTemplateExample(
+            "resend",
+            contract.notificationType,
+            contract.version,
+          ),
+        });
+      } catch (error) {
+        if (!(error instanceof AppError)) throw error;
+        const installedCount = items.filter((item) => item.outcome === "installed").length;
+        const skippedCount = items.filter((item) => item.outcome === "already_bound").length;
+        const progress = {
+          failedNotificationType: contract.notificationType,
+          failedContractVersion: contract.version,
+          installedCount,
+          skippedCount,
+          completedCount: items.length,
+          pendingCount: Math.max(0, contracts.length - items.length - 1),
+          totalCount: contracts.length,
+        };
+        throw new AppError(
+          error.code,
+          error.message,
+          error.status,
+          { ...error.details, ...progress },
+          { ...error.source, ...progress },
+        );
+      }
       const bindingId = `etb_${ulid().toLowerCase()}`;
       const now = new Date().toISOString();
       await c.env.DB.batch([

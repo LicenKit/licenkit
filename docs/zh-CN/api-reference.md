@@ -548,7 +548,7 @@ POST   /api/v1/admin/email-integrations/:integrationId/template-bindings/:notifi
 
 V1 `provider` 只允许 `resend`。创建时提交 `name`、`api_key`、`default_from_email`、可选 `default_from_name`/`reply_to_email` 和 `max_automatic_attempts`。API Key 加密保存；响应只返回 `credential_configured`，不返回密钥。Provider 是不可变连接身份。Integration 不含 revision；凭证、From 或 Reply-To 修改后，未成功 Delivery 下一次发送直接读取最新配置。
 
-`install-defaults` 提交 `{ full_access_api_key }`，使用 Resend Full access Key 将代码内置的当前五份参考 subject/HTML/text 和变量声明创建并发布为 Resend Template，再把返回的 Template ID 写入缺失的 Binding。该 Key 只存在于本次请求内，不写入 Integration、数据库、响应或审计；日常发送仍使用 Integration 中保存的 Sending access Key。接口不会覆盖已有 Binding，部分成功后再次调用只继续处理尚未绑定的合同。全部 Binding 建立后，管理端不再显示安装入口。安装完成后 LicenKit 不读取、比较、更新、删除或同步远程模板。
+`install-defaults` 提交 `{ full_access_api_key }`；管理端逐项安装时还会提交 `{ notification_type, contract_version }`，使一次请求只处理一份代码内置模板。服务端使用 Resend Full access Key 创建并发布对应的 subject/HTML/text 和变量声明，再把返回的 Template ID 写入缺失的 Binding。该 Key 只存在于请求内，不写入 Integration、数据库、响应或审计；日常发送仍使用 Integration 中保存的 Sending access Key。管理端通过逐模板请求展示真实进度，并在相邻模板任务之间等待 5 秒以控制 Resend 请求频率。接口不会覆盖已有 Binding；失败响应保留 Resend 原始错误、失败通知类型及已完成/待处理数量，已成功的 Binding 不回滚，再次执行只继续处理尚未绑定的合同。全部 Binding 建立后，管理端不再显示安装入口。安装完成后 LicenKit 不读取、比较、更新、删除或同步远程模板。
 
 五种邮件 Binding 都可以通过各自的 `:notificationType/test` 端点独立执行真实 Provider Test，测试一个 Binding 不要求其他 Binding 已配置或已通过。管理端展示当前 Binding 配置，不展示或保存测试历史。
 

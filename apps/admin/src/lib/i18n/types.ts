@@ -30,6 +30,7 @@ export interface CommonDictionary {
   statusDisabled: string;
   statusDraft: string;
   unknownError: string;
+  requestFailed: string;
   retry: string;
   pagination: {
     pageInfo: (page: number, total: number) => string;
@@ -738,6 +739,14 @@ export interface EmailDictionary {
   fieldFullAccessApiKeyHint: string;
   defaultTemplateInstallNoticeTitle: string;
   defaultTemplateInstallNoticeDesc: string;
+  defaultTemplateInstallProgressTemplate: string;
+  defaultTemplateInstallStatusPending: string;
+  defaultTemplateInstallStatusWaiting: string;
+  defaultTemplateInstallStatusInstalling: string;
+  defaultTemplateInstallStatusInstalled: string;
+  defaultTemplateInstallStatusSkipped: string;
+  defaultTemplateInstallStatusFailed: string;
+  defaultTemplateInstallDelayNotice: string;
   btnConfirmDefaultTemplateInstall: string;
   testingNoticeTitle: string;
   testingNoticeDesc: string;

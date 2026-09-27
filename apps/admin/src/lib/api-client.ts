@@ -47,11 +47,43 @@ export class ApiError extends Error {
 
 export function isApiError(value: unknown): value is ApiError { return value instanceof ApiError }
 
+function detailString(details: unknown, ...keys: string[]): string | null {
+  if (!isRecord(details)) return null;
+  for (const key of keys) {
+    const value = details[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function formatProviderCause(details: unknown): string | null {
+  const providerDetail = detailString(details, "provider_error_detail", "providerErrorDetail");
+  if (!providerDetail) return null;
+
+  const provider = detailString(details, "provider");
+  const operation = detailString(details, "operation");
+  const httpStatus = detailString(details, "http_status", "httpStatus");
+  const providerType = detailString(details, "provider_error_type", "providerErrorType");
+  const providerCode = detailString(details, "provider_error_code", "providerErrorCode");
+  const providerIdentity = [...new Set([providerType, providerCode].filter((value): value is string => Boolean(value)))].join("/");
+  const context = [
+    provider,
+    operation,
+    httpStatus ? `upstream HTTP ${httpStatus}` : null,
+    providerIdentity || null,
+  ].filter((value): value is string => Boolean(value));
+
+  return context.length > 0 ? `${context.join(" · ")}: ${providerDetail}` : providerDetail;
+}
+
 export function formatApiError(value: unknown): string {
   if (value instanceof ApiError) {
     const request = value.requestId ? ` · ${value.requestId}` : "";
     const localizedMessage = getErrorMessage(value.code, value.message);
-    return `${value.code}: ${localizedMessage}${request}`;
+    const providerCause = formatProviderCause(value.details);
+    const cause = providerCause && providerCause !== localizedMessage ? ` · ${providerCause}` : "";
+    return `${value.code}: ${localizedMessage}${cause}${request}`;
   }
   return value instanceof Error ? value.message : "发生未知错误";
 }
@@ -543,10 +575,14 @@ export const api = {
       rotateCredential: (id: string, apiKey: string) => request<{ id: Identifier; credentialConfigured: true }>(`/admin/email-integrations/${encodeURIComponent(id)}/rotate-credential`, { method: "POST", body: { apiKey }, scope: "admin" }),
       disable: (id: string) => request<{ id: Identifier; status: "disabled" }>(`/admin/email-integrations/${encodeURIComponent(id)}/disable`, { method: "POST", scope: "admin" }),
       enable: (id: string) => request<{ id: Identifier; status: "active" }>(`/admin/email-integrations/${encodeURIComponent(id)}/enable`, { method: "POST", scope: "admin" }),
-      installDefaultTemplates: (id: string, fullAccessApiKey: string) =>
+      installDefaultTemplates: (
+        id: string,
+        fullAccessApiKey: string,
+        target?: { notificationType: string; contractVersion: number },
+      ) =>
         request<EmailDefaultTemplateInstallationResult>(`/admin/email-integrations/${encodeURIComponent(id)}/template-bindings/install-defaults`, {
           method: "POST",
-          body: { fullAccessApiKey },
+          body: { fullAccessApiKey, ...target },
           scope: "admin",
         }),
       bindings: {

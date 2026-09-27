@@ -219,8 +219,8 @@ export function ErrorPanel({ error, title, onClose, floating = true }: ErrorPane
   }
 
   if (!error || error === dismissedError) return null;
-  const panelTitle = title ?? t.common.unknownError;
   const apiError = error instanceof ApiError ? error : null;
+  const panelTitle = title ?? (apiError ? t.common.requestFailed : t.common.unknownError);
   const codedError = error instanceof Error && "code" in error && typeof error.code === "string" ? error : null;
   const details = apiError?.details ?? (codedError && "details" in codedError ? codedError.details : undefined);
   const message = apiError ? formatApiError(apiError) : codedError ? `${codedError.code}: ${codedError.message}` : formatApiError(error);

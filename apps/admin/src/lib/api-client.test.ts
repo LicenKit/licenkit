@@ -139,4 +139,27 @@ describe("Admin API JSON boundary", () => {
     });
     expect(formatApiError(errorUnknown)).toBe("UNKNOWN_CUSTOM_ERROR: An unfamiliar internal error");
   });
+
+  it("formatApiError 默认展示上游服务返回的精确错误而不是只保留泛化文案", () => {
+    const error = new ApiError({
+      code: "EMAIL_DEFAULT_TEMPLATE_INSTALL_PROVIDER_REJECTED",
+      message: "Resend rejected the default template installation request.",
+      status: 502,
+      method: "POST",
+      path: "/api/v1/admin/email-integrations/emi_test/template-bindings/install-defaults",
+      requestId: "req_licenkit",
+      details: {
+        provider: "resend",
+        operation: "create_template",
+        http_status: 429,
+        provider_error_type: "rate_limit_exceeded",
+        provider_error_code: "rate_limit_exceeded",
+        provider_error_detail: "Too many requests. Please retry later.",
+      },
+    });
+
+    expect(formatApiError(error)).toBe(
+      "EMAIL_DEFAULT_TEMPLATE_INSTALL_PROVIDER_REJECTED: Resend 拒绝了模板安装请求 · resend · create_template · upstream HTTP 429 · rate_limit_exceeded: Too many requests. Please retry later. · req_licenkit",
+    );
+  });
 });

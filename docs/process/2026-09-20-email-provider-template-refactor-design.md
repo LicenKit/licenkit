@@ -198,7 +198,7 @@ await prepareEmailNotificationDelivery({
 保留：
 
 - Email Integration 配置、凭证轮换、启用/禁用；
-- 使用不落库的临时 Resend Full access Key，一次性创建、发布并绑定缺失的内置默认模板；成功绑定后不再读取、更新、删除或同步远程模板；
+- 使用不落库的临时 Resend Full access Key，按模板逐项创建、发布并绑定缺失的内置默认模板；管理端显示真实进度，相邻模板任务间隔 5 秒，单项失败保留原始 Provider 错误和此前成功 Binding；成功绑定后不再读取、更新、删除或同步远程模板；
 - Template Binding 配置、合同变量和参考模板；
 - 即时发送测试；
 - Email Delivery 列表、诊断和人工重发；

@@ -124,7 +124,7 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 在 Admin 中继续配置：
 
 1. Email Integration：V1 选择 Resend，配置 API Key、From/Reply-To 和重试预算；API Key 只在写入时提交，之后不返回明文；
-2. 在邮件配置页使用临时 Resend Full access Key 执行一次“安装默认模板”；LicenKit 创建并发布五个外部模板，自动将 Template ID 绑定到四个 Customer 合同和 `instance.member_invited@1` Invitation 合同。临时 Key 不保存，日常发送继续使用 Integration 中的 Sending access Key；
+2. 在邮件配置页使用临时 Resend Full access Key 执行一次“安装默认模板”；管理端进度表逐项显示五个模板的等待、安装、完成、跳过或失败状态，相邻模板任务之间等待 5 秒。LicenKit 自动将 Template ID 绑定到四个 Customer 合同和 `instance.member_invited@1` Invitation 合同；临时 Key 不保存，日常发送继续使用 Integration 中的 Sending access Key；
 3. 分别创建 Sandbox/Live Paddle Billing Provider，配置公开 Client-side Token、Platform Webhook Secret 和独立的 Simulator Webhook Secret；
 4. Product、License Plan、Offer Mapping 和 Product Release；
 5. 需要本地签名凭据时配置 Product Signing Key；

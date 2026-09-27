@@ -128,6 +128,10 @@ describe("Resend default template installer", () => {
         headers: {
           "content-type": "application/json",
           "x-resend-request-id": "req_template_install",
+          "retry-after": "1",
+          "ratelimit-limit": "10",
+          "ratelimit-remaining": "0",
+          "ratelimit-reset": "1",
         },
       })) as unknown as typeof fetch;
 
@@ -148,6 +152,10 @@ describe("Resend default template installer", () => {
         providerErrorType: "restricted_api_key",
         providerErrorCode: "invalid_permission",
         providerRequestId: "req_template_install",
+        providerRetryAfter: "1",
+        providerRateLimitLimit: "10",
+        providerRateLimitRemaining: "0",
+        providerRateLimitReset: "1",
       },
     });
     expect(JSON.stringify((caught as AppError).details)).not.toContain(API_KEY);

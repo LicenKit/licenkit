@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Copy, Download, KeyRound, Mail, Pencil, Plus, Power, RefreshCw, Send, Upload } from "lucide-react";
 import {
   api,
+  formatApiError,
   type EmailConfigurationTestResult,
   type EmailDefaultTemplateInstallationResult,
   type EmailIntegration,
@@ -20,6 +21,29 @@ interface IntegrationForm {
   defaultFromName: string;
   replyToEmail: string;
   maxAutomaticAttempts: string;
+}
+
+type DefaultTemplateInstallProgressStatus =
+  | "pending"
+  | "waiting"
+  | "installing"
+  | "installed"
+  | "already_bound"
+  | "failed";
+
+interface DefaultTemplateInstallProgressRow {
+  notificationType: string;
+  contractVersion: number;
+  name: string;
+  status: DefaultTemplateInstallProgressStatus;
+  providerTemplateRef?: string;
+  error?: string;
+}
+
+const DEFAULT_TEMPLATE_INSTALL_DELAY_MS = 5_000;
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 const emptyIntegrationForm = (): IntegrationForm => ({
@@ -70,6 +94,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
     integrationId: string;
     result: EmailDefaultTemplateInstallationResult;
   } | null>(null);
+  const [installProgress, setInstallProgress] = useState<DefaultTemplateInstallProgressRow[]>([]);
   const [bindingContract, setBindingContract] = useState<EmailTemplateContract | null>(null);
   const [providerTemplateRef, setProviderTemplateRef] = useState("");
   const [testContract, setTestContract] = useState<EmailTemplateContract | null>(null);
@@ -205,17 +230,77 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
     if (!installTarget) return;
     setSaving(true);
     setError(null);
+    const integrationId = installTarget.id;
+    const tasks = installProgress.filter((row) => row.status === "pending" || row.status === "failed");
+    const completedItems: EmailDefaultTemplateInstallationResult["items"] = installProgress
+      .filter((row) => (row.status === "installed" || row.status === "already_bound") && row.providerTemplateRef)
+      .map((row) => ({
+        notificationType: row.notificationType,
+        contractVersion: row.contractVersion,
+        providerTemplateRef: row.providerTemplateRef!,
+        outcome: row.status === "installed" ? "installed" : "already_bound",
+      }));
+    let installedCount = installProgress.filter((row) => row.status === "installed").length;
+    let skippedCount = installProgress.filter((row) => row.status === "already_bound").length;
+    setInstallProgress((rows) => rows.map((row) => row.status === "failed"
+      ? { ...row, status: "pending", error: undefined }
+      : row));
     try {
-      const result = await api.admin.emailIntegrations.installDefaultTemplates(
-        installTarget.id,
-        fullAccessApiKey,
-      );
-      const integrationId = installTarget.id;
-      setInstallResult({ integrationId, result });
-      setInstallTarget(null);
+      for (const [index, task] of tasks.entries()) {
+        if (index > 0) {
+          setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
+            ? { ...row, status: "waiting", error: undefined }
+            : row));
+          await wait(DEFAULT_TEMPLATE_INSTALL_DELAY_MS);
+        }
+        setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
+          ? { ...row, status: "installing", error: undefined }
+          : row));
+
+        try {
+          const result = await api.admin.emailIntegrations.installDefaultTemplates(
+            integrationId,
+            fullAccessApiKey,
+            {
+              notificationType: task.notificationType,
+              contractVersion: task.contractVersion,
+            },
+          );
+          const item = result.items[0];
+          if (!item) throw new Error(`Template installation returned no result for ${task.notificationType}.`);
+          completedItems.push(item);
+          if (item.outcome === "installed") installedCount += 1;
+          else skippedCount += 1;
+          setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
+            ? {
+              ...row,
+              status: item.outcome,
+              providerTemplateRef: item.providerTemplateRef,
+              error: undefined,
+            }
+            : row));
+        } catch (caught) {
+          setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
+            ? { ...row, status: "failed", error: formatApiError(caught) }
+            : row));
+          await load(integrationId);
+          setError(caught);
+          return;
+        }
+      }
+
+      setInstallResult({
+        integrationId,
+        result: {
+          provider: "resend",
+          installedCount,
+          skippedCount,
+          totalCount: installProgress.length,
+          complete: true,
+          items: completedItems,
+        },
+      });
       await load(integrationId);
-    } catch (caught) {
-      setError(caught);
     } finally {
       setFullAccessApiKey("");
       setSaving(false);
@@ -394,6 +479,16 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                   setInstallTarget(selectedIntegration);
                   setFullAccessApiKey("");
                   setInstallResult(null);
+                  setInstallProgress(currentContracts.map((contract) => {
+                    const binding = bindingsByType.get(contract.notificationType);
+                    return {
+                      notificationType: contract.notificationType,
+                      contractVersion: contract.version,
+                      name: contract.name,
+                      status: binding ? "already_bound" : "pending",
+                      ...(binding ? { providerTemplateRef: binding.providerTemplateRef } : {}),
+                    };
+                  }));
                 }}
               >
                 <Upload className="size-4" />{t.email.btnInstallDefaultTemplates}
@@ -569,9 +664,15 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
 
       <Modal
         open={Boolean(installTarget)}
-        onClose={() => { setInstallTarget(null); setFullAccessApiKey("") }}
+        onClose={() => {
+          if (saving) return;
+          setInstallTarget(null);
+          setFullAccessApiKey("");
+          setInstallProgress([]);
+        }}
         title={t.email.modalDefaultTemplateInstallTitle}
         description={t.email.modalDefaultTemplateInstallDesc(missingBindingCount)}
+        wide
       >
         <form className="form-stack" onSubmit={installDefaultTemplates}>
           <Field
@@ -583,6 +684,7 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
               value={fullAccessApiKey}
               onChange={(event) => setFullAccessApiKey(event.target.value)}
               autoComplete="new-password"
+              disabled={saving}
               required
             />
           </Field>
@@ -590,17 +692,55 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
             <strong>{t.email.defaultTemplateInstallNoticeTitle}</strong>
             <p>{t.email.defaultTemplateInstallNoticeDesc}</p>
           </Notice>
+          <div className="table-wrap" aria-live="polite">
+            <table>
+              <thead>
+                <tr>
+                  <th>{t.email.defaultTemplateInstallProgressTemplate}</th>
+                  <th>{t.common.status}</th>
+                  <th>{t.common.details}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {installProgress.map((row) => {
+                  const status = row.status === "installing"
+                    ? { value: "processing", label: t.email.defaultTemplateInstallStatusInstalling }
+                    : row.status === "waiting"
+                      ? { value: "pending", label: t.email.defaultTemplateInstallStatusWaiting }
+                      : row.status === "installed"
+                        ? { value: "completed", label: t.email.defaultTemplateInstallStatusInstalled }
+                        : row.status === "already_bound"
+                          ? { value: "linked", label: t.email.defaultTemplateInstallStatusSkipped }
+                          : row.status === "failed"
+                            ? { value: "failed", label: t.email.defaultTemplateInstallStatusFailed }
+                            : { value: "pending", label: t.email.defaultTemplateInstallStatusPending };
+                  return (
+                    <tr key={`${row.notificationType}@${row.contractVersion}`}>
+                      <td><strong>{row.name}</strong><small>{row.notificationType}@{row.contractVersion}</small></td>
+                      <td><StatusBadge status={status.value} label={status.label} /></td>
+                      <td><small>{row.error ?? row.providerTemplateRef ?? (row.status === "waiting" ? t.email.defaultTemplateInstallDelayNotice : "—")}</small></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           <div className="form-actions">
             <Button
               type="button"
               variant="secondary"
-              onClick={() => { setInstallTarget(null); setFullAccessApiKey("") }}
+              disabled={saving}
+              onClick={() => { setInstallTarget(null); setFullAccessApiKey(""); setInstallProgress([]) }}
             >
-              {t.common.cancel}
+              {installProgress.every((row) => row.status === "installed" || row.status === "already_bound")
+                ? t.common.close
+                : t.common.cancel}
             </Button>
-            <Button type="submit" loading={saving}>
-              <Upload className="size-4" />{t.email.btnConfirmDefaultTemplateInstall}
-            </Button>
+            {installProgress.some((row) => row.status === "pending" || row.status === "failed") ? (
+              <Button type="submit" loading={saving}>
+                <Upload className="size-4" />{t.email.btnConfirmDefaultTemplateInstall}
+              </Button>
+            ) : null}
           </div>
         </form>
       </Modal>

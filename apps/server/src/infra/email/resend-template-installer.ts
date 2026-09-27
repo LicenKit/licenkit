@@ -130,6 +130,10 @@ function providerFailure(
       apiKey,
     ),
     providerRequestId: responseRequestId(result.response, result.body),
+    providerRetryAfter: safeIdentifier(result.response.headers.get("retry-after")),
+    providerRateLimitLimit: safeIdentifier(result.response.headers.get("ratelimit-limit")),
+    providerRateLimitRemaining: safeIdentifier(result.response.headers.get("ratelimit-remaining")),
+    providerRateLimitReset: safeIdentifier(result.response.headers.get("ratelimit-reset")),
     responseBodyRedacted: result.body
       ? JSON.stringify(sanitizeProviderValue(result.body, apiKey)).slice(0, 2048)
       : sanitizeProviderText(result.rawBody, apiKey),

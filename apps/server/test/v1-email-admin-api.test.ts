@@ -250,6 +250,61 @@ describe("Admin Email API", () => {
     expect(providerFetch).not.toHaveBeenCalled();
   });
 
+  it("installs one requested default so the Admin UI can report real per-template progress", async () => {
+    const app = createAdminRouteApp();
+    const { integration } = await createConfiguration(app);
+    const providerFetch = vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(request);
+      if (init?.method === "GET") {
+        return new Response(JSON.stringify({ message: "Template not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (init?.method === "POST" && url === "https://api.resend.com/templates") {
+        return new Response(JSON.stringify({ object: "template", id: "template_recovered" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (init?.method === "POST" && url.endsWith("/template_recovered/publish")) {
+        return new Response(JSON.stringify({ object: "template", id: "template_recovered" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected Resend request: ${init?.method} ${url}`);
+    });
+    vi.stubGlobal("fetch", providerFetch);
+
+    const response = await app.request(
+      `${ORIGIN}/email-integrations/${integration.id}/template-bindings/install-defaults`,
+      requestInit("POST", {
+        full_access_api_key: FULL_ACCESS_API_KEY,
+        notification_type: "customer.license_recovered",
+        contract_version: 1,
+      }),
+      testEnv.env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toMatchObject({
+      data: {
+        installed_count: 1,
+        skipped_count: 0,
+        total_count: 1,
+        complete: true,
+        items: [{
+          notification_type: "customer.license_recovered",
+          contract_version: 1,
+          provider_template_ref: "template_recovered",
+          outcome: "installed",
+        }],
+      },
+    });
+    expect(providerFetch).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps completed bindings when a later default template installation fails", async () => {
     const app = createAdminRouteApp();
     const { integration } = await createConfiguration(app);
@@ -309,6 +364,13 @@ describe("Admin Email API", () => {
           http_status: 403,
           provider_error_code: "invalid_permission",
           provider_request_id: "req_partial_install",
+          failed_notification_type: "customer.license_security_reset",
+          failed_contract_version: 1,
+          installed_count: 1,
+          skipped_count: 1,
+          completed_count: 2,
+          pending_count: 2,
+          total_count: 5,
         },
       },
     });

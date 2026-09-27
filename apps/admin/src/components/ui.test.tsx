@@ -33,6 +33,7 @@ describe("UI components: Select and ErrorPanel", () => {
     });
     const html = renderToString(createElement(ErrorPanel, { error, floating: false, onClose: vi.fn() }));
     expect(html).toContain("notice notice-error");
+    expect(html).toContain("请求失败");
     expect(html).toContain("LAST_ACTIVE_OWNER_REQUIRED");
     expect(html).toContain("notice-close");
     expect(html).toContain("400");
