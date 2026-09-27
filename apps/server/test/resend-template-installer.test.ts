@@ -1,14 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
-import { getEmailNotificationContract } from "../src/domain/email/contracts";
+import {
+  EMAIL_NOTIFICATION_CONTRACTS,
+  getEmailNotificationContract,
+} from "../src/domain/email/contracts";
 import { AppError } from "../src/middleware/error";
 import { getEmailProviderTemplateExample } from "../src/infra/email/provider-template-registry";
 import { installResendDefaultTemplate } from "../src/infra/email/resend-template-installer";
 
 const API_KEY = "re_full_access_install_secret";
 const INTEGRATION_ID = "emi_abc123";
+const FULL_LENGTH_INTEGRATION_ID = "emi_abcdefghijkl";
 const TEMPLATE_ID = "34a080c9-b17d-4187-ad80-5af20266e535";
 const ALIAS = "licenkit-emiabc123-customer-license-issued-v1";
 const NAME = "LicenKit customer.license_issued v1";
+const FULL_LENGTH_INTEGRATION_ALIASES = [
+  "licenkit-abcdefghijkl-customer-license-issued-v1",
+  "licenkit-abcdefghijkl-customer-license-0n3kdo1-v1",
+  "licenkit-abcdefghijkl-customer-license-1tw59x0-v1",
+  "licenkit-abcdefghijkl-customer-portal-a-1cflha2-v1",
+  "licenkit-abcdefghijkl-instance-member-invited-v1",
+];
 
 function install(fetchImpl: typeof fetch) {
   const contract = getEmailNotificationContract("customer.license_issued", 1);
@@ -22,6 +33,48 @@ function install(fetchImpl: typeof fetch) {
 }
 
 describe("Resend default template installer", () => {
+  it("keeps every default template alias within Resend's 50-character limit", async () => {
+    const aliases: string[] = [];
+
+    for (const contract of EMAIL_NOTIFICATION_CONTRACTS) {
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          name: "not_found",
+          message: "Template not found",
+        }), { status: 404, headers: { "content-type": "application/json" } }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          object: "template",
+          id: TEMPLATE_ID,
+        }), { status: 200, headers: { "content-type": "application/json" } }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          object: "template",
+          id: TEMPLATE_ID,
+        }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+
+      const result = await installResendDefaultTemplate({
+        apiKey: API_KEY,
+        integrationId: FULL_LENGTH_INTEGRATION_ID,
+        contract,
+        example: getEmailProviderTemplateExample(
+          "resend",
+          contract.notificationType,
+          contract.version,
+        ),
+        fetchImpl,
+      });
+
+      expect(result.alias.length).toBeLessThanOrEqual(50);
+      expect((fetchImpl as any).mock.calls[0][0]).toBe(
+        `https://api.resend.com/templates/${result.alias}`,
+      );
+      expect(JSON.parse((fetchImpl as any).mock.calls[1][1].body).alias).toBe(result.alias);
+      aliases.push(result.alias);
+    }
+
+    expect(new Set(aliases).size).toBe(EMAIL_NOTIFICATION_CONTRACTS.length);
+    expect(aliases).toEqual(FULL_LENGTH_INTEGRATION_ALIASES);
+  });
+
   it("creates and publishes a code-defined template with all contract variables", async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -83,6 +136,32 @@ describe("Resend default template installer", () => {
     await expect(install(fetchImpl)).resolves.toEqual({
       providerTemplateRef: TEMPLATE_ID,
       alias: ALIAS,
+      created: false,
+      published: false,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a shortened deterministic alias after a partial installation", async () => {
+    const contract = getEmailNotificationContract("customer.license_recovered", 1);
+    const alias = FULL_LENGTH_INTEGRATION_ALIASES[1];
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      object: "template",
+      id: TEMPLATE_ID,
+      alias,
+      name: "LicenKit customer.license_recovered v1",
+      status: "published",
+    }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+
+    await expect(installResendDefaultTemplate({
+      apiKey: API_KEY,
+      integrationId: FULL_LENGTH_INTEGRATION_ID,
+      contract,
+      example: getEmailProviderTemplateExample("resend", contract.notificationType, contract.version),
+      fetchImpl,
+    })).resolves.toEqual({
+      providerTemplateRef: TEMPLATE_ID,
+      alias,
       created: false,
       published: false,
     });

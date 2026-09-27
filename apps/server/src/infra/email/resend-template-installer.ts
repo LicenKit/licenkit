@@ -6,6 +6,8 @@ import { getEmailProviderAdapter } from "./provider";
 const RESEND_TEMPLATES_URL = "https://api.resend.com/templates";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_PROVIDER_IDENTIFIER_LENGTH = 512;
+const RESEND_MAX_TEMPLATE_ALIAS_LENGTH = 50;
+const TEMPLATE_ALIAS_HASH_LENGTH = 7;
 
 interface ResendTemplateResponse {
   readonly id: string;
@@ -255,6 +257,15 @@ function parseTemplate(
   };
 }
 
+function stableAliasHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(TEMPLATE_ALIAS_HASH_LENGTH, "0");
+}
+
 function templateIdentity(input: ResendDefaultTemplateInstallInput): {
   alias: string;
   name: string;
@@ -275,8 +286,40 @@ function templateIdentity(input: ResendDefaultTemplateInstallInput): {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+  const versionSuffix = `-v${input.contract.version}`;
+  const legacyAlias = `licenkit-${integrationToken}-${notificationToken}${versionSuffix}`;
+  if (legacyAlias.length <= RESEND_MAX_TEMPLATE_ALIAS_LENGTH) {
+    return {
+      alias: legacyAlias,
+      name: `LicenKit ${input.contract.notificationType} v${input.contract.version}`,
+    };
+  }
+
+  const hashSuffix = `-${stableAliasHash(
+    `${input.contract.notificationType}@${input.contract.version}`,
+  )}${versionSuffix}`;
+  const aliasPrefix = `licenkit-${integrationToken}-`;
+  const notificationLength = RESEND_MAX_TEMPLATE_ALIAS_LENGTH -
+    aliasPrefix.length -
+    hashSuffix.length;
+  const shortenedNotificationToken = notificationToken
+    .slice(0, notificationLength)
+    .replace(/-+$/g, "");
+  if (!shortenedNotificationToken) {
+    throw new AppError(
+      "EMAIL_DEFAULT_TEMPLATE_INSTALL_ALIAS_INVALID",
+      "The email contract cannot be represented within the Resend template alias limit.",
+      500,
+      {
+        provider: "resend",
+        notificationType: input.contract.notificationType,
+        contractVersion: input.contract.version,
+        maxAliasLength: RESEND_MAX_TEMPLATE_ALIAS_LENGTH,
+      },
+    );
+  }
   return {
-    alias: `licenkit-${integrationToken}-${notificationToken}-v${input.contract.version}`,
+    alias: `${aliasPrefix}${shortenedNotificationToken}${hashSuffix}`,
     name: `LicenKit ${input.contract.notificationType} v${input.contract.version}`,
   };
 }
