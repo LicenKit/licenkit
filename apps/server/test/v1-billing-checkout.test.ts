@@ -103,8 +103,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).run(providerId, instanceId, encryptedSecret, nowIso, nowIso);
     db.prepare(
       `INSERT INTO products (
-         id, instance_id, slug, name, billing_environment, status, created_at, updated_at
-       ) VALUES ('prd_00000000000000000000000001', ?, 'one', 'One Time', 'sandbox', 'active', ?, ?)`,
+         id, instance_id, name, billing_environment, status, created_at, updated_at
+       ) VALUES ('prd_00000000000000000000000001', ?, 'One Time', 'sandbox', 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO license_plans (
@@ -386,9 +386,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
   it("keeps an out-of-order subscription purchase pending, then fulfills once trusted dependencies arrive", async () => {
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, slug, name, billing_environment, payment_grace_seconds,
+         id, instance_id, name, billing_environment, payment_grace_seconds,
          status, created_at, updated_at
-       ) VALUES ('prd_00000000000000000000000002', ?, 'sub', 'Subscription', 'sandbox',
+       ) VALUES ('prd_00000000000000000000000002', ?, 'Subscription', 'sandbox',
          86400, 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
@@ -584,8 +584,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).run(liveProviderId, instanceId, encryptedSecret, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, slug, name, billing_environment, status, created_at, updated_at
-       ) VALUES ('prd_live_readiness', ?, 'live-readiness', 'Live Readiness', 'live', 'active', ?, ?)`,
+         id, instance_id, name, billing_environment, status, created_at, updated_at
+       ) VALUES ('prd_live_readiness', ?, 'Live Readiness', 'live', 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
@@ -974,9 +974,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     seedLinkedCustomer("ctm_portal1", "portal@example.test");
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, slug, name, billing_environment, payment_grace_seconds,
+         id, instance_id, name, billing_environment, payment_grace_seconds,
          status, created_at, updated_at
-       ) VALUES ('prd_portal', ?, 'portal', 'Portal Subscription', 'sandbox', 86400,
+       ) VALUES ('prd_portal', ?, 'Portal Subscription', 'sandbox', 86400,
          'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(

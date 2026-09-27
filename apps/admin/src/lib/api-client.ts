@@ -202,7 +202,7 @@ export interface InstanceInvitation {
 export interface AdminSession { user: User; instance: Instance; membership: InstanceMembership; expiresAt?: IsoDateTime }
 export interface TrialConfiguration { enabled: boolean; durationSeconds?: number; features: string[] }
 export interface Product {
-  id: Identifier; slug: string; name: string; description?: string | null; status: "active" | "archived";
+  id: Identifier; name: string; description?: string | null; status: "active" | "archived";
   billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration; createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
 }
 export interface ProductRelease {
@@ -454,7 +454,7 @@ export const api = {
     products: {
       list: () => request<ListResponse<Product>>("/admin/products", { scope: "admin" }),
       get: (id: string) => request<Product>(`/admin/products/${encodeURIComponent(id)}`, { scope: "admin" }),
-      create: (body: { slug: string; name: string; description?: string | null; billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration }) => request<Product>("/admin/products", { method: "POST", body, scope: "admin" }),
+      create: (body: { name: string; description?: string | null; billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration }) => request<Product>("/admin/products", { method: "POST", body, scope: "admin" }),
       update: (id: string, body: {
         name?: string;
         description?: string | null;

@@ -95,6 +95,11 @@ describe("User and Instance initial database schema", () => {
     expect(columns(db, "instances")).toEqual([
       "id", "name", "site_url", "admin_api_url", "status", "created_at", "updated_at",
     ]);
+    expect(columns(db, "products")).toEqual([
+      "id", "instance_id", "name", "description", "billing_environment",
+      "payment_grace_seconds", "trial_enabled", "trial_duration_seconds",
+      "trial_features_json", "status", "created_at", "updated_at",
+    ]);
     for (const table of ["users", "instances", "instance_memberships", "deployment_bootstrap"]) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
@@ -213,8 +218,8 @@ describe("User and Instance initial database schema", () => {
     seedOwner(db);
     db.prepare(
       `INSERT INTO products
-         (id, instance_id, slug, name, billing_environment, status, created_at, updated_at)
-       VALUES ('prd_a', 'ins_a', 'app', 'App', 'sandbox', 'active', ?, ?)`,
+         (id, instance_id, name, billing_environment, status, created_at, updated_at)
+       VALUES ('prd_a', 'ins_a', 'App', 'sandbox', 'active', ?, ?)`,
     ).run(now, now);
     expect(db.prepare("SELECT payment_grace_seconds FROM products WHERE id = 'prd_a'").get())
       .toEqual({ payment_grace_seconds: 0 });
@@ -245,8 +250,8 @@ describe("User and Instance initial database schema", () => {
     seedOwner(db);
     db.prepare(
       `INSERT INTO products
-         (id, instance_id, slug, name, billing_environment, status, created_at, updated_at)
-       VALUES ('prd_signed', 'ins_a', 'signed-app', 'Signed App', 'sandbox', 'active', ?, ?)`,
+         (id, instance_id, name, billing_environment, status, created_at, updated_at)
+       VALUES ('prd_signed', 'ins_a', 'Signed App', 'sandbox', 'active', ?, ?)`,
     ).run(now, now);
     const insertPlan = db.prepare(
       `INSERT INTO license_plans (

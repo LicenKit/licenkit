@@ -16,8 +16,6 @@ import { parseFeatures } from "../../domain/license/terms";
 
 export const adminProductsRouter = new Hono<AppContext>();
 
-const SlugSchema = z.string().min(1).max(80)
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "slug must be lower-case and URL-safe");
 const ExternalTrialConfigSchema = z.object({
   enabled: z.boolean(),
   duration_seconds: z.number().int().positive().nullable().optional(),
@@ -32,14 +30,12 @@ const ExternalTrialConfigSchema = z.object({
   }
 });
 const CreateProductSchema = z.object({
-  slug: SlugSchema,
   name: z.string().trim().min(1).max(100),
   description: z.string().trim().max(4000).nullable().optional(),
   billing_environment: z.enum(["sandbox", "live"]).nullable().optional(),
   payment_grace_seconds: z.number().int().nonnegative().default(0),
   trial: ExternalTrialConfigSchema.optional(),
 }).strict().transform((value) => ({
-  slug: value.slug,
   name: value.name,
   description: value.description,
   billingEnvironment: value.billing_environment,
@@ -92,7 +88,6 @@ function formatProduct(product: any) {
   return {
     id: product.id,
     instance_id: product.instanceId,
-    slug: product.slug,
     name: product.name,
     description: product.description,
     billing_environment: product.billingEnvironment,
@@ -154,47 +149,39 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
     { instanceId, table: "signing_keys", rowId: signingKeyId, field: "private_key_ciphertext" },
   );
 
-  try {
-    await db.batch([
-      db.insert(products).values({
-        id: productId,
-        instanceId,
-        slug: input.slug,
-        name: input.name,
-        description: input.description ?? null,
-        billingEnvironment: input.billingEnvironment ?? null,
-        paymentGraceSeconds: input.paymentGraceSeconds,
-        trialEnabled: trial.enabled,
-        trialDurationSeconds: trial.enabled ? trial.durationSeconds! : null,
-        trialFeaturesJson: JSON.stringify(trial.features),
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      }),
-      db.insert(signingKeys).values({
-        id: signingKeyId,
-        instanceId,
-        productId,
-        algorithm: "Ed25519",
-        source: "generated",
-        publicKey: keyPair.publicKeyBase64,
-        privateKeyCiphertext,
-        status: "active",
-        createdAt: now,
-        retiredAt: null,
-        revokedAt: null,
-      }),
-    ]);
-  } catch (error) {
-    if (String(error).includes("products.instance_id, products.slug")) {
-      throw new ConflictError("PRODUCT_SLUG_EXISTS", "The product slug is already in use.");
-    }
-    throw error;
-  }
+  await db.batch([
+    db.insert(products).values({
+      id: productId,
+      instanceId,
+      name: input.name,
+      description: input.description ?? null,
+      billingEnvironment: input.billingEnvironment ?? null,
+      paymentGraceSeconds: input.paymentGraceSeconds,
+      trialEnabled: trial.enabled,
+      trialDurationSeconds: trial.enabled ? trial.durationSeconds! : null,
+      trialFeaturesJson: JSON.stringify(trial.features),
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    }),
+    db.insert(signingKeys).values({
+      id: signingKeyId,
+      instanceId,
+      productId,
+      algorithm: "Ed25519",
+      source: "generated",
+      publicKey: keyPair.publicKeyBase64,
+      privateKeyCiphertext,
+      status: "active",
+      createdAt: now,
+      retiredAt: null,
+      revokedAt: null,
+    }),
+  ]);
 
   await recordAuditLog({
     c, action: "product.create", resourceType: "product", resourceId: productId,
-    details: { slug: input.slug, billingEnvironment: input.billingEnvironment ?? null },
+    details: { billingEnvironment: input.billingEnvironment ?? null },
   });
   const created = await requireProduct(db, instanceId, productId);
   return c.json({

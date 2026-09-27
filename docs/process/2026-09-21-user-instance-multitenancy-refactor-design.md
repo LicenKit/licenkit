@@ -287,14 +287,11 @@ User 只能通过自己的 Profile 流程修改显示名称和密码；当前邮
 | --- | --- | --- |
 | `id` | 主键 | Instance 内部 ID |
 | `name` | 非空 | 实例显示名称 |
-| `slug` | 非空、URL-safe、唯一 | 界面名称“实例标识” |
 | `site_url` | 非空 URL | 产品站与 Customer Portal 基础地址 |
 | `admin_api_url` | 非空、唯一规范 Origin | LicenKit 管理后台与 API 地址 |
 | `status` | `active/suspended/archived` | 实例状态 |
 | `created_at` | 非空时间 | 创建时间 |
 | `updated_at` | 非空时间 | 更新时间 |
-
-当前公开路由只携带实例标识，因此 `slug` 必须全局唯一。未来如果改为自定义域名或另一种路由合同，再单独调整唯一性，不能提前放宽。
 
 `site_url` 必须拒绝 credentials、query 和 fragment；公开 API 把它命名为 `customer_site_url`。`admin_api_url` 必须是规范 Origin，并与实际访问 Setup 的 Worker Origin 完全一致。两者可以跨 Origin，但必须保持同协议、同可注册站点。Setup 在写入前按包含私有后缀的 Public Suffix List 判断该边界并拒绝跨站组合，不进入第三方 Cookie 模式。
 
@@ -547,10 +544,6 @@ Content-Type: application/json
 - 实例标识；
 - Site URL。
 
-实例标识帮助文案：
-
-> 用于 Customer Portal、Magic Link 和支付 Webhook 等地址。只能包含小写英文字母、数字和短横线，例如 `tidest`。
-
 最终一次提交完整输入：
 
 ```http
@@ -566,7 +559,6 @@ Content-Type: application/json
   },
   "instance": {
     "name": "Tidest Licensing",
-    "slug": "tidest",
     "admin_api_url": "https://license.tidest.app",
     "customer_site_url": "https://tidest.app"
   }
@@ -833,7 +825,7 @@ Admin、Customer、Client、Webhook、CLI、SDK、环境变量、Signed License 
 - 复合外键拒绝跨 Instance 关联；
 - User A 不能仅凭对象 ID 访问无 Membership 的 Instance B；
 - Magic Link、Customer Session、Webhook 和邮件只解析目标 Instance；
-- Product slug 和业务幂等键按 Instance 作用域判断；
+- Product 使用系统生成的 ID；业务幂等键按 Instance 作用域判断；
 - Scheduler 不跨 Instance 错误领取或更新任务；
 - Scheduled Worker 可以在持久层分页发现有到期任务的 Instance，但每一次领取、状态更新、幂等和关联查询都必须使用完整 `instance_id` 键；
 - Provider、密钥、Customer、License 和 Delivery 不能跨 Instance 复用。

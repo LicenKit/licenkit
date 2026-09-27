@@ -747,7 +747,6 @@ CREATE UNIQUE INDEX `uq_product_releases_identity` ON `product_releases` (`insta
 CREATE TABLE `products` (
 	`id` text PRIMARY KEY NOT NULL,
 	`instance_id` text NOT NULL,
-	`slug` text NOT NULL,
 	`name` text NOT NULL,
 	`description` text,
 	`billing_environment` text,
@@ -770,7 +769,6 @@ CREATE TABLE `products` (
 --> statement-breakpoint
 CREATE INDEX `idx_products_instance_status` ON `products` (`instance_id`,`status`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_products_instance_id` ON `products` (`instance_id`,`id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `uq_products_instance_slug` ON `products` (`instance_id`,`slug`);--> statement-breakpoint
 CREATE TABLE `signing_keys` (
 	`id` text PRIMARY KEY NOT NULL,
 	`instance_id` text NOT NULL,

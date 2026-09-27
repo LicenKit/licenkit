@@ -175,7 +175,7 @@ corepack pnpm run db:migrate:remote
 至少建立两个测试 Instance 和重叠对象 ID，验证：
 
 - Admin、Customer、Client、Webhook 都不能跨 Instance 读取或修改；
-- 唯一约束允许不同 Instance 使用相同业务 Slug/外部 ID，只在本 Instance 冲突；
+- 业务外部 ID 的唯一约束只在所属 Instance 内判断，允许不同 Instance 使用相同外部 ID；
 - 复合外键拒绝跨 Instance Customer/Product/Plan/License/Delivery 关联；
 - Webhook 由路径中的 Instance ID 先解析 Instance；
 - Signed License Token 的 `ins` 不匹配返回 Instance 专用错误；

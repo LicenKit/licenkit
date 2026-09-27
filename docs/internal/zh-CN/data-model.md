@@ -70,7 +70,6 @@ User 不保存 Instance 外键、角色或全局状态。当前自部署版不�
 | --- | --- |
 | `id` | 主键 |
 | `name` | 非空 |
-| `slug` | 非空、全局唯一、小写字母/数字/短横线 |
 | `site_url` | 非空 URL |
 | `admin_api_url` | 非空、唯一规范 Origin |
 | `status` | `active/suspended/archived` |
@@ -133,7 +132,7 @@ Customer Session 保存 `instance_id + customer_id`、Session/CSRF Token Hash、
 
 ### 4.4 `products`
 
-Product 在 Instance 内以 `slug` 唯一，包含：
+Product 使用服务端生成的 `id` 唯一标识，不维护第二套人工标识，包含：
 
 - `billing_environment`；
 - `payment_grace_seconds`，非负且默认 `0`；

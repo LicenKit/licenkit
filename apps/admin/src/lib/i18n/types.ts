@@ -267,7 +267,7 @@ export interface ProductsDictionary {
   statusArchived: string;
   detailEyebrow: string;
   noDescription: string;
-  slugLabel: string;
+  productIdLabel: string;
   billingEnvLabel: string;
   billingEnvNone: string;
   trialLabel: string;
@@ -299,7 +299,6 @@ export interface ProductsDictionary {
   modalEditTitle: string;
   modalEditDesc: string;
   fieldName: string;
-  fieldSlug: string;
   fieldDesc: string;
   fieldDescPlaceholder: string;
   fieldBillingEnv: string;

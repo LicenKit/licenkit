@@ -4714,13 +4714,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "slug": {
-          "name": "slug",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "name": {
           "name": "name",
           "type": "text",
@@ -4810,14 +4803,6 @@
           "columns": [
             "instance_id",
             "id"
-          ],
-          "isUnique": true
-        },
-        "uq_products_instance_slug": {
-          "name": "uq_products_instance_slug",
-          "columns": [
-            "instance_id",
-            "slug"
           ],
           "isUnique": true
         }

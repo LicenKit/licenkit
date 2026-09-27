@@ -101,14 +101,13 @@ describe("V1 Customer Session security boundaries", () => {
       const planId = `lpl_customer_security_${suffix}`;
       testEnv.sqliteDb.prepare(
         `INSERT INTO products (
-           id, instance_id, slug, name, billing_environment,
+           id, instance_id, name, billing_environment,
            trial_enabled, trial_duration_seconds, trial_features_json,
            status, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, NULL, 0, NULL, '[]', 'active', ?, ?)`,
+         ) VALUES (?, ?, ?, NULL, 0, NULL, '[]', 'active', ?, ?)`,
       ).run(
         productId,
         INSTANCE_A,
-        `customer-security-${suffix}`,
         `Customer Security ${suffix.toUpperCase()}`,
         nowIso,
         nowIso,

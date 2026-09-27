@@ -5,7 +5,7 @@ import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorPanel, Field, Input
 import { useI18n } from "../../lib/i18n";
 import { daysToSeconds, secondsToDays } from "../../lib/duration";
 
-const emptyProduct = { slug: "", name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
+const emptyProduct = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
 const emptyProductEdit = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
 const emptyRelease = { version: "", platform: "", description: "", downloadUrl: "", artifactSha256: "", releasedAt: "" };
 
@@ -48,7 +48,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
     setSaving(true); setError(null);
     try {
       const created = await api.admin.products.create({
-        slug: productForm.slug.trim(), name: productForm.name.trim(), description: productForm.description.trim() || null,
+        name: productForm.name.trim(), description: productForm.description.trim() || null,
         billingEnvironment: productForm.billingEnvironment || null,
         trial: { enabled: productForm.trialEnabled, durationSeconds: productForm.trialEnabled ? daysToSeconds(productForm.trialDurationDays) : undefined, features: productForm.trialFeatures.split(",").map((item) => item.trim()).filter(Boolean) },
       });
@@ -155,7 +155,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
                 onClick={() => setSelectedId(product.id)}
               >
                 <span className="item-icon"><Box className="size-4" /></span>
-                <div><strong>{product.name}</strong><small>/{product.slug}</small></div>
+                <div><strong>{product.name}</strong><small>{product.id}</small></div>
                 <StatusBadge status={product.status} label={product.status === "active" ? t.products.statusActive : t.products.statusArchived} />
               </button>
             ))}
@@ -172,7 +172,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
                   <StatusBadge status={selected.status} label={selected.status === "active" ? t.products.statusActive : t.products.statusArchived} />
                 </div>
                 <div className="metric-grid compact">
-                  <div><span>{t.products.slugLabel}</span><strong>/{selected.slug}</strong></div>
+                  <div><span>{t.products.productIdLabel}</span><strong><code>{selected.id}</code></strong></div>
                   <div><span>{t.products.billingEnvLabel}</span><strong>{selected.billingEnvironment || t.products.billingEnvNone}</strong></div>
                   <div><span>{t.products.trialLabel}</span><strong>{selected.trial?.enabled ? (selected.trial.durationSeconds ? t.products.trialDays(Math.round(selected.trial.durationSeconds / 86400)) : t.products.trialEnabled) : t.products.trialDisabled}</strong></div>
                   <div><span>{t.products.tableColReleasedAt}</span><strong>{t.products.releasesCount(releases.length)}</strong></div>
@@ -244,10 +244,7 @@ export function ProductsView({ canWrite }: { canWrite: boolean }) {
 
       <Modal open={productModal} onClose={() => setProductModal(false)} title={t.products.modalCreateTitle} description={t.products.modalCreateDesc}>
         <form className="form-stack" onSubmit={createProduct}>
-          <div className="form-grid">
-            <Field label={t.products.fieldName}><Input value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} required /></Field>
-            <Field label={t.products.fieldSlug}><Input value={productForm.slug} onChange={(event) => setProductForm({ ...productForm, slug: event.target.value.toLowerCase() })} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="my-app" required /></Field>
-          </div>
+          <Field label={t.products.fieldName}><Input value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} required /></Field>
           <Field label={t.products.fieldDesc}><Textarea value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} rows={3} placeholder={t.products.fieldDescPlaceholder} /></Field>
           <Field label={t.products.fieldBillingEnv}>
             <Select value={productForm.billingEnvironment} onChange={(event) => setProductForm({ ...productForm, billingEnvironment: event.target.value as BillingEnvironment | "" })}>

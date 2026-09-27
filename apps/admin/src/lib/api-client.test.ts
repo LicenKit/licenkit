@@ -18,7 +18,6 @@ describe("Admin API JSON boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.admin.products.create({
-      slug: "desktop-app",
       name: "Desktop App",
       billingEnvironment: "sandbox",
       trial: { enabled: true, durationSeconds: 3600, features: ["sync"] },
@@ -26,7 +25,6 @@ describe("Admin API JSON boundary", () => {
 
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(init.body))).toEqual({
-      slug: "desktop-app",
       name: "Desktop App",
       billing_environment: "sandbox",
       trial: { enabled: true, duration_seconds: 3600, features: ["sync"] },
@@ -61,10 +59,10 @@ describe("Admin API JSON boundary", () => {
     });
   });
 
-  it("更新 Product 时只发送可编辑字段并保留 slug 不可变", async () => {
+  it("更新 Product 时只发送可编辑字段", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       success: true,
-      data: { id: "prd_test", slug: "desktop-app", name: "Desktop Pro" },
+      data: { id: "prd_test", name: "Desktop Pro" },
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" },

@@ -223,9 +223,9 @@ describe("V1 admin authorization and audit visibility", () => {
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (
-         id, instance_id, slug, name, billing_environment, trial_enabled,
+         id, instance_id, name, billing_environment, trial_enabled,
          trial_features_json, status, created_at, updated_at
-       ) VALUES ('prod_authz', 'ins_authz', 'authz-product', 'Authorization Product',
+       ) VALUES ('prod_authz', 'ins_authz', 'Authorization Product',
                  NULL, 0, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
@@ -234,9 +234,9 @@ describe("V1 admin authorization and audit visibility", () => {
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (
-         id, instance_id, slug, name, billing_environment, trial_enabled,
+         id, instance_id, name, billing_environment, trial_enabled,
          trial_features_json, status, created_at, updated_at
-       ) VALUES ('prod_foreign', 'ins_foreign', 'foreign-product', 'Foreign Product',
+       ) VALUES ('prod_foreign', 'ins_foreign', 'Foreign Product',
                  NULL, 0, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
@@ -379,6 +379,7 @@ describe("V1 admin authorization and audit visibility", () => {
     const ownBody = await own.json() as any;
     expect(ownBody.data.instance_id).toBe("ins_authz");
     expect(ownBody.data).not.toHaveProperty("instanceId");
+    expect(ownBody.data).not.toHaveProperty("slug");
     expectNoCamelCaseKeys(ownBody);
     expect(foreign.status).toBe(404);
     expect((await foreign.json() as any).error.code).toBe("NOT_FOUND");
@@ -389,9 +390,38 @@ describe("V1 admin authorization and audit visibility", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        slug: "legacy-product-input",
         name: "Legacy Product Input",
         paymentGraceSeconds: 0,
+      }),
+    }, testEnv.env);
+    expect(response.status).toBe(400);
+    expect((await response.json() as any).error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("creates a Product with the server-generated ID as its only identifier", async () => {
+    const response = await productsApp("owner").request("http://test/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "ID-only Product",
+        billing_environment: null,
+      }),
+    }, testEnv.env);
+    expect(response.status).toBe(201);
+    const body = await response.json() as any;
+    expect(body.data.id).toMatch(/^prd_[0-9a-z]+$/);
+    expect(body.data.name).toBe("ID-only Product");
+    expect(body.data).not.toHaveProperty("slug");
+    expectNoCamelCaseKeys(body);
+  });
+
+  it("rejects the removed Product slug field", async () => {
+    const response = await productsApp("owner").request("http://test/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        slug: "removed-product-slug",
+        name: "Product Without Slug",
       }),
     }, testEnv.env);
     expect(response.status).toBe(400);

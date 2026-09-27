@@ -197,7 +197,6 @@ Product 可以配置一组 V1 无需支付方式的设备试用规则：
 
 ```json
 {
-  "slug": "example-app",
   "name": "Example App",
   "billing_environment": "live",
   "payment_grace_seconds": 0,
@@ -209,7 +208,7 @@ Product 可以配置一组 V1 无需支付方式的设备试用规则：
 }
 ```
 
-`slug` 在当前 Instance 内唯一，只接受规范化的小写 URL-safe 值，用于管理端识别和自定义页面路由。`billing_environment` 可为 `sandbox|live|null`：`null` 表示普通支付事件不能签发正式 License；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。
+Product 由服务端生成的 `id` 唯一标识，创建请求不接受第二套人工标识。`billing_environment` 可为 `sandbox|live|null`：`null` 表示普通支付事件不能签发正式 License；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。
 
 `payment_grace_seconds` 是非负整数，Product 创建默认 `0`。创建订阅 License Plan 时省略该字段会固化 Product 当时的值；非订阅 Plan 固定为 `0`。支付型订阅 License 再从 Plan 固化该值，Product 后续修改不追溯已有 Plan 或 License，Plan 后续修改也不追溯已签发 License。启用试用时 `duration_seconds` 必须显式提供正整数；V1 不使用隐式全局试用天数。修改 Product 的试用时长或功能只影响之后领取的 Trial Claim。
 

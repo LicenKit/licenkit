@@ -105,10 +105,10 @@ describe("V1 License core contract", () => {
     );
     await run(
       `INSERT INTO products (
-         id, instance_id, slug, name, description, billing_environment,
+         id, instance_id, name, description, billing_environment,
          payment_grace_seconds, trial_enabled, trial_duration_seconds,
          trial_features_json, status, created_at, updated_at
-       ) VALUES (?1, ?2, 'v1-app', 'V1 App', NULL, NULL, 432000, 1, 1200,
+       ) VALUES (?1, ?2, 'V1 App', NULL, NULL, 432000, 1, 1200,
                  '["trial_export"]', 'active', ?3, ?3)`,
       productId,
       instanceId,

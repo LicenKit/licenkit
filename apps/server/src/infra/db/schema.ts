@@ -117,7 +117,6 @@ export const products = sqliteTable(
     instanceId: text("instance_id")
       .notNull()
       .references(() => instances.id, restrictReference),
-    slug: text("slug").notNull(),
     name: text("name").notNull(),
     description: text("description"),
     billingEnvironment: text("billing_environment"),
@@ -131,7 +130,6 @@ export const products = sqliteTable(
   },
   (table) => [
     unique("uq_products_instance_id").on(table.instanceId, table.id),
-    unique("uq_products_instance_slug").on(table.instanceId, table.slug),
     index("idx_products_instance_status").on(table.instanceId, table.status),
     check(
       "ck_products_billing_environment",
