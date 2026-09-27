@@ -741,12 +741,12 @@ export interface EmailDictionary {
   defaultTemplateInstallNoticeDesc: string;
   defaultTemplateInstallProgressTemplate: string;
   defaultTemplateInstallStatusPending: string;
-  defaultTemplateInstallStatusWaiting: string;
+  defaultTemplateInstallStatusWaiting: (seconds: number) => string;
   defaultTemplateInstallStatusInstalling: string;
   defaultTemplateInstallStatusInstalled: string;
   defaultTemplateInstallStatusSkipped: string;
   defaultTemplateInstallStatusFailed: string;
-  defaultTemplateInstallDelayNotice: string;
+  defaultTemplateInstallDelayNotice: (seconds: number) => string;
   btnConfirmDefaultTemplateInstall: string;
   testingNoticeTitle: string;
   testingNoticeDesc: string;

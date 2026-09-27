@@ -36,11 +36,12 @@ interface DefaultTemplateInstallProgressRow {
   contractVersion: number;
   name: string;
   status: DefaultTemplateInstallProgressStatus;
+  waitSeconds?: number;
   providerTemplateRef?: string;
   error?: string;
 }
 
-const DEFAULT_TEMPLATE_INSTALL_DELAY_MS = 5_000;
+const DEFAULT_TEMPLATE_INSTALL_DELAY_SECONDS = 5;
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -243,18 +244,24 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
     let installedCount = installProgress.filter((row) => row.status === "installed").length;
     let skippedCount = installProgress.filter((row) => row.status === "already_bound").length;
     setInstallProgress((rows) => rows.map((row) => row.status === "failed"
-      ? { ...row, status: "pending", error: undefined }
+      ? { ...row, status: "pending", waitSeconds: undefined, error: undefined }
       : row));
     try {
       for (const [index, task] of tasks.entries()) {
         if (index > 0) {
-          setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
-            ? { ...row, status: "waiting", error: undefined }
-            : row));
-          await wait(DEFAULT_TEMPLATE_INSTALL_DELAY_MS);
+          for (
+            let waitSeconds = DEFAULT_TEMPLATE_INSTALL_DELAY_SECONDS;
+            waitSeconds > 0;
+            waitSeconds -= 1
+          ) {
+            setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
+              ? { ...row, status: "waiting", waitSeconds, error: undefined }
+              : row));
+            await wait(1_000);
+          }
         }
         setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
-          ? { ...row, status: "installing", error: undefined }
+          ? { ...row, status: "installing", waitSeconds: undefined, error: undefined }
           : row));
 
         try {
@@ -275,13 +282,14 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
             ? {
               ...row,
               status: item.outcome,
+              waitSeconds: undefined,
               providerTemplateRef: item.providerTemplateRef,
               error: undefined,
             }
             : row));
         } catch (caught) {
           setInstallProgress((rows) => rows.map((row) => row.notificationType === task.notificationType
-            ? { ...row, status: "failed", error: formatApiError(caught) }
+            ? { ...row, status: "failed", waitSeconds: undefined, error: formatApiError(caught) }
             : row));
           await load(integrationId);
           setError(caught);
@@ -300,6 +308,8 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
           items: completedItems,
         },
       });
+      setInstallTarget(null);
+      setInstallProgress([]);
       await load(integrationId);
     } finally {
       setFullAccessApiKey("");
@@ -706,7 +716,12 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                   const status = row.status === "installing"
                     ? { value: "processing", label: t.email.defaultTemplateInstallStatusInstalling }
                     : row.status === "waiting"
-                      ? { value: "pending", label: t.email.defaultTemplateInstallStatusWaiting }
+                      ? {
+                        value: "pending",
+                        label: t.email.defaultTemplateInstallStatusWaiting(
+                          row.waitSeconds ?? DEFAULT_TEMPLATE_INSTALL_DELAY_SECONDS,
+                        ),
+                      }
                       : row.status === "installed"
                         ? { value: "completed", label: t.email.defaultTemplateInstallStatusInstalled }
                         : row.status === "already_bound"
@@ -718,7 +733,11 @@ export function EmailSettingsView({ canManage, embedded = false }: { canManage: 
                     <tr key={`${row.notificationType}@${row.contractVersion}`}>
                       <td><strong>{row.name}</strong><small>{row.notificationType}@{row.contractVersion}</small></td>
                       <td><StatusBadge status={status.value} label={status.label} /></td>
-                      <td><small>{row.error ?? row.providerTemplateRef ?? (row.status === "waiting" ? t.email.defaultTemplateInstallDelayNotice : "—")}</small></td>
+                      <td><small>{row.error ?? row.providerTemplateRef ?? (row.status === "waiting"
+                        ? t.email.defaultTemplateInstallDelayNotice(
+                          row.waitSeconds ?? DEFAULT_TEMPLATE_INSTALL_DELAY_SECONDS,
+                        )
+                        : "—")}</small></td>
                     </tr>
                   );
                 })}
