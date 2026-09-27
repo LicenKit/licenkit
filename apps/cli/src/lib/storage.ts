@@ -14,6 +14,7 @@ export interface StoredLicenseData {
   productId: string;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
   devicePlatform: string;
   activationId: string;
   machineToken: string;
@@ -56,6 +57,7 @@ function normalizeStoredLicenseData(value: unknown): StoredLicenseData | null {
     typeof candidate.productId === "string" &&
     typeof candidate.releaseVersion === "string" &&
     typeof candidate.releasePlatform === "string" &&
+    typeof candidate.releaseArch === "string" &&
     typeof candidate.devicePlatform === "string" &&
     typeof candidate.activationId === "string" &&
     typeof candidate.machineToken === "string" &&

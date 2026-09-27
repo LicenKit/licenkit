@@ -65,7 +65,8 @@ const UpdateProductSchema = z.object({
 }));
 const CreateReleaseSchema = z.object({
   version: z.string().trim().min(1).max(100),
-  platform: z.string().trim().min(1).max(100),
+  platform: z.enum(["macos", "windows", "linux"]),
+  arch: z.enum(["universal", "arm64", "x86_64"]),
   description: z.string().trim().max(4000).nullable().optional(),
   download_url: z.string().url().nullable().optional(),
   artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -73,6 +74,7 @@ const CreateReleaseSchema = z.object({
 }).strict().transform((value) => ({
   version: value.version,
   platform: value.platform,
+  arch: value.arch,
   description: value.description,
   downloadUrl: value.download_url,
   artifactSha256: value.artifact_sha256,
@@ -115,6 +117,7 @@ function formatRelease(release: any) {
     product_id: release.productId,
     version: release.version,
     platform: release.platform,
+    arch: release.arch,
     description: release.description,
     download_url: release.downloadUrl,
     artifact_sha256: release.artifactSha256,
@@ -266,6 +269,7 @@ adminProductsRouter.post("/:productId/releases", requireRole(["owner", "admin"])
       productId,
       version: input.version,
       platform: input.platform,
+      arch: input.arch,
       description: input.description ?? null,
       downloadUrl: input.downloadUrl ?? null,
       artifactSha256: input.artifactSha256,
@@ -274,14 +278,20 @@ adminProductsRouter.post("/:productId/releases", requireRole(["owner", "admin"])
       updatedAt: now,
     });
   } catch (error) {
-    if (String(error).includes("product_releases.instance_id, product_releases.product_id, product_releases.version, product_releases.platform")) {
-      throw new ConflictError("PRODUCT_RELEASE_EXISTS", "This product version and platform already exist.");
+    if (String(error).includes("product_releases.product_id, product_releases.version, product_releases.platform, product_releases.arch")) {
+      throw new ConflictError("PRODUCT_RELEASE_EXISTS", "This product version, platform, and architecture already exist.");
     }
     throw error;
   }
   await recordAuditLog({
     c, action: "product_release.create", resourceType: "product_release", resourceId: releaseId,
-    details: { productId, version: input.version, platform: input.platform, releasedAt: input.releasedAt },
+    details: {
+      productId,
+      version: input.version,
+      platform: input.platform,
+      arch: input.arch,
+      releasedAt: input.releasedAt,
+    },
   });
   const created = await db.select().from(productReleases).where(and(
     eq(productReleases.instanceId, instanceId), eq(productReleases.id, releaseId),

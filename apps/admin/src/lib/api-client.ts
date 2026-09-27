@@ -9,6 +9,8 @@ export type LicenseModel = "perpetual" | "fixed_term" | "subscription";
 export type RenewalMode = "none" | "manual" | "billing";
 export type CredentialMode = "opaque" | "signed";
 export type BillingEnvironment = "sandbox" | "live";
+export type ReleasePlatform = "macos" | "windows" | "linux";
+export type ReleaseArch = "universal" | "arm64" | "x86_64";
 
 export interface SuccessEnvelope<T> { success: true; data: T }
 interface ErrorPayload { code?: unknown; message?: unknown; details?: unknown; request_id?: unknown }
@@ -245,7 +247,7 @@ export interface Product {
   createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
 }
 export interface ProductRelease {
-  id: Identifier; productId: Identifier; version: string; platform: string; description?: string | null; downloadUrl?: string | null;
+  id: Identifier; productId: Identifier; version: string; platform: ReleasePlatform; arch: ReleaseArch; description?: string | null; downloadUrl?: string | null;
   artifactSha256: string; releasedAt: IsoDateTime; createdAt?: IsoDateTime;
 }
 export interface LicensePlan {

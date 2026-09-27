@@ -26,7 +26,7 @@ LicenKit.configure(with: configuration)
 ```
 
 - `productID` 来自 Admin 产品页；它全局唯一，Server 据此解析所属 Instance。
-- SDK 从宿主 App 的 `CFBundleShortVersionString` 读取 Release 版本，并从主可执行文件推导 `macos-arm64`、`macos-x86_64` 或 `macos-universal`。
+- SDK 从宿主 App 的 `CFBundleShortVersionString` 读取 Release 版本，将操作系统标识为 `macos`，并从主可执行文件单独推导 `arm64`、`x86_64` 或 `universal` 架构。
 - `opaque` 模式可以省略 `signingPublicKey`。
 - `signed` 模式必须内置 Admin 产品页交付的 Ed25519 公钥。运行时从授权服务下载的公钥不能自动成为信任根。
 - 请求超时固定为 SDK 内部 15 秒；Keychain 使用当前 App 私有命名空间，不需要 Helper、多 Target 或 Access Group 配置。
@@ -118,9 +118,9 @@ public enum EntitlementState: Codable, Equatable, Sendable {
 }
 ```
 
-只有 `trial.active` 与 `license.active` 有可能可用；它们还必须通过 `freshness(at:)`。终态包括 Trial 到期/吊销、License 到期/暂停/吊销、Activation 撤销/解绑，以及 Release 未知或更新权益不足。终态是服务端已确认的业务结果，不应当显示为“网络错误”；Product 不存在或已归档则仍通过失败结果保留服务端原始错误。
+只有 `trial.active` 与 `license.active` 有可能可用；它们还必须通过 `freshness(at:)`。终态包括 Trial 到期/吊销、License 到期/暂停/吊销、Activation 撤销/解绑，以及更新权益不足。终态是服务端已确认的业务结果，不应当显示为“网络错误”；Product 不存在或已归档则仍通过失败结果保留服务端原始错误。
 
-`businessCode` 保存 `TRIAL_EXPIRED`、`LICENSE_SUSPENDED`、`PRODUCT_RELEASE_UNKNOWN` 等原始业务码；`details` 保存按敏感字段脱敏后的服务端细节。不要只根据面向用户的文案做逻辑分支。
+`businessCode` 保存 `TRIAL_EXPIRED`、`LICENSE_SUSPENDED`、`UPDATE_ENTITLEMENT_REQUIRED` 等原始业务码；`details` 保存按敏感字段脱敏后的服务端细节。不要只根据面向用户的文案做逻辑分支。
 
 `lastValidateResponseAt` 是最近一次明确 `/validate` Server 结果的客户端接收时间；`signedCredentialValid` 记录本轮本地 Signed Token 验证结论。它们用于请求门槛和安全判断，不替代 `validatedAt`。
 
@@ -154,7 +154,7 @@ SDK 从 Keychain 选择凭据：优先 License，其次 Trial，否则使用 `no
 
 - License：提交 `activation_id + machine_token`，并原子接收可选 `credential_update`。
 - Trial：提交 `trial_id + trial_token`。
-- None：不提交秘密，用于确认 Release 资格和 Trial 是否可领取。
+- None：不提交秘密，只查询此设备是否还能领取 Trial；Product Release 是否登记不影响该结果。
 
 并发调用 `validate()` 会共享同一个 Task，避免同一时刻发出重复请求。`activate()`、`startTrial()`、`deactivate()` 与所有凭据/快照写入使用同一顺序化边界，避免较早的校验响应覆盖较新的激活或解绑结果。
 
@@ -188,7 +188,7 @@ public struct ActivationData: Equatable, Sendable {
 - `opaque`：没有可离线验签的授权载荷，签名相关字段必须为 `nil`。
 - `signed`：同时返回 Signed License Token、`signingKeyID` 与外层到期时间；SDK 在保存前完成验签和 Claim 一致性检查。
 
-Signed Token 必须满足：Header 为 `alg=EdDSA`、`typ=licenkit-license+jwt` 且 `kid` 受信；`ins/prd/act/fp/ver/plt` 与当前配置、Activation 和设备一致；外层 `signed_license_token_expires_at` 与签名内绝对 `exp` 一致；活动 License 的功能、更新期限和最终有效期与签名 Claims 一致。
+Signed Token 必须满足：Header 为 `alg=EdDSA`、`typ=licenkit-license+jwt` 且 `kid` 受信；`ins/prd/act/fp/ver/plt/arc` 与当前配置、Activation 和设备一致；外层 `signed_license_token_expires_at` 与签名内绝对 `exp` 一致；活动 License 的功能、更新期限和最终有效期与签名 Claims 一致。Token 不携带 Product Release ID 或发布时间，SDK 不在本地重复执行 Release 发布时间与更新期限的业务比对。
 
 Plan 的 `signed_token_ttl_seconds` 可以短于 3600 秒。它只用于服务端计算绝对 `exp`：实际到期时间是“签发时间 + License 快照 TTL”与 License 最终有效截止时间（如有）中的较早值，后者在 billing 模式下已包含支付宽限。原始 TTL 数值不进入 Token。Token 早于建议校验间隔到期不属于协议冲突：下一次宿主主动调用 `validate()` 时，SDK 绕过建议间隔并只检查 30 秒门槛。
 

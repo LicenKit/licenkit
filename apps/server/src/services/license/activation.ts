@@ -13,10 +13,16 @@ import { createServerValidationMetadata } from "../../domain/license/validation-
 import { firstD1 } from "./d1";
 
 interface ProductReleaseRow {
-  id: string;
   version: string;
   platform: string;
+  arch: string;
   released_at: string;
+}
+
+interface BuildIdentity {
+  version: string;
+  platform: string;
+  arch: string;
 }
 
 interface LicenseRow {
@@ -51,28 +57,57 @@ interface SigningKeyRow {
   private_key_ciphertext: string;
 }
 
-export async function requireProductRelease(input: {
+async function findProductRelease(input: {
   db: D1Database;
   instanceId: string;
   productId: string;
   version: string;
   platform: string;
-}): Promise<ProductReleaseRow> {
+  arch: string;
+}): Promise<ProductReleaseRow | null> {
   const release = await firstD1<ProductReleaseRow>(input.db.prepare(
-    `SELECT id, version, platform, released_at
+    `SELECT version, platform, arch, released_at
      FROM product_releases
-     WHERE instance_id = ?1 AND product_id = ?2 AND version = ?3 AND platform = ?4
+     WHERE instance_id = ?1 AND product_id = ?2 AND version = ?3
+       AND platform = ?4 AND arch = ?5
      LIMIT 1`
-  ).bind(input.instanceId, input.productId, input.version, input.platform));
-  if (!release) {
+  ).bind(input.instanceId, input.productId, input.version, input.platform, input.arch));
+  return release ?? null;
+}
+
+async function assertReleaseEntitlement(input: {
+  db: D1Database;
+  instanceId: string;
+  productId: string;
+  license: LicenseRow;
+  build: BuildIdentity;
+}) {
+  if (input.license.license_model !== "perpetual" || !input.license.updates_until) return;
+
+  const release = await findProductRelease({
+    db: input.db,
+    instanceId: input.instanceId,
+    productId: input.productId,
+    ...input.build,
+  });
+  if (!release) return;
+  const updatesUntil = input.license.updates_until;
+  const releasedAt = release.released_at;
+  if (Date.parse(releasedAt) > Date.parse(updatesUntil)) {
     throw new AppError(
-      "PRODUCT_RELEASE_UNKNOWN",
-      "The requested Product Release is not registered.",
-      404,
-      { release_version: input.version, release_platform: input.platform },
+      "UPDATE_ENTITLEMENT_REQUIRED",
+      "This Product Release was published after the License update entitlement ended.",
+      403,
+      {
+        license_id: input.license.id,
+        updates_until: updatesUntil,
+        release_version: release.version,
+        release_platform: release.platform,
+        release_arch: release.arch,
+        released_at: releasedAt,
+      },
     );
   }
-  return release;
 }
 
 function assertLicenseUsable(license: LicenseRow, now: Date) {
@@ -116,33 +151,6 @@ function assertLicenseUsable(license: LicenseRow, now: Date) {
   }
 }
 
-function assertReleaseEntitlement(license: LicenseRow, release: ProductReleaseRow) {
-  const updatesUntil = license.updates_until && license.credential_mode === "signed"
-    ? signedClaimInstant(license.updates_until).toISOString()
-    : license.updates_until;
-  const releasedAt = license.credential_mode === "signed"
-    ? signedClaimInstant(release.released_at).toISOString()
-    : release.released_at;
-  if (
-    license.license_model === "perpetual" &&
-    updatesUntil &&
-    Date.parse(releasedAt) > Date.parse(updatesUntil)
-  ) {
-    throw new AppError(
-      "UPDATE_ENTITLEMENT_REQUIRED",
-      "This Product Release was published after the License update entitlement ended.",
-      403,
-      {
-        license_id: license.id,
-        updates_until: updatesUntil,
-        release_version: release.version,
-        release_platform: release.platform,
-        released_at: releasedAt,
-      },
-    );
-  }
-}
-
 async function createCredentialResponse(input: {
   db: D1Database;
   env: { STORAGE_ENCRYPTION_KEY?: string };
@@ -150,7 +158,7 @@ async function createCredentialResponse(input: {
   activationId: string;
   machineToken: string;
   fingerprint: string;
-  release: ProductReleaseRow;
+  build: BuildIdentity;
   now: Date;
 }) {
   const features = parseFeatures(input.license.features_json);
@@ -212,10 +220,9 @@ async function createCredentialResponse(input: {
       act: input.activationId,
       ins: input.license.instance_id,
       prd: input.license.product_id,
-      rel: input.release.id,
-      ver: input.release.version,
-      plt: input.release.platform,
-      rat: Math.floor(Date.parse(input.release.released_at) / 1000),
+      ver: input.build.version,
+      plt: input.build.platform,
+      arc: input.build.arch,
       fp: input.fingerprint,
       iat: Math.floor(input.now.getTime() / 1000),
       exp: Math.floor(tokenExpiry.getTime() / 1000),
@@ -240,6 +247,7 @@ export async function activateLicense(input: {
   name?: string | null;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
   firstIp?: string | null;
   now?: Date;
 }) {
@@ -256,14 +264,18 @@ export async function activateLicense(input: {
   ).bind(input.instanceId, input.productId, keyHash));
   if (!license) throw new AppError("LICENSE_KEY_INVALID", "The License Key is invalid.", 404);
   assertLicenseUsable(license, now);
-  const release = await requireProductRelease({
+  const build = {
+    version: input.releaseVersion,
+    platform: input.releasePlatform,
+    arch: input.releaseArch,
+  };
+  await assertReleaseEntitlement({
     db: input.db,
     instanceId: input.instanceId,
     productId: input.productId,
-    version: input.releaseVersion,
-    platform: input.releasePlatform,
+    license,
+    build,
   });
-  assertReleaseEntitlement(license, release);
 
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
   const machineToken = generateOpaqueMachineToken();
@@ -284,7 +296,7 @@ export async function activateLicense(input: {
       activationId: activation.id,
       machineToken,
       fingerprint: input.fingerprint,
-      release,
+      build,
       now,
     });
     const refreshed = await input.db.prepare(
@@ -335,7 +347,7 @@ export async function activateLicense(input: {
       activationId,
       machineToken,
       fingerprint: input.fingerprint,
-      release,
+      build,
       now,
     });
     try {
@@ -422,7 +434,7 @@ export async function activateLicense(input: {
             activationId: activation.id,
             machineToken,
             fingerprint: input.fingerprint,
-            release,
+            build,
             now,
           });
           const refreshed = await input.db.prepare(
@@ -491,6 +503,7 @@ export async function validateActivation(input: {
   fingerprint: string;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -544,14 +557,18 @@ export async function validateActivation(input: {
     updated_at: activation.license_updated_at,
   };
   assertLicenseUsable(license, now);
-  const release = await requireProductRelease({
+  const build = {
+    version: input.releaseVersion,
+    platform: input.releasePlatform,
+    arch: input.releaseArch,
+  };
+  await assertReleaseEntitlement({
     db: input.db,
     instanceId: input.instanceId,
     productId: input.productId,
-    version: input.releaseVersion,
-    platform: input.releasePlatform,
+    license,
+    build,
   });
-  assertReleaseEntitlement(license, release);
   const credentialResponse = await createCredentialResponse({
     db: input.db,
     env: input.env,
@@ -559,7 +576,7 @@ export async function validateActivation(input: {
     activationId: input.activationId,
     machineToken: input.machineToken,
     fingerprint: input.fingerprint,
-    release,
+    build,
     now,
   });
   const refreshed = await input.db.prepare(

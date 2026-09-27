@@ -116,9 +116,9 @@ describe("V1 License core contract", () => {
     );
     await run(
       `INSERT INTO product_releases (
-         id, instance_id, product_id, version, platform, description, download_url,
+         id, instance_id, product_id, version, platform, arch, description, download_url,
          artifact_sha256, released_at, created_at, updated_at
-       ) VALUES (?1, ?2, ?3, '1.0.0', 'macos-universal', NULL, NULL, ?4, ?5, ?5, ?5)`,
+       ) VALUES (?1, ?2, ?3, '1.0.0', 'macos', 'universal', NULL, NULL, ?4, ?5, ?5, ?5)`,
       releaseId,
       instanceId,
       productId,
@@ -329,7 +329,7 @@ describe("V1 License core contract", () => {
     expect(counts).toEqual({ customers: 0, licenses: 0, deliveries: 0, audits: 0 });
   });
 
-  it("activates and validates opaque credentials using only a trusted Product Release", async () => {
+  it("activates and validates opaque credentials without requiring a registered Product Release", async () => {
     await seedPlan({ id: "lpl_opaque" });
     const issued = await issueManualLicense({
       db: testEnv.d1,
@@ -348,7 +348,8 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:opaque-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       now: new Date("2026-09-19T10:01:00.000Z"),
     });
     expect(activated.credential_mode).toBe("opaque");
@@ -363,11 +364,12 @@ describe("V1 License core contract", () => {
       machineToken: activated.machine_token,
       fingerprint: "sha256:opaque-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       now: new Date("2026-09-19T10:02:00.000Z"),
     });
     expect(validated.terms.features).toEqual(["pro_export"]);
-    await expect(validateActivation({
+    const unregistered = await validateActivation({
       db: testEnv.d1,
       env: testEnv.env,
       instanceId,
@@ -376,8 +378,10 @@ describe("V1 License core contract", () => {
       machineToken: activated.machine_token,
       fingerprint: "sha256:opaque-device",
       releaseVersion: "9.9.9",
-      releasePlatform: "macos-universal",
-    })).rejects.toMatchObject({ code: "PRODUCT_RELEASE_UNKNOWN" });
+      releasePlatform: "macos",
+      releaseArch: "universal",
+    });
+    expect(unregistered.state).toMatchObject({ kind: "license", status: "active" });
   });
 
   it("uses the server Product Release time for update entitlement", async () => {
@@ -393,9 +397,9 @@ describe("V1 License core contract", () => {
     });
     await run(
       `INSERT INTO product_releases (
-         id, instance_id, product_id, version, platform, artifact_sha256,
+         id, instance_id, product_id, version, platform, arch, artifact_sha256,
          released_at, created_at, updated_at
-       ) VALUES ('rel_v1_200', ?1, ?2, '2.0.0', 'macos-universal', ?3, ?4, ?4, ?4)`,
+       ) VALUES ('rel_v1_200', ?1, ?2, '2.0.0', 'macos', 'universal', ?3, ?4, ?4, ?4)`,
       instanceId,
       productId,
       "b".repeat(64),
@@ -409,12 +413,27 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:new-release-device",
       releaseVersion: "2.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       now: new Date("2026-09-19T10:00:00.500Z"),
     })).rejects.toMatchObject({
       code: "UPDATE_ENTITLEMENT_REQUIRED",
       details: { released_at: "2026-10-01T00:00:00.000Z" },
     });
+
+    const unregistered = await activateLicense({
+      db: testEnv.d1,
+      env: testEnv.env,
+      instanceId,
+      productId,
+      licenseKey: issued.license.licenseKey,
+      fingerprint: "sha256:unregistered-release-device",
+      releaseVersion: "9.9.9",
+      releasePlatform: "macos",
+      releaseArch: "arm64",
+      now: new Date("2026-09-19T10:00:00.500Z"),
+    });
+    expect(unregistered.state).toMatchObject({ kind: "license", status: "active" });
   });
 
   it("enforces the activation limit in the database under concurrent requests", async () => {
@@ -437,7 +456,8 @@ describe("V1 License core contract", () => {
         licenseKey: issued.license.licenseKey,
         fingerprint: `sha256:${device}`,
         releaseVersion: "1.0.0",
-        releasePlatform: "macos-universal",
+        releasePlatform: "macos",
+        releaseArch: "universal",
       })
     ));
     expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -449,7 +469,7 @@ describe("V1 License core contract", () => {
     expect(count.count).toBe(1);
   });
 
-  it("returns a strict EdDSA signed token bound to the trusted release", async () => {
+  it("returns a strict EdDSA signed token bound to the client build identity", async () => {
     const keyId = "key_v1_active";
     const keyPair = await generateEd25519KeyPair();
     const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {
@@ -488,7 +508,8 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:signed-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       now: new Date("2026-09-19T10:01:00.000Z"),
     });
     const [headerPart, claimsPart] = activated.signed_license_token!.split(".");
@@ -502,12 +523,14 @@ describe("V1 License core contract", () => {
       act: activated.activation_id,
       ins: instanceId,
       prd: productId,
-      rel: releaseId,
       ver: "1.0.0",
-      plt: "macos-universal",
-      rat: Date.parse(releasedAt) / 1000,
+      plt: "macos",
+      arc: "universal",
     });
-    expect(base64UrlToJson<any>(claimsPart)).not.toHaveProperty("acc");
+    const claims = base64UrlToJson<any>(claimsPart);
+    expect(claims).not.toHaveProperty("acc");
+    expect(claims).not.toHaveProperty("rel");
+    expect(claims).not.toHaveProperty("rat");
   });
 
   it("resolves Product signing keys from the globally unique Product ID", async () => {
@@ -593,7 +616,8 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:signed-atomic-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       now: new Date("2026-09-19T10:01:00.000Z"),
     };
     await expect(activateLicense(activationInput)).rejects.toThrow("DELIVERY_ENVELOPE_INVALID_JSON");
@@ -649,7 +673,8 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:rotate-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
     });
     const recovered = await rotateLicenseKey({
       db: testEnv.d1,
@@ -669,7 +694,8 @@ describe("V1 License core contract", () => {
       machineToken: activated.machine_token,
       fingerprint: "sha256:rotate-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
     })).resolves.toBeDefined();
     const reset = await rotateLicenseKey({
       db: testEnv.d1,
@@ -688,7 +714,8 @@ describe("V1 License core contract", () => {
       machineToken: activated.machine_token,
       fingerprint: "sha256:rotate-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
     })).rejects.toMatchObject({ code: "ACTIVATION_REVOKED" });
 
     const rows = testEnv.sqliteDb.prepare(
@@ -741,8 +768,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint: "sha256:trial-device",
-      releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
       now: new Date("2026-09-19T10:00:00.000Z"),
     });
     expect(first.trial_token).toMatch(/^ttk_[0-9a-f]{64}$/);
@@ -751,8 +776,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint: "sha256:trial-device",
-      releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
     })).rejects.toMatchObject({ code: "TRIAL_ALREADY_CLAIMED" });
     const validated = await validateTrial({
       db: testEnv.d1,
@@ -761,8 +784,6 @@ describe("V1 License core contract", () => {
       trialId: first.trial_id,
       trialToken: first.trial_token,
       fingerprint: "sha256:trial-device",
-      releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
       now: new Date("2026-09-19T10:10:00.000Z"),
     });
     expect(validated.features).toEqual(["trial_export"]);
@@ -781,8 +802,6 @@ describe("V1 License core contract", () => {
       trialId: first.trial_id,
       trialToken: first.trial_token,
       fingerprint: "sha256:trial-device",
-      releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
     })).rejects.toMatchObject({ code: "TRIAL_REVOKED" });
   });
 
@@ -792,7 +811,8 @@ describe("V1 License core contract", () => {
       product_id: productId,
       fingerprint: "sha256:none-device",
       release_version: "1.0.0",
-      release_platform: "macos-universal",
+      release_platform: "macos",
+      release_arch: "universal",
       credential: { kind: "none" },
     };
     const available = await app.request("https://license.example.test/api/v1/client/validate", {
@@ -816,22 +836,15 @@ describe("V1 License core contract", () => {
       },
     });
 
-    const unknownRelease = await app.request("https://license.example.test/api/v1/client/validate", {
+    const unregisteredRelease = await app.request("https://license.example.test/api/v1/client/validate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...requestBody, release_version: "9.9.9" }),
     }, testEnv.env);
-    expect(unknownRelease.status).toBe(200);
-    expect((await unknownRelease.json() as any).data.state).toEqual({
-      kind: "release_not_eligible",
-      status: "unknown_release",
-      code: "PRODUCT_RELEASE_UNKNOWN",
-      release_version: "9.9.9",
-      release_platform: "macos-universal",
-      details: {
-        release_version: "9.9.9",
-        release_platform: "macos-universal",
-      },
+    expect(unregisteredRelease.status).toBe(200);
+    expect((await unregisteredRelease.json() as any).data.state).toEqual({
+      kind: "activation_required",
+      trial: { status: "available", duration_seconds: 1200, features: ["trial_export"] },
     });
 
     const mixedCredential = await app.request("https://license.example.test/api/v1/client/validate", {
@@ -852,7 +865,8 @@ describe("V1 License core contract", () => {
         product_id: productId,
         fingerprint: "sha256:none-device",
         release_version: "1.0.0",
-        release_platform: "macos-universal",
+        release_platform: "macos",
+        release_arch: "universal",
         activation_id: "act_legacy",
         machine_token: "mtk_legacy_request_token",
       }),
@@ -902,8 +916,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint,
-      releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
     });
     const app = clientApp();
     const unavailable = await app.request("https://license.example.test/api/v1/client/validate", {
@@ -913,7 +925,8 @@ describe("V1 License core contract", () => {
         product_id: productId,
         fingerprint,
         release_version: "1.0.0",
-        release_platform: "macos-universal",
+        release_platform: "macos",
+      release_arch: "universal",
         credential: { kind: "none" },
       }),
     }, testEnv.env);
@@ -936,7 +949,8 @@ describe("V1 License core contract", () => {
         product_id: productId,
         fingerprint,
         release_version: "1.0.0",
-        release_platform: "macos-universal",
+        release_platform: "macos",
+      release_arch: "universal",
       }),
     }, testEnv.env);
     const duplicateBody = await duplicate.json() as any;
@@ -973,7 +987,8 @@ describe("V1 License core contract", () => {
         license_key: issued.license.licenseKey,
         fingerprint: "sha256:operation-license-device",
         release_version: "1.0.0",
-        release_platform: "macos-universal",
+        release_platform: "macos",
+      release_arch: "universal",
       }),
     }, testEnv.env);
     const activatedBody = await activatedResponse.json() as any;
@@ -997,7 +1012,8 @@ describe("V1 License core contract", () => {
         product_id: productId,
         fingerprint: "sha256:operation-trial-device",
         release_version: "1.0.0",
-        release_platform: "macos-universal",
+        release_platform: "macos",
+      release_arch: "universal",
       }),
     }, testEnv.env);
     const claimedBody = await claimedResponse.json() as any;
@@ -1037,8 +1053,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint,
-      releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
     });
     const app = clientApp();
     const validate = (trialToken: string) => app.request(
@@ -1050,7 +1064,8 @@ describe("V1 License core contract", () => {
           product_id: productId,
           fingerprint,
           release_version: "1.0.0",
-          release_platform: "macos-universal",
+          release_platform: "macos",
+      release_arch: "universal",
           credential: { kind: "trial", trial_id: claimed.trial_id, trial_token: trialToken },
         }),
       },
@@ -1133,7 +1148,8 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint,
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
     });
     const app = clientApp();
     const validate = (machineToken: string, releaseVersion = "1.0.0") => app.request(
@@ -1145,7 +1161,8 @@ describe("V1 License core contract", () => {
           product_id: productId,
           fingerprint,
           release_version: releaseVersion,
-          release_platform: "macos-universal",
+          release_platform: "macos",
+          release_arch: "universal",
           credential: {
             kind: "license",
             activation_id: activated.activation_id,
@@ -1168,15 +1185,10 @@ describe("V1 License core contract", () => {
     });
     expect(activeBody.data).not.toHaveProperty("machine_token");
 
-    const unknownRelease = await validate(activated.machine_token, "9.9.9");
-    expect((await unknownRelease.json() as any).data.state).toMatchObject({
-      kind: "release_not_eligible",
-      status: "unknown_release",
-      code: "PRODUCT_RELEASE_UNKNOWN",
-      details: {
-        release_version: "9.9.9",
-        release_platform: "macos-universal",
-      },
+    const unregisteredRelease = await validate(activated.machine_token, "9.9.9");
+    expect((await unregisteredRelease.json() as any).data.state).toMatchObject({
+      kind: "license",
+      status: "active",
     });
 
     await run(
@@ -1254,9 +1266,9 @@ describe("V1 License core contract", () => {
     );
     await run(
       `INSERT INTO product_releases (
-         id, instance_id, product_id, version, platform, artifact_sha256,
+         id, instance_id, product_id, version, platform, arch, artifact_sha256,
          released_at, created_at, updated_at
-       ) VALUES ('rel_v2_contract', ?1, ?2, '2.0.0', 'macos-universal', ?3, ?4, ?4, ?4)`,
+       ) VALUES ('rel_v2_contract', ?1, ?2, '2.0.0', 'macos', 'universal', ?3, ?4, ?4, ?4)`,
       instanceId,
       productId,
       "c".repeat(64),
@@ -1267,14 +1279,16 @@ describe("V1 License core contract", () => {
       status: "update_required",
       code: "UPDATE_ENTITLEMENT_REQUIRED",
       release_version: "2.0.0",
-      release_platform: "macos-universal",
+      release_platform: "macos",
+      release_arch: "universal",
       updates_until: "2026-09-19T00:00:00.000Z",
       released_at: "2026-10-01T00:00:00.000Z",
       details: {
         license_id: issued.license.id,
         updates_until: "2026-09-19T00:00:00.000Z",
         release_version: "2.0.0",
-        release_platform: "macos-universal",
+        release_platform: "macos",
+        release_arch: "universal",
         released_at: "2026-10-01T00:00:00.000Z",
       },
     });
@@ -1369,7 +1383,8 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:short-ttl-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       now: activatedAt,
     });
     expect(activated.signed_license_token_expires_at).toBe("2026-09-23T10:01:01.000Z");
@@ -1480,7 +1495,8 @@ describe("V1 License core contract", () => {
       licenseKey: issued.license.licenseKey,
       fingerprint: "sha256:grace-device",
       releaseVersion: "1.0.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       now: new Date("2026-09-19T10:06:00.000Z"),
     });
     expect(activated.license_expires_at).toBe("2026-09-19T10:10:00.000Z");

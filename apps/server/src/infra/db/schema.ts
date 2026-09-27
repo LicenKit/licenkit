@@ -163,6 +163,7 @@ export const productReleases = sqliteTable(
     productId: text("product_id").notNull(),
     version: text("version").notNull(),
     platform: text("platform").notNull(),
+    arch: text("arch").notNull(),
     description: text("description"),
     downloadUrl: text("download_url"),
     artifactSha256: text("artifact_sha256").notNull(),
@@ -173,10 +174,10 @@ export const productReleases = sqliteTable(
   (table) => [
     unique("uq_product_releases_instance_id").on(table.instanceId, table.id),
     unique("uq_product_releases_identity").on(
-      table.instanceId,
       table.productId,
       table.version,
       table.platform,
+      table.arch,
     ),
     foreignKey({
       name: "fk_product_releases_product",
@@ -188,7 +189,10 @@ export const productReleases = sqliteTable(
       table.productId,
       table.version,
       table.platform,
+      table.arch,
     ),
+    check("ck_product_releases_platform", sql`${table.platform} in ('macos', 'windows', 'linux')`),
+    check("ck_product_releases_arch", sql`${table.arch} in ('universal', 'arm64', 'x86_64')`),
     check(
       "ck_product_releases_artifact_sha256",
       sql`length(${table.artifactSha256}) = 64

@@ -9,10 +9,9 @@ export interface SignedLicenseClaims {
   act: string;
   ins: string;
   prd: string;
-  rel: string;
   ver: string;
   plt: string;
-  rat: number;
+  arc: string;
   fp: string;
   iat: number;
   exp: number;
@@ -174,13 +173,13 @@ export async function verifySignedLicenseToken(
   if (Object.prototype.hasOwnProperty.call(claims, "acc")) {
     throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Legacy Claim 'acc' is not supported");
   }
-  const requiredStrings = ["lic", "act", "ins", "prd", "rel", "ver", "plt", "fp"] as const;
+  const requiredStrings = ["lic", "act", "ins", "prd", "ver", "plt", "arc", "fp"] as const;
   for (const field of requiredStrings) {
     if (typeof claims[field] !== "string" || claims[field] === "") {
       throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be a non-empty string`);
     }
   }
-  for (const field of ["rat", "iat", "exp"] as const) {
+  for (const field of ["iat", "exp"] as const) {
     if (!Number.isSafeInteger(claims[field])) {
       throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be an integer timestamp`);
     }
@@ -207,6 +206,7 @@ export interface ClaimsContext {
   fingerprint: string;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
   nowSeconds?: number;
 }
 
@@ -224,10 +224,10 @@ export function evaluateSignedLicenseClaims(claims: SignedLicenseClaims, context
     [claims.fp.toLowerCase() === context.fingerprint.toLowerCase(), "TOKEN_FINGERPRINT_MISMATCH", "Token fingerprint does not match this device"],
     [claims.ver === context.releaseVersion, "TOKEN_RELEASE_VERSION_MISMATCH", "Token release version does not match this build"],
     [claims.plt === context.releasePlatform, "TOKEN_RELEASE_PLATFORM_MISMATCH", "Token release platform does not match this build"],
+    [claims.arc === context.releaseArch, "TOKEN_RELEASE_ARCH_MISMATCH", "Token release architecture does not match this build"],
     [claims.iat <= now + 300, "TOKEN_ISSUED_IN_FUTURE", "Token issue time is in the future"],
     [claims.exp > now, "TOKEN_EXPIRED", "Signed License Token has expired"],
     [claims.lexp === null || claims.lexp > now, "LICENSE_EXPIRED", "License has expired"],
-    [claims.upd === null || claims.rat <= claims.upd, "UPDATE_ENTITLEMENT_REQUIRED", "This build was released after the update entitlement ended"],
   ];
   const failure = comparisons.find(([matches]) => !matches);
   return failure ? { valid: false, code: failure[1], reason: failure[2] } : { valid: true };

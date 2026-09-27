@@ -79,6 +79,7 @@ describe("User and Instance database schema", () => {
         "0000_v1_initial.sql",
         "0001_webhook_verification_evidence.sql",
         "0002_paddle_simulator_verification.sql",
+        "0003_split_release_platform_arch.sql",
       ]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);
@@ -126,6 +127,50 @@ describe("User and Instance database schema", () => {
     });
     expect(columns(db, "inbound_events")).toContain("webhook_secret_version");
     expect(columns(db, "billing_webhook_simulation_tests")).toContain("event_type");
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  });
+
+  it("splits legacy Product Release platform values without losing existing rows", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    applyMigrationFile(db, "0000_v1_initial.sql");
+    db.prepare(
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_release', 'Release Instance', 'https://site.example.test',
+         'https://admin.example.test', 'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO products (id, instance_id, name, status, created_at, updated_at)
+       VALUES ('prd_release', 'ins_release', 'Release Product', 'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO product_releases (
+         id, instance_id, product_id, version, platform, artifact_sha256,
+         released_at, created_at, updated_at
+       ) VALUES ('rel_existing', 'ins_release', 'prd_release', '1.2.3',
+         'macos-arm64', ?, ?, ?, ?)`,
+    ).run("a".repeat(64), now, now, now);
+
+    applyMigrationFile(db, "0003_split_release_platform_arch.sql");
+
+    expect(db.prepare(
+      `SELECT id, version, platform, arch, released_at
+       FROM product_releases WHERE id = 'rel_existing'`,
+    ).get()).toEqual({
+      id: "rel_existing",
+      version: "1.2.3",
+      platform: "macos",
+      arch: "arm64",
+      released_at: now,
+    });
+    expect(() => db.prepare(
+      `INSERT INTO product_releases (
+         id, instance_id, product_id, version, platform, artifact_sha256,
+         released_at, created_at, updated_at
+       ) VALUES ('rel_missing_arch', 'ins_release', 'prd_release', '2.0.0',
+         'macos', ?, ?, ?, ?)`,
+    ).run("b".repeat(64), now, now, now)).toThrow(/arch/);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
   });

@@ -145,7 +145,7 @@ public enum EntitlementState: Sendable {
 - `activationRequired`：当前没有可用 License 或可认证的 Trial；同时携带是否可以开始 Trial；
 - `trial`：当前设备已经领取 Trial，并有可认证的 Trial 状态；
 - `license`：当前设备存在 Activation，并有可认证的 License 状态；
-- `releaseNotEligible`：当前 App Release 未注册，或现有 License 不包含该 Release 的更新权益；无凭据请求也可以返回未注册状态；
+- `releaseNotEligible`：Server 已找到当前 App Release，但永久 License 的有限期更新权益不包含该 Release；未登记 Release 按宽容策略放行；
 - `unknown`：没有足够证据形成当前授权结论，通常只用于尚未检查或本地数据无法可信解释的场景。
 
 ### 4.2 Trial 可用性
@@ -158,7 +158,7 @@ public enum TrialAvailability: Sendable {
 }
 ```
 
-没有本地凭据时，SDK 不能自行断言“可以开始 Trial”。Server 必须使用当前 `instance_id + product_id + fingerprint` 检查 Product 配置、Release 和设备领取历史。
+没有本地凭据时，SDK 不能自行断言“可以开始 Trial”。Server 必须使用当前 `instance_id + product_id + fingerprint` 检查 Product 配置和设备领取历史。Trial 不查询 Product Release。
 
 当客户端没有 Trial Token 时，Server 只返回是否可以领取，不返回已有 Trial ID、撤销原因或其他 Trial 历史细节。
 
@@ -198,10 +198,9 @@ public enum LicenseEntitlement: Sendable {
 
 以下情况不伪装成 License 到期：
 
-- 当前版本或平台没有受信 Product Release：`PRODUCT_RELEASE_UNKNOWN`；
-- 永久 License 的更新权益不覆盖当前 Release：`UPDATE_ENTITLEMENT_REQUIRED`。
+- 永久 License 存在 `updates_until`，Server 找到完全匹配的 Product Release，且其发布时间超过更新权益截止：`UPDATE_ENTITLEMENT_REQUIRED`。
 
-它们进入 `releaseNotEligible`，并保留原始 code、Release 版本、平台、`updates_until` 与 `released_at` 等可安全返回的数据。
+它进入 `releaseNotEligible`，并保留原始 code、Release 版本、平台、架构、`updates_until` 与 `released_at` 等可安全返回的数据。未登记 Product Release 不阻断，因为缺失的是服务端可选元数据，不是用户输入错误。
 
 ### 4.6 可用性计算
 
@@ -427,7 +426,8 @@ POST /api/v1/client/trials/validate
   "product_id": "prd_01...",
   "fingerprint": "sha256:...",
   "release_version": "2.4.0",
-  "release_platform": "macos-universal",
+  "release_platform": "macos",
+  "release_arch": "universal",
   "credential": {}
 }
 ```
@@ -468,7 +468,7 @@ Trial：
 
 Server 使用严格 discriminated union 校验请求，不允许混合 License 与 Trial 字段，也不通过字段是否存在进行模糊猜测。
 
-三种 credential 都使用同一 Release 资格语义。即使 `kind=none`，未注册的当前 Release 也返回 `releaseNotEligible.unknownRelease`；只有 Release 已知时，Server 才继续计算 `activationRequired` 下的 Trial 可用性。
+只有 `kind=license` 且目标 License 为永久授权并存在 `updates_until` 时，Server 才查询 Product Release。未注册时继续放行；`kind=trial` 与 `kind=none` 不查询 Release，直接按各自凭据或 Trial 可用性规则处理。
 
 ### 7.3 成功响应
 
@@ -547,7 +547,6 @@ Server 使用严格 discriminated union 校验请求，不允许混合 License �
 | `LICENSE_REVOKED` | `license.revoked` |
 | `ACTIVATION_REVOKED` | `license.activationRevoked` |
 | `ACTIVATION_DEACTIVATED` | `license.activationDeactivated` |
-| `PRODUCT_RELEASE_UNKNOWN` | `releaseNotEligible.unknownRelease` |
 | `UPDATE_ENTITLEMENT_REQUIRED` | `releaseNotEligible.updateRequired` |
 
 以下情况仍然是失败，不伪装成授权状态：
@@ -849,7 +848,7 @@ let result = await LicenKit.shared.activate(
 - SDK 保存 Activation/Machine Token，并清除同设备 Trial 凭据；
 - 宿主不长期保存 License Key，也不写入日志或分析事件；
 - 失败时保留原始错误 code、request ID 和安全 details；
-- `PRODUCT_RELEASE_UNKNOWN`、`UPDATE_ENTITLEMENT_REQUIRED`、激活数已满和无效注册码显示不同原因。
+- `UPDATE_ENTITLEMENT_REQUIRED`、激活数已满和无效注册码显示不同原因。
 
 激活成功后不需要追加调用 `validate()`。
 
@@ -967,7 +966,6 @@ Server 返回 trial.expired 或更新后的可信状态
 | `license.activationRevoked` | 停止当前设备权益，提供重新激活或设备管理入口 |
 | `license.activationDeactivated` | 清理不再有效的本地 Activation，进入激活界面 |
 | `releaseNotEligible.updateRequired` | 说明当前 App Release 不在更新权益内，不说成 License 到期 |
-| `releaseNotEligible.unknownRelease` | 说明当前构建未在 Server 注册，并保留版本/平台诊断 |
 
 永久 License 也按相同规则调用 `validate()`。它的 `expiresAt` 可以为空，但冷却窗口结束后，宿主下一次主动调用仍会进行在线校验。
 

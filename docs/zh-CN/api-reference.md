@@ -57,7 +57,8 @@ CLI 激活只提交 Product 与构建身份，例如：
 licenkit activate LK-... \
   --product prd_01... \
   --release 2.4.0 \
-  --release-platform macos-universal
+  --release-platform macos \
+  --release-arch universal
 ```
 
 CLI 不再接受 `--instance` 或 `LICENKIT_INSTANCE_ID`；服务端通过 Product ID 解析 Instance。
@@ -229,7 +230,8 @@ PATCH  /api/v1/admin/products/:productId/releases/:releaseId
 ```json
 {
   "version": "2.4.0",
-  "platform": "macos-universal",
+  "platform": "macos",
+  "arch": "universal",
   "description": "Performance and stability update",
   "download_url": "https://downloads.example.com/app-2.4.0-universal.dmg",
   "artifact_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -237,9 +239,9 @@ PATCH  /api/v1/admin/products/:productId/releases/:releaseId
 }
 ```
 
-`description` 和 `download_url` 可空，`artifact_sha256` 必填。`version + platform` 在 Product 内唯一。创建后 `version`、`platform`、`artifact_sha256` 和 `released_at` 不允许 PATCH；说明与下载地址可以修改。若二进制或 Hash 变化，创建新的 Release，不能覆盖已有发布事实。
+`platform` 是用户可理解的操作系统枚举：`macos | windows | linux`；`arch` 是独立架构枚举：`universal | arm64 | x86_64`。Admin 在 macOS 下预选 `universal`，但提交时仍必须显式携带。`description` 和 `download_url` 可空，`artifact_sha256` 必填。`version + platform + arch` 在 Product 内唯一。创建后 `version`、`platform`、`arch`、`artifact_sha256` 和 `released_at` 不允许 PATCH；说明与下载地址可以修改。若二进制或 Hash 变化，创建新的 Release，不能覆盖已有发布事实。
 
-Release API 只允许 owner/admin。发布日期由受信管理或发布流程写入；Client API 不接受该字段。
+Release API 只允许 owner/admin。发布日期由受信管理或发布流程写入；Client API 不接受该字段。Release 是有限期免费更新规则的可选服务端元数据，不是激活、Trial 或普通在线校验的全局前置条件。
 
 ### 4.4 License Plan
 
@@ -754,7 +756,8 @@ POST /api/v1/client/activate
   "device_platform": "macos-arm64",
   "name": "Alex's MacBook Pro",
   "release_version": "2.4.0",
-  "release_platform": "macos-universal"
+  "release_platform": "macos",
+  "release_arch": "universal"
 }
 ```
 
@@ -829,7 +832,8 @@ POST /api/v1/client/validate
   "product_id": "prd_01...",
   "fingerprint": "sha256:...",
   "release_version": "2.4.0",
-  "release_platform": "macos-universal",
+  "release_platform": "macos",
+  "release_arch": "universal",
   "credential": {
     "kind": "license",
     "activation_id": "act_01...",
@@ -844,7 +848,7 @@ POST /api/v1/client/validate
 | --- | --- | --- |
 | `license` | `activation_id`、`machine_token` | 校验已激活 License |
 | `trial` | `trial_id`、`trial_token` | 校验已经领取的设备 Trial |
-| `none` | 无 | 查询当前 Release 是否已登记，以及此设备是否还能领取 Trial |
+| `none` | 无 | 查询此设备是否还能领取 Trial |
 
 验证响应固定包含 `state`、`validation` 和 `meta`。仅 License 校验可以额外包含 `credential_update`；`signed` 模式借此原子刷新 Signed License Token，`opaque` 模式返回空的签名字段。Trial 和 `none` 响应不得包含 `credential_update`。
 
@@ -881,7 +885,7 @@ POST /api/v1/client/validate
 }
 ```
 
-激活和在线校验都必须携带 App 内置的版本标识和平台。服务端在当前 Instance 与 Product 下查找受信 Product Release；查不到时返回 `PRODUCT_RELEASE_UNKNOWN`。对受版本期限约束的永久 License，受信 `released_at > updates_until` 返回 `UPDATE_ENTITLEMENT_REQUIRED`；该错误不改变 License 状态，也不能转换成 `LICENSE_EXPIRED`。
+激活和在线校验都必须携带 App 内置的版本、操作系统与架构，分别使用 `release_version`、`release_platform`、`release_arch`。只有 License 为永久授权且存在 `updates_until` 时，服务端才在当前 Instance 与 Product 下查询完全匹配的 Product Release。查不到记录时按宽容策略继续放行，因为这是服务端元数据未配置，不是客户端或用户错误；查到且 `released_at > updates_until` 时返回 `UPDATE_ENTITLEMENT_REQUIRED`。该错误不改变 License 状态，也不能转换成 `LICENSE_EXPIRED`。
 
 激活和在线校验在其他 License 状态判断前拒绝 `is_checkout_verification=1`，返回 `LICENSE_CHECKOUT_VERIFICATION_ONLY`。管理员恢复、状态编辑和方案迁移也不得清除该标记；验证注册码只能证明邮件闭环，不能成为可用授权。
 
@@ -898,10 +902,9 @@ POST /api/v1/client/validate
 | `license` | `active` | `expires_at`、`terms` | 是，但仍受客户端新鲜度窗口和签名 Token 到期约束 |
 | `license` | `expired` / `suspended` / `revoked` | 原始 `code` 与可用诊断字段 | 否 |
 | `license` | `activation_revoked` / `activation_deactivated` | 原始 `code` | 否 |
-| `release_not_eligible` | `unknown_release` | `PRODUCT_RELEASE_UNKNOWN`、版本、平台 | 否 |
-| `release_not_eligible` | `update_required` | `UPDATE_ENTITLEMENT_REQUIRED`、`updates_until`、`released_at` | 否 |
+| `release_not_eligible` | `update_required` | `UPDATE_ENTITLEMENT_REQUIRED`、版本、平台、架构、`updates_until`、`released_at` | 否 |
 
-对 active Product，无凭据请求中的未知 Release 返回顶层 `release_not_eligible.unknown_release`，不会伪装成“Trial 不可用”。Trial 未启用或设备已经领取过分别返回 `activation_required + trial.unavailable(not_enabled)` 与 `activation_required + trial.unavailable(already_claimed)`。已归档 Product 仍是调用失败，返回 `PRODUCT_UNAVAILABLE`；Product 不存在返回资源不存在。无凭据响应不会返回历史 `trial_id` 或 Trial Token。
+对 active Product，无凭据请求不查询 Product Release。Trial 未启用或设备已经领取过分别返回 `activation_required + trial.unavailable(not_enabled)` 与 `activation_required + trial.unavailable(already_claimed)`。已归档 Product 仍是调用失败，返回 `PRODUCT_UNAVAILABLE`；Product 不存在返回资源不存在。无凭据响应不会返回历史 `trial_id` 或 Trial Token。
 
 到期、吊销等状态仍可携带 `code` 和安全的 `details`。客户端缓存业务快照时必须保留这些字段；脱敏应按字段处理 Token、Secret、密码、注册码和 Authorization，不能整包丢弃诊断信息。
 
@@ -919,11 +922,12 @@ POST /api/v1/client/trials/claim
   "fingerprint": "sha256:...",
   "device_platform": "macos-arm64",
   "release_version": "2.4.0",
-  "release_platform": "macos-universal"
+  "release_platform": "macos",
+  "release_arch": "universal"
 }
 ```
 
-服务端要求 Product 为 active 且已启用试用，并在当前 Instance 与 Product 下找到受信 Product Release。首次领取以 `Cache-Control: no-store` 返回一次 Trial Token：
+服务端要求 Product 为 active 且已启用试用。Product Release 是否登记不影响 Trial 领取；首次领取以 `Cache-Control: no-store` 返回一次 Trial Token：
 
 ```json
 {
@@ -953,7 +957,7 @@ POST /api/v1/client/trials/claim
 
 服务端只保存 Token 哈希。重复或并发领取同一 `instance_id + product_id + fingerprint` 返回 `TRIAL_ALREADY_CLAIMED`，不得延长到期时间或再次返回 Token；这项业务唯一性由 D1 唯一约束承担。Trial Claim 与校验接口的流量保护由 Cloudflare Zone 级 WAF Rate Limiting Rules 按方法、路径和部署套餐支持的请求特征配置，不在应用内复制通用计数状态。
 
-后续 Trial 校验使用 7.2 的统一 `/validate`，提交 `credential.kind=trial`。服务端同时限定 Instance 与 Product，验证 Token 哈希、设备绑定、吊销状态、绝对到期时间和 Product Release；成功时更新 `last_validated_at`。未知 Release、到期和吊销分别得到 `release_not_eligible.unknown_release`、`trial.expired` 和 `trial.revoked`，不得归一化成 License 错误。V1 Trial Claim 不签发 Signed License Token。
+后续 Trial 校验使用 7.2 的统一 `/validate`，提交 `credential.kind=trial`。服务端同时限定 Instance 与 Product，验证 Token 哈希、设备绑定、吊销状态和绝对到期时间；成功时更新 `last_validated_at`。到期和吊销分别得到 `trial.expired` 和 `trial.revoked`，不得归一化成 License 错误。Product Release 不参与 Trial 校验。V1 Trial Claim 不签发 Signed License Token。
 
 Paddle 免费订阅试用不调用这两个接口。它在已验签支付事件履约后得到普通 License Key，随后走 7.1 和 7.2 的正常 License 激活与校验合同。
 

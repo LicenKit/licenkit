@@ -39,10 +39,9 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
     act: "act_1",
     ins: "ins_1",
     prd: "prd_1",
-    rel: "rel_1",
     ver: "2.4.0",
-    plt: "macos-universal",
-    rat: now - 100,
+    plt: "macos",
+    arc: "universal",
     fp: "device-fingerprint",
     iat: now,
     exp: now + 3600,
@@ -123,7 +122,8 @@ describe("unified Client API contract", () => {
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       credential: {
         kind: "license",
         activation_id: "act_1",
@@ -135,7 +135,8 @@ describe("unified Client API contract", () => {
       product_id: "prd_1",
       fingerprint: "device-fingerprint",
       release_version: "2.4.0",
-      release_platform: "macos-universal",
+      release_platform: "macos",
+      release_arch: "universal",
       credential: {
         kind: "license",
         activation_id: "act_1",
@@ -170,7 +171,8 @@ describe("unified Client API contract", () => {
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
     };
     await apiValidate({
       ...context,
@@ -205,7 +207,8 @@ describe("unified Client API contract", () => {
         status: "update_required",
         code: "UPDATE_ENTITLEMENT_REQUIRED",
         release_version: "2.4.0",
-        release_platform: "macos-universal",
+        release_platform: "macos",
+        release_arch: "universal",
         updates_until: "2026-09-01T00:00:00Z",
         released_at: "2026-09-20T00:00:00Z",
       },
@@ -224,7 +227,8 @@ describe("unified Client API contract", () => {
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       credential: {
         kind: "license" as const,
         activation_id: "act_1",
@@ -261,7 +265,8 @@ describe("unified Client API contract", () => {
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       credential: { kind: "none" },
     })).rejects.toMatchObject({
       name: "ClientContractError",
@@ -284,7 +289,8 @@ describe("unified Client API contract", () => {
       productId: "prd_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       credential: { kind: "none" },
     })).rejects.toMatchObject({
       name: "ClientContractError",
@@ -343,7 +349,8 @@ describe("unified Client API contract", () => {
       fingerprint: "device-fingerprint",
       devicePlatform: "macos-arm64",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
     })).resolves.toMatchObject({
       activation_id: "act_1",
       state: { kind: "license", status: "active" },
@@ -388,7 +395,8 @@ describe("signed credential verification", () => {
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       nowSeconds: signed.claims.iat,
     };
     await expect(verifyActivationResponse(response, { key_v1: signed.publicKey }, context))
@@ -428,7 +436,8 @@ describe("signed credential verification", () => {
         activationId: "act_1",
         fingerprint: "device-fingerprint",
         releaseVersion: "2.4.0",
-        releasePlatform: "macos-universal",
+        releasePlatform: "macos",
+        releaseArch: "universal",
         nowSeconds: signed.claims.iat,
       },
       state
@@ -446,27 +455,29 @@ describe("signed credential verification", () => {
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       nowSeconds: current.claims.iat,
     })).toMatchObject({ valid: false, code: "TOKEN_PRODUCT_MISMATCH" });
   });
 
-  it("keeps License and update entitlement bounds independent from the online window", async () => {
+  it("keeps License expiry local while leaving update entitlement decisions to the Server", async () => {
     const now = Math.floor(Date.now() / 1000);
     const beyondLicense = await signedToken({ iat: now - 100, exp: now + 60, lexp: now + 30 });
     await expect(verifySignedLicenseToken(beyondLicense.token, beyondLicense.publicKey))
       .rejects.toMatchObject({ code: "TOKEN_CLAIMS_INVALID" });
 
-    const updateEnded = await signedToken({ rat: 2_000, upd: 1_999, lexp: null });
+    const updateEnded = await signedToken({ upd: 1_999, lexp: null });
     const updateClaims = (await verifySignedLicenseToken(updateEnded.token, updateEnded.publicKey)).claims;
     expect(evaluateSignedLicenseClaims(updateClaims, {
       productId: "prd_1",
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       nowSeconds: updateClaims.iat,
-    })).toMatchObject({ valid: false, code: "UPDATE_ENTITLEMENT_REQUIRED" });
+    })).toEqual({ valid: true });
   });
 });
 
@@ -492,7 +503,8 @@ describe("local credential state and periodic verification", () => {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
       machineToken: "mtk_secret_value_123",
@@ -513,7 +525,8 @@ describe("local credential state and periodic verification", () => {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
       machineToken: "mtk_secret_value_123",
@@ -538,7 +551,8 @@ describe("local credential state and periodic verification", () => {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
       machineToken: "mtk_secret_value_123",
@@ -588,7 +602,8 @@ describe("local credential state and periodic verification", () => {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
       releaseVersion: "2.4.0",
-      releasePlatform: "macos-universal",
+      releasePlatform: "macos",
+      releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
       machineToken: "mtk_secret_value_123",

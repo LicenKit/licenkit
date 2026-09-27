@@ -87,7 +87,7 @@ Customer 是某个 Instance 内购买或持有 License 的主体。Customer 邮�
 
 ### 3.2 Product 与 Product Release
 
-Product 是可授权的软件或数字产品；Product Release 是产品的不可变发布事实，由 `version + platform + artifact_sha256` 标识可验证构建物。
+Product 是可授权的软件或数字产品；Product Release 是产品的不可变发布事实，由 `version + platform + arch` 标识一个构建，`artifact_sha256` 记录其可验证工件。平台只表达 `macos/windows/linux` 操作系统，架构独立表达 `universal/arm64/x86_64`。
 
 Product 还持有：
 
@@ -96,7 +96,7 @@ Product 还持有：
 - 无需支付方式的设备试用配置；
 - active/archived 生命周期。
 
-Release 记录不替代应用构建、签名、托管或发布流程。
+Release 记录不替代应用构建、签名、托管或发布流程，也不是所有授权的前置登记表。只有永久 License 存在 `updates_until` 时，Server 才尝试查询对应 Release；未登记继续放行，已登记且发布时间超过权益截止时才拒绝当前版本。
 
 ### 3.3 License Plan（授权方案）
 
@@ -122,7 +122,7 @@ License 状态为 `active/suspended/revoked`。Plan 后续修改不追溯已签�
 - Machine Token：绑定一次 Activation，数据库保存 Hash；
 - Signed License Token：供本地离线验证，必须由 Product 的 Ed25519 Key 签名。
 
-Signed License Token 使用 `ins` Claim 表示 Instance ID，不接受旧 Claim 别名。CLI 和 SDK 必须同时校验 Instance、Product、License、Activation、设备指纹、有效期和签名。
+Signed License Token 使用 `ins` Claim 表示 Instance ID，不接受旧 Claim 别名。CLI 和 SDK 必须同时校验 Instance、Product、License、Activation、设备指纹、版本/平台/架构、有效期和签名。Token 不携带 Product Release ID 或发布时间，Release 更新权益判断只在 Server 在线执行。
 
 ### 3.6 Activation 与 Trial Claim
 

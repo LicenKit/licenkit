@@ -21,7 +21,8 @@ cli
   .option("-s, --server <url>", "LicenKit API server URL (default: http://localhost:8787)")
   .option("-p, --product <productId>", "LicenKit Product ID")
   .option("-r, --release <version>", "Immutable Product Release version")
-  .option("--release-platform <platform>", "Immutable Product Release artifact platform")
+  .option("--release-platform <platform>", "Product Release operating system: macos, windows, or linux")
+  .option("--release-arch <arch>", "Product Release architecture: universal, arm64, or x86_64")
   .option("-n, --name <name>", "Friendly machine name (default: hostname)")
   .option("--signing-key <key...>", "Trusted signed-mode key as <key-id>=<base64-or-pem-public-key>")
   .action(async (key: string, options) => {

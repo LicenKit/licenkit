@@ -12,6 +12,7 @@ export interface ActivateOptions {
   product?: string;
   release?: string;
   releasePlatform?: string;
+  releaseArch?: string;
   name?: string;
   signingKey?: string | string[];
 }
@@ -35,6 +36,10 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       options.releasePlatform || process.env.LICENKIT_RELEASE_PLATFORM,
       "Release platform"
     );
+    const releaseArch = required(
+      options.releaseArch || process.env.LICENKIT_RELEASE_ARCH,
+      "Release architecture"
+    );
     if (!licenseKey?.trim()) throw new Error("License key is required");
 
     const fingerprint = await getMachineFingerprint();
@@ -48,6 +53,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       devicePlatform: diagnosticPlatform,
       releaseVersion,
       releasePlatform,
+      releaseArch,
       name: options.name || os.hostname(),
     });
     try {
@@ -57,6 +63,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
         fingerprint,
         releaseVersion,
         releasePlatform,
+        releaseArch,
       });
     } catch (error) {
       if (error instanceof SignedTokenError) {
@@ -78,6 +85,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       productId,
       releaseVersion,
       releasePlatform,
+      releaseArch,
       devicePlatform: diagnosticPlatform,
       activationId: response.activation_id,
       machineToken: response.machine_token,
@@ -101,7 +109,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     console.log(pc.bold(pc.green("✔ License activated")));
     console.log(`  ${pc.gray("Activation ID:")} ${response.activation_id}`);
     console.log(`  ${pc.gray("Credential mode:")} ${response.credential_mode}`);
-    console.log(`  ${pc.gray("Release:")} ${releaseVersion} (${releasePlatform})`);
+    console.log(`  ${pc.gray("Release:")} ${releaseVersion} (${releasePlatform}/${releaseArch})`);
     console.log("  " + pc.gray("Validated at:") + " " + response.validation.validated_at);
     console.log("  " + pc.gray("Request ID:") + " " + response.meta.request_id);
   } catch (error) {

@@ -89,20 +89,13 @@ export type LicenseState =
   | { kind: "license"; status: "activation_deactivated"; code: "ACTIVATION_DEACTIVATED"; details: Record<string, string> };
 
 export type ReleaseNotEligibleState =
-  | {
-      kind: "release_not_eligible";
-      status: "unknown_release";
-      code: "PRODUCT_RELEASE_UNKNOWN";
-      release_version: string;
-      release_platform: string;
-      details: Record<string, string>;
-    }
-  | {
+  {
       kind: "release_not_eligible";
       status: "update_required";
       code: "UPDATE_ENTITLEMENT_REQUIRED";
       release_version: string;
       release_platform: string;
+      release_arch: string;
       updates_until: string | null;
       released_at: string | null;
       details: Record<string, string>;
@@ -366,16 +359,7 @@ export function parseEntitlementState(value: unknown): EntitlementState {
   if (state.kind === "release_not_eligible") {
     const release_version = contractString(state.release_version, "Release version");
     const release_platform = contractString(state.release_platform, "Release platform");
-    if (state.status === "unknown_release" && state.code === "PRODUCT_RELEASE_UNKNOWN") {
-      return {
-        kind: "release_not_eligible",
-        status: "unknown_release",
-        code: state.code,
-        release_version,
-        release_platform,
-        details: sanitizeDetails(state.details),
-      };
-    }
+    const release_arch = contractString(state.release_arch, "Release architecture");
     if (state.status === "update_required" && state.code === "UPDATE_ENTITLEMENT_REQUIRED") {
       return {
         kind: "release_not_eligible",
@@ -383,6 +367,7 @@ export function parseEntitlementState(value: unknown): EntitlementState {
         code: state.code,
         release_version,
         release_platform,
+        release_arch,
         updates_until: contractNullableDate(state.updates_until ?? null, "Release updates_until"),
         released_at: contractNullableDate(state.released_at ?? null, "Release released_at"),
         details: sanitizeDetails(state.details),
@@ -594,6 +579,7 @@ export interface ClientContext {
   devicePlatform: string;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
 }
 
 export interface ActivateParams extends ClientContext {
@@ -612,6 +598,7 @@ export async function apiActivate(params: ActivateParams): Promise<ActivationRes
       name: params.name,
       release_version: params.releaseVersion,
       release_platform: params.releasePlatform,
+      release_arch: params.releaseArch,
     }),
   }, parseActivationResponse);
 }
@@ -633,6 +620,7 @@ export async function apiValidate(params: ValidateParams): Promise<ValidateRespo
       fingerprint: params.fingerprint,
       release_version: params.releaseVersion,
       release_platform: params.releasePlatform,
+      release_arch: params.releaseArch,
       credential: params.credential,
     }),
   }, parseValidateResponse);

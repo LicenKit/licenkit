@@ -330,6 +330,7 @@ export interface ProductsDictionary {
   modalReleaseDesc: string;
   fieldVersion: string;
   fieldPlatform: string;
+  fieldArch: string;
   fieldSha256: string;
   fieldReleasedAt: string;
   fieldDownloadUrl: string;

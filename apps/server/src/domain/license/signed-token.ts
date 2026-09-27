@@ -5,10 +5,9 @@ export interface SignedLicenseClaims {
   act: string;
   ins: string;
   prd: string;
-  rel: string;
   ver: string;
   plt: string;
-  rat: number;
+  arc: string;
   fp: string;
   iat: number;
   exp: number;

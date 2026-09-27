@@ -1,13 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Archive, Box, CalendarPlus, FlaskConical, KeyRound, PackagePlus, Pencil, Plus, RefreshCw } from "lucide-react";
-import { api, type BillingEnvironment, type Instance, type Product, type ProductRelease } from "../../lib/api-client";
+import { api, type BillingEnvironment, type Instance, type Product, type ProductRelease, type ReleaseArch, type ReleasePlatform } from "../../lib/api-client";
 import { Badge, Button, Card, ConfirmModal, CopyValue, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, Textarea } from "../../components/ui";
 import { useI18n } from "../../lib/i18n";
 import { daysToSeconds, secondsToDays } from "../../lib/duration";
 
 const emptyProduct = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
 const emptyProductEdit = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
-const emptyRelease = { version: "", platform: "", description: "", downloadUrl: "", artifactSha256: "", releasedAt: "" };
+const emptyRelease = {
+  version: "",
+  platform: "macos" as ReleasePlatform,
+  arch: "universal" as ReleaseArch,
+  description: "",
+  downloadUrl: "",
+  artifactSha256: "",
+  releasedAt: "",
+};
 
 export function ProductsView({ canWrite, instance }: { canWrite: boolean; instance: Pick<Instance, "adminApiUrl"> }) {
   const { t, formatDate } = useI18n();
@@ -106,7 +114,7 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
     setSaving(true); setError(null);
     try {
       await api.admin.products.releases.create(selected.id, {
-        version: releaseForm.version.trim(), platform: releaseForm.platform.trim(), description: releaseForm.description.trim() || null,
+        version: releaseForm.version.trim(), platform: releaseForm.platform, arch: releaseForm.arch, description: releaseForm.description.trim() || null,
         downloadUrl: releaseForm.downloadUrl.trim() || null, artifactSha256: releaseForm.artifactSha256.trim().toLowerCase(),
         releasedAt: new Date(releaseForm.releasedAt).toISOString(),
       });
@@ -259,7 +267,7 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
                       <tbody>
                         {releases.map((release) => (
                           <tr key={release.id}>
-                            <td><strong>{release.version}</strong><small>{release.platform}</small></td>
+                            <td><strong>{release.version}</strong><small>{release.platform} / {release.arch}</small></td>
                             <td>{formatDate(release.releasedAt)}</td>
                             <td><code>{release.artifactSha256.slice(0, 16)}…</code></td>
                             <td>{release.downloadUrl ? <a href={release.downloadUrl} target="_blank" rel="noreferrer">{t.products.downloadLink}</a> : "—"}</td>
@@ -343,7 +351,20 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
         <form className="form-stack" onSubmit={createRelease}>
           <div className="form-grid">
             <Field label={t.products.fieldVersion}><Input value={releaseForm.version} onChange={(event) => setReleaseForm({ ...releaseForm, version: event.target.value })} placeholder="1.0.0" required /></Field>
-            <Field label={t.products.fieldPlatform}><Input value={releaseForm.platform} onChange={(event) => setReleaseForm({ ...releaseForm, platform: event.target.value })} placeholder="macos-universal" required /></Field>
+            <Field label={t.products.fieldPlatform}>
+              <Select value={releaseForm.platform} onChange={(event) => setReleaseForm({ ...releaseForm, platform: event.target.value as ReleasePlatform })} required>
+                <option value="macos">macOS</option>
+                <option value="windows">Windows</option>
+                <option value="linux">Linux</option>
+              </Select>
+            </Field>
+            <Field label={t.products.fieldArch}>
+              <Select value={releaseForm.arch} onChange={(event) => setReleaseForm({ ...releaseForm, arch: event.target.value as ReleaseArch })} required>
+                <option value="universal">Universal</option>
+                <option value="arm64">ARM64</option>
+                <option value="x86_64">x86_64</option>
+              </Select>
+            </Field>
           </div>
           <Field label={t.products.fieldSha256}><Input value={releaseForm.artifactSha256} onChange={(event) => setReleaseForm({ ...releaseForm, artifactSha256: event.target.value })} pattern="[a-fA-F0-9]{64}" placeholder={t.products.placeholderSha256} required /></Field>
           <Field label={t.products.fieldReleasedAt}><Input type="datetime-local" value={releaseForm.releasedAt} onChange={(event) => setReleaseForm({ ...releaseForm, releasedAt: event.target.value })} required /></Field>

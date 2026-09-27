@@ -126,8 +126,8 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 1. Email Integration：V1 选择 Resend，配置 API Key、From/Reply-To 和重试预算；API Key 只在写入时提交，之后不返回明文；
 2. 在邮件配置页使用临时 Resend Full access Key 执行一次“安装默认模板”；管理端进度表逐项显示五个模板的等待、安装、完成、跳过或失败状态，相邻模板任务之间等待 5 秒。LicenKit 自动将 Template ID 绑定到四个 Customer 合同和 `instance.member_invited@1` Invitation 合同；临时 Key 不保存，日常发送继续使用 Integration 中的 Sending access Key；
 3. 分别创建 Sandbox/Live Paddle Billing Provider，配置公开 Client-side Token、Platform Webhook Secret 和独立的 Simulator Webhook Secret；
-4. Product、License Plan、Offer Mapping 和 Product Release；
-5. 需要本地签名凭据时配置 Product Signing Key；
+4. Product、License Plan 和 Offer Mapping；只有“永久可用、有限期免费更新”的产品需要登记 Product Release；
+5. 需要本地签名凭据时，从 Product 页面复制 LicenKit 自动生成的公钥并内置到客户端；私钥只由 Server 托管，不提供上传或下载入口；
 6. 只有启用 Paddle Customer 读穿、对账或支付平台门户时，才配置具备对应最小权限的 Paddle API Key；
 7. 若需要客户系统接收 License/订阅等业务事件，另行创建 `event_subscriber` Endpoint。它不发送邮件。
 

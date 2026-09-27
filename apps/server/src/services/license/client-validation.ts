@@ -2,7 +2,7 @@ import { hashDeviceFingerprint } from "../../domain/license/credentials";
 import { parseFeatures } from "../../domain/license/terms";
 import { createServerValidationMetadata } from "../../domain/license/validation-policy";
 import { AppError, NotFoundError } from "../../middleware/error";
-import { requireProductRelease, validateActivation } from "./activation";
+import { validateActivation } from "./activation";
 import { firstD1 } from "./d1";
 import { validateTrial } from "./trial";
 
@@ -30,26 +30,9 @@ interface TrialProductRow {
 
 function releaseNotEligibleState(
   error: unknown,
-  release: { version: string; platform: string },
+  release: { version: string; platform: string; arch: string },
 ) {
   if (!(error instanceof AppError)) return null;
-  if (error.code === "PRODUCT_RELEASE_UNKNOWN") {
-    return {
-      kind: "release_not_eligible" as const,
-      status: "unknown_release" as const,
-      code: error.code,
-      release_version: release.version,
-      release_platform: release.platform,
-      details: {
-        release_version: typeof error.details?.release_version === "string"
-          ? error.details.release_version
-          : release.version,
-        release_platform: typeof error.details?.release_platform === "string"
-          ? error.details.release_platform
-          : release.platform,
-      },
-    };
-  }
   if (error.code === "UPDATE_ENTITLEMENT_REQUIRED") {
     return {
       kind: "release_not_eligible" as const,
@@ -57,6 +40,7 @@ function releaseNotEligibleState(
       code: error.code,
       release_version: release.version,
       release_platform: release.platform,
+      release_arch: release.arch,
       updates_until: typeof error.details?.updates_until === "string"
         ? error.details.updates_until
         : null,
@@ -74,6 +58,9 @@ function releaseNotEligibleState(
         release_platform: typeof error.details?.release_platform === "string"
           ? error.details.release_platform
           : release.platform,
+        release_arch: typeof error.details?.release_arch === "string"
+          ? error.details.release_arch
+          : release.arch,
         released_at: typeof error.details?.released_at === "string"
           ? error.details.released_at
           : null,
@@ -196,6 +183,7 @@ async function validateLicenseCredential(input: {
   fingerprint: string;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
   credential: Extract<ClientCredential, { kind: "license" }>;
   now: Date;
 }) {
@@ -210,6 +198,7 @@ async function validateLicenseCredential(input: {
       fingerprint: input.fingerprint,
       releaseVersion: input.releaseVersion,
       releasePlatform: input.releasePlatform,
+      releaseArch: input.releaseArch,
       now: input.now,
     });
     return {
@@ -227,6 +216,7 @@ async function validateLicenseCredential(input: {
       ?? releaseNotEligibleState(error, {
         version: input.releaseVersion,
         platform: input.releasePlatform,
+        arch: input.releaseArch,
       });
     if (!state) throw error;
     return {
@@ -241,8 +231,6 @@ async function validateTrialCredential(input: {
   instanceId: string;
   productId: string;
   fingerprint: string;
-  releaseVersion: string;
-  releasePlatform: string;
   credential: Extract<ClientCredential, { kind: "trial" }>;
   now: Date;
 }) {
@@ -254,8 +242,6 @@ async function validateTrialCredential(input: {
       trialId: input.credential.trialId,
       trialToken: input.credential.trialToken,
       fingerprint: input.fingerprint,
-      releaseVersion: input.releaseVersion,
-      releasePlatform: input.releasePlatform,
       now: input.now,
     });
     return {
@@ -263,11 +249,7 @@ async function validateTrialCredential(input: {
       validation: data.validation,
     };
   } catch (error) {
-    const state = trialTerminalState(error)
-      ?? releaseNotEligibleState(error, {
-        version: input.releaseVersion,
-        platform: input.releasePlatform,
-      });
+    const state = trialTerminalState(error);
     if (!state) throw error;
     return {
       state,
@@ -283,6 +265,7 @@ async function validateWithoutCredential(input: {
   fingerprint: string;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
   now: Date;
 }) {
   const product = await firstD1<TrialProductRow>(input.db.prepare(
@@ -294,23 +277,6 @@ async function validateWithoutCredential(input: {
   const validation = createServerValidationMetadata(input.now);
   if (product.status !== "active") {
     throw new AppError("PRODUCT_UNAVAILABLE", "The Product is archived.", 409);
-  }
-
-  try {
-    await requireProductRelease({
-      db: input.db,
-      instanceId: input.instanceId,
-      productId: input.productId,
-      version: input.releaseVersion,
-      platform: input.releasePlatform,
-    });
-  } catch (error) {
-    const state = releaseNotEligibleState(error, {
-      version: input.releaseVersion,
-      platform: input.releasePlatform,
-    });
-    if (!state) throw error;
-    return { state, validation };
   }
 
   if (!product.trial_enabled) {
@@ -370,6 +336,7 @@ export async function validateClient(input: {
   fingerprint: string;
   releaseVersion: string;
   releasePlatform: string;
+  releaseArch: string;
   credential: ClientCredential;
   now?: Date;
 }) {

@@ -22,6 +22,7 @@ export async function validateCommand(): Promise<void> {
       fingerprint,
       releaseVersion: stored.releaseVersion,
       releasePlatform: stored.releasePlatform,
+      releaseArch: stored.releaseArch,
       credential: {
         kind: "license",
         activation_id: stored.activationId,
@@ -66,6 +67,7 @@ export async function validateCommand(): Promise<void> {
               fingerprint,
               releaseVersion: stored.releaseVersion,
               releasePlatform: stored.releasePlatform,
+              releaseArch: stored.releaseArch,
             },
             response.state
           );

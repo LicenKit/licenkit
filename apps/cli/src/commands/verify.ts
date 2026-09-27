@@ -36,6 +36,7 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
       fingerprint,
       releaseVersion: stored.releaseVersion,
       releasePlatform: stored.releasePlatform,
+      releaseArch: stored.releaseArch,
     });
     if (!evaluation.valid) throw new Error(`${evaluation.code}: ${evaluation.reason}`);
     if (stored.lastEntitlementState.kind !== "license" || stored.lastEntitlementState.status !== "active") {
@@ -60,7 +61,7 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
     console.log(pc.bold(pc.green("✔ Signed License Token is valid locally")));
     console.log(`  ${pc.gray("License ID:")} ${claims.lic}`);
     console.log(`  ${pc.gray("Activation ID:")} ${claims.act}`);
-    console.log(`  ${pc.gray("Release:")} ${claims.ver} (${claims.plt})`);
+    console.log(`  ${pc.gray("Release:")} ${claims.ver} (${claims.plt}/${claims.arc})`);
     console.log(`  ${pc.gray("Features:")} ${claims.fea.join(", ") || "(none)"}`);
     console.log("  " + pc.gray("Online validation window ends:") + " " + new Date(validationWindowEndsAt).toISOString());
   } catch (error) {

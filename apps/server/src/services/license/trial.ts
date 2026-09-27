@@ -8,7 +8,6 @@ import {
 } from "../../domain/license/credentials";
 import { parseFeatures } from "../../domain/license/terms";
 import { createServerValidationMetadata } from "../../domain/license/validation-policy";
-import { requireProductRelease } from "./activation";
 import { firstD1 } from "./d1";
 
 interface TrialProductRow {
@@ -35,8 +34,6 @@ export async function claimTrial(input: {
   instanceId: string;
   productId: string;
   fingerprint: string;
-  releaseVersion: string;
-  releasePlatform: string;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -50,14 +47,6 @@ export async function claimTrial(input: {
   if (!product.trial_duration_seconds || product.trial_duration_seconds <= 0) {
     throw new AppError("TRIAL_CONFIGURATION_INVALID", "The Product trial duration is invalid.", 500);
   }
-  await requireProductRelease({
-    db: input.db,
-    instanceId: input.instanceId,
-    productId: input.productId,
-    version: input.releaseVersion,
-    platform: input.releasePlatform,
-  });
-
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
   const existing = await firstD1<{ id: string }>(input.db.prepare(
     `SELECT id FROM trial_claims
@@ -129,8 +118,6 @@ export async function validateTrial(input: {
   trialId: string;
   trialToken: string;
   fingerprint: string;
-  releaseVersion: string;
-  releasePlatform: string;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -162,13 +149,6 @@ export async function validateTrial(input: {
       expires_at: claim.expires_at,
     });
   }
-  await requireProductRelease({
-    db: input.db,
-    instanceId: input.instanceId,
-    productId: input.productId,
-    version: input.releaseVersion,
-    platform: input.releasePlatform,
-  });
   const refreshed = await input.db.prepare(
     `UPDATE trial_claims SET last_validated_at = ?1, updated_at = ?1
      WHERE instance_id = ?2 AND product_id = ?3 AND id = ?4

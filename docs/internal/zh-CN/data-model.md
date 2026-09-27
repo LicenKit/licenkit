@@ -141,7 +141,7 @@ Product 使用服务端生成的 `id` 唯一标识，不维护第二套人工标
 
 ### 4.5 `product_releases`
 
-`instance_id + product_id + version + platform` 唯一。`artifact_sha256` 必须是 64 位小写十六进制。发布身份不可修改，正常产品流程不删除 Release。
+`product_id + version + platform + arch` 唯一。`platform` 枚举为 `macos/windows/linux`，`arch` 枚举为 `universal/arm64/x86_64`，且两者都必须显式保存。`artifact_sha256` 必须是 64 位小写十六进制。发布身份不可修改，正常产品流程不删除 Release。Release 是有限期更新权益的可选服务端元数据，不是激活、Trial 或普通校验的必备记录。
 
 ### 4.6 `signing_keys`
 

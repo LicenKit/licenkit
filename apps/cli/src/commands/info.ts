@@ -18,7 +18,7 @@ export async function infoCommand(): Promise<void> {
   console.log("  " + pc.gray("Activation ID:") + " " + stored.activationId);
   console.log("  " + pc.gray("Product:") + " " + stored.productId);
   console.log("  " + pc.gray("Credential mode:") + " " + stored.credentialMode);
-  console.log("  " + pc.gray("Release:") + " " + stored.releaseVersion + " (" + stored.releasePlatform + ")");
+  console.log("  " + pc.gray("Release:") + " " + stored.releaseVersion + " (" + stored.releasePlatform + "/" + stored.releaseArch + ")");
   for (const line of describeEntitlementState(stored.lastEntitlementState)) console.log("  " + line);
   console.log("  " + pc.gray("Last Server validation:") + " " + stored.lastValidatedAt);
   console.log(

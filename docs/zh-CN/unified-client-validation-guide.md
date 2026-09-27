@@ -71,11 +71,12 @@ https://github.com/LicenKit/licenkit-sdk-swift.git
 在写宿主代码前，先确认 Server 已存在以下数据：
 
 - App 对应的 Product ID；
-- 当前构建对应的 Product Release，包括精确的版本和工件平台；
 - 若使用 `signed` 凭据，Admin 产品页交付的 Ed25519 公钥；
 - 若提供设备 Trial，Product 已启用 Trial 并配置时长与功能列表。
 
-Release 版本和平台是构建身份，不是用户偏好设置。SDK 从宿主 App Bundle 的 `CFBundleShortVersionString` 和主可执行文件架构读取它们；发布流程仍须保证这些值与 Server 上登记的 Release 完全一致。
+只有产品采用“永久可用、有限期免费更新”，且已签发 License 存在 `updates_until` 时，才建议登记对应 Product Release 的发布时间。未登记不会阻断用户；登记后，Server 才能在查到完全匹配的版本、操作系统和架构时执行发布时间比对。
+
+Release 版本、操作系统和架构是构建身份，不是用户偏好设置。SDK 从宿主 App Bundle 的 `CFBundleShortVersionString` 读取版本，将平台标识为 `macos`，并从主可执行文件推导独立的 `arm64 | x86_64 | universal` 架构。
 
 配置示例：
 
@@ -257,11 +258,10 @@ final class LicenseController: ObservableObject {
 | `license.revoked` | License 被吊销 | 停止权益，保留诊断信息 |
 | `activationRevoked` | 当前设备席位被吊销 | 显示重新激活或设备管理入口 |
 | `activationDeactivated` | 当前设备已解绑 | 进入激活界面 |
-| `releaseNotEligible.unknownRelease` | 当前构建未在 Server 登记 | 显示版本/平台诊断，不说成 License 到期 |
 | `releaseNotEligible.updateRequired` | 当前版本超出更新权益 | 显示升级权益或下载可用旧版本入口 |
 | `unknown` | 还没有足够证据 | 发起一次明确校验或显示重试入口 |
 
-无凭据 `validate()` 只查询当前设备的 Trial 可用性，不会领取 Trial。即使当前 Release 未登记，它也会返回 `releaseNotEligible.unknownRelease`，而不是错误地显示 Trial 不可用。
+无凭据 `validate()` 只查询当前设备的 Trial 可用性，不会领取 Trial，也不查询 Product Release。
 
 永久 License 只表示业务上没有 License 到期时间，不表示永久离线。它仍受到在线校验窗口和 Signed License Token 有效期约束。
 
@@ -357,7 +357,8 @@ licenkit activate LK-... \
   --server https://license.example.com \
   --product prd_01... \
   --release 2.4.0 \
-  --release-platform macos-universal
+  --release-platform macos \
+  --release-arch universal
 
 licenkit validate
 licenkit verify-token
@@ -366,7 +367,7 @@ licenkit deactivate
 
 CLI 不是宿主 App 的授权运行时。App 不应通过启动子进程调用 CLI，也不应复用 CLI 的本地文件代替 SDK Keychain。
 
-当前 `licenkit validate` 只校验 CLI 已保存的正式 License Activation；CLI 没有新增 Trial 或无凭据查询命令。`verify-token` 除了验证签名、身份和 Token/License/更新权益期限，也会检查最近一次 Server 校验时间与生效 interval；在线窗口结束时会要求先运行 `licenkit validate`，并以退出码 `2` 结束。
+当前 `licenkit validate` 只校验 CLI 已保存的正式 License Activation；CLI 没有新增 Trial 或无凭据查询命令。`verify-token` 验证签名、版本/平台/架构身份、设备绑定和 Token/License 自身期限，也会检查最近一次 Server 校验时间与生效 interval；在线窗口结束时会要求先运行 `licenkit validate`，并以退出码 `2` 结束。Product Release 的发布时间与 `updates_until` 只由 Server 在线比对，不在本地 Token 中重复实现。
 
 自动化脚本调用 `licenkit validate` 时，应使用退出码而不是解析终端文案：
 
@@ -394,7 +395,7 @@ CLI 不是宿主 App 的授权运行时。App 不应通过启动子进程调用 
 - [ ] 激活或开始 Trial 成功后不追加 `validate()`；
 - [ ] 解绑失败时不清除本地凭据；
 - [ ] 删除客户端配置、请求和 CLI 中的 `instanceID/instance_id/--instance`；确认只使用全局唯一 Product ID；
-- [ ] 测试 Release 未登记、更新权益不足、永久 License 周期校验等分支；
+- [ ] 测试 Release 未登记仍放行、已登记且更新权益不足、永久 License 周期校验等分支；
 - [ ] 从依赖解析结果确认使用的是包含统一合同的 SDK 版本。
 
 Server 的旧 `POST /api/v1/client/trials/validate` 已由统一 `POST /api/v1/client/validate` 取代。直接接入 Client API 的调用方必须使用严格的 `credential.kind = license | trial | none` 联合类型，不能混合两类凭据字段，也不能根据字段是否存在猜测类型。
@@ -403,7 +404,7 @@ Server 的旧 `POST /api/v1/client/trials/validate` 已由统一 `POST /api/v1/c
 
 ### 启动后总是要求激活
 
-先检查配置中的 `productID`，再确认宿主 App 的 `CFBundleShortVersionString` 和可执行文件架构与 Server 登记的 Release 完全一致，并查看是否发生 Keychain 读取错误。不要先清空 Keychain；清空可能破坏后续解绑或 Trial 恢复所需的凭据。
+先检查配置中的 `productID`，再确认宿主 App 的 `CFBundleShortVersionString` 和可执行文件架构能够被 SDK 正确读取，并查看是否发生 Keychain 读取错误。未登记 Product Release 本身不会导致要求激活。不要先清空 Keychain；清空可能破坏后续解绑或 Trial 恢复所需的凭据。
 
 ### `validate()` 没有产生网络请求
 
@@ -423,12 +424,7 @@ SDK 不会在冷却结束时自动调用 Server。检查宿主是否在冷启动
 
 ### 当前版本被拒绝
 
-区分两类状态：
-
-- `unknownRelease`：Server 没有精确匹配当前版本和平台的 Product Release；
-- `updateRequired`：Release 存在，但发布时间晚于永久 License 的更新权益截止。
-
-两者都不是 License 到期。对照构建常量、Server Release 记录和日志中的 `request_id` 排查。
+当前只存在 `updateRequired`：License 是带 `updates_until` 的永久授权，Server 查到了完全匹配的 Release，并确认其发布时间晚于更新权益截止。这不是 License 到期。对照版本、操作系统、架构、Server Release 记录和日志中的 `request_id` 排查；没有匹配记录时按宽容策略放行。
 
 ### 解绑失败后席位仍被占用
 

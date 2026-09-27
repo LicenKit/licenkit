@@ -242,9 +242,9 @@ describe("V1 admin authorization and audit visibility", () => {
     ).run(now, now);
     db.prepare(
       `INSERT INTO product_releases (
-         id, instance_id, product_id, version, platform, artifact_sha256,
+         id, instance_id, product_id, version, platform, arch, artifact_sha256,
          released_at, created_at, updated_at
-       ) VALUES ('rel_authz', 'ins_authz', 'prod_authz', '1.0.0', 'macos-universal',
+       ) VALUES ('rel_authz', 'ins_authz', 'prod_authz', '1.0.0', 'macos', 'universal',
                  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
                  ?, ?, ?)`,
     ).run(now, now, now);

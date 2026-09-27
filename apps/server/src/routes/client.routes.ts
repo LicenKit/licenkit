@@ -10,7 +10,8 @@ export const clientRouter = new Hono<AppContext>();
 
 const ReleaseFields = {
   release_version: z.string().trim().min(1).max(100),
-  release_platform: z.string().trim().min(1).max(100),
+  release_platform: z.enum(["macos", "windows", "linux"]),
+  release_arch: z.enum(["universal", "arm64", "x86_64"]),
 };
 
 const ActivateSchema = z.object({
@@ -36,6 +37,7 @@ clientRouter.post("/activate", async (c) => {
     name: input.name,
     releaseVersion: input.release_version,
     releasePlatform: input.release_platform,
+    releaseArch: input.release_arch,
     firstIp: c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for")?.split(",")[0]?.trim(),
   });
   c.header("Cache-Control", "no-store");
@@ -92,6 +94,7 @@ clientRouter.post("/validate", async (c) => {
     fingerprint: input.fingerprint,
     releaseVersion: input.release_version,
     releasePlatform: input.release_platform,
+    releaseArch: input.release_arch,
     credential,
   });
   c.header("Cache-Control", "no-store");
@@ -116,8 +119,6 @@ clientRouter.post("/trials/claim", async (c) => {
     instanceId,
     productId: input.product_id,
     fingerprint: input.fingerprint,
-    releaseVersion: input.release_version,
-    releasePlatform: input.release_platform,
   });
   c.header("Cache-Control", "no-store");
   return c.json({

@@ -79,18 +79,10 @@ export function describeEntitlementState(state: EntitlementState): string[] {
       ...detailLines(state.details),
     ];
   }
-  if (state.status === "unknown_release") {
-    return [
-      "Release is not registered",
-      "Code: " + state.code,
-      "Release: " + state.release_version + " (" + state.release_platform + ")",
-      ...detailLines(state.details),
-    ];
-  }
   return [
     "Release requires newer update entitlement",
     "Code: " + state.code,
-    "Release: " + state.release_version + " (" + state.release_platform + ")",
+    "Release: " + state.release_version + " (" + state.release_platform + "/" + state.release_arch + ")",
     "Updates until: " + (state.updates_until ?? "unknown"),
     "Released at: " + (state.released_at ?? "unknown"),
     ...detailLines(state.details),
