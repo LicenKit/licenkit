@@ -902,7 +902,7 @@ POST /api/v1/client/validate
 | `license` | `active` | `expires_at`、`terms` | 是，但仍受客户端新鲜度窗口和签名 Token 到期约束 |
 | `license` | `expired` / `suspended` / `revoked` | 原始 `code` 与可用诊断字段 | 否 |
 | `license` | `activation_revoked` / `activation_deactivated` | 原始 `code` | 否 |
-| `release_not_eligible` | `update_required` | `UPDATE_ENTITLEMENT_REQUIRED`、版本、平台、架构、`updates_until`、`released_at` | 否 |
+| `release_not_eligible` | `update_required` | `UPDATE_ENTITLEMENT_REQUIRED`、版本、平台、架构，以及必填的 `updates_until`、`released_at` | 否 |
 
 对 active Product，无凭据请求不查询 Product Release。Trial 未启用或设备已经领取过分别返回 `activation_required + trial.unavailable(not_enabled)` 与 `activation_required + trial.unavailable(already_claimed)`。已归档 Product 仍是调用失败，返回 `PRODUCT_UNAVAILABLE`；Product 不存在返回资源不存在。无凭据响应不会返回历史 `trial_id` 或 Trial Token。
 

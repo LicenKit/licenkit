@@ -275,6 +275,45 @@ describe("unified Client API contract", () => {
     });
   });
 
+  it.each(["updates_until", "released_at"])(
+    "rejects Release eligibility state without required %s",
+    async (missingField) => {
+      const state: Record<string, unknown> = {
+        kind: "release_not_eligible",
+        status: "update_required",
+        code: "UPDATE_ENTITLEMENT_REQUIRED",
+        release_version: "2.4.0",
+        release_platform: "macos",
+        release_arch: "universal",
+        updates_until: "2026-09-01T00:00:00Z",
+        released_at: "2026-09-20T00:00:00Z",
+      };
+      delete state[missingField];
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+        success: true,
+        data: {
+          state,
+          validation: validation(),
+          meta: { request_id: "req_missing_release_date" },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } })));
+
+      await expect(apiValidate({
+        serverUrl: "https://license.example.com",
+        productId: "prd_1",
+        fingerprint: "device-fingerprint",
+        releaseVersion: "2.4.0",
+        releasePlatform: "macos",
+        releaseArch: "universal",
+        credential: { kind: "license", activation_id: "act_1", machine_token: "mtk_secret_value_123" },
+      })).rejects.toMatchObject({
+        name: "ClientContractError",
+        status: 200,
+        requestId: "req_missing_release_date",
+      });
+    },
+  );
+
   it("rejects an active License response without credential_update", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       success: true,

@@ -34,6 +34,8 @@ function releaseNotEligibleState(
 ) {
   if (!(error instanceof AppError)) return null;
   if (error.code === "UPDATE_ENTITLEMENT_REQUIRED") {
+    const updatesUntil = requiredUpdateEntitlementDetail(error, "updates_until");
+    const releasedAt = requiredUpdateEntitlementDetail(error, "released_at");
     return {
       kind: "release_not_eligible" as const,
       status: "update_required" as const,
@@ -41,17 +43,11 @@ function releaseNotEligibleState(
       release_version: release.version,
       release_platform: release.platform,
       release_arch: release.arch,
-      updates_until: typeof error.details?.updates_until === "string"
-        ? error.details.updates_until
-        : null,
-      released_at: typeof error.details?.released_at === "string"
-        ? error.details.released_at
-        : null,
+      updates_until: updatesUntil,
+      released_at: releasedAt,
       details: {
         license_id: typeof error.details?.license_id === "string" ? error.details.license_id : null,
-        updates_until: typeof error.details?.updates_until === "string"
-          ? error.details.updates_until
-          : null,
+        updates_until: updatesUntil,
         release_version: typeof error.details?.release_version === "string"
           ? error.details.release_version
           : release.version,
@@ -61,13 +57,35 @@ function releaseNotEligibleState(
         release_arch: typeof error.details?.release_arch === "string"
           ? error.details.release_arch
           : release.arch,
-        released_at: typeof error.details?.released_at === "string"
-          ? error.details.released_at
-          : null,
+        released_at: releasedAt,
       },
     };
   }
   return null;
+}
+
+function requiredUpdateEntitlementDetail(
+  error: AppError,
+  key: "updates_until" | "released_at",
+): string {
+  const value = error.details?.[key];
+  if (typeof value === "string" && value.length > 0) return value;
+  throw new AppError(
+    "CLIENT_VALIDATION_STATE_CONTRACT_INVALID",
+    `UPDATE_ENTITLEMENT_REQUIRED is missing required detail '${key}'.`,
+    500,
+    {
+      source_error_code: error.code,
+      missing_detail: key,
+    },
+    {
+      source_error: {
+        code: error.code,
+        message: error.message,
+        details: error.details ?? null,
+      },
+    },
+  );
 }
 
 function licenseTerminalState(error: unknown) {

@@ -96,8 +96,8 @@ export type ReleaseNotEligibleState =
       release_version: string;
       release_platform: string;
       release_arch: string;
-      updates_until: string | null;
-      released_at: string | null;
+      updates_until: string;
+      released_at: string;
       details: Record<string, string>;
     };
 
@@ -368,8 +368,8 @@ export function parseEntitlementState(value: unknown): EntitlementState {
         release_version,
         release_platform,
         release_arch,
-        updates_until: contractNullableDate(state.updates_until ?? null, "Release updates_until"),
-        released_at: contractNullableDate(state.released_at ?? null, "Release released_at"),
+        updates_until: contractDate(state.updates_until, "Release updates_until"),
+        released_at: contractDate(state.released_at, "Release released_at"),
         details: sanitizeDetails(state.details),
       };
     }

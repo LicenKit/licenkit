@@ -258,7 +258,7 @@ final class LicenseController: ObservableObject {
 | `license.revoked` | License 被吊销 | 停止权益，保留诊断信息 |
 | `activationRevoked` | 当前设备席位被吊销 | 显示重新激活或设备管理入口 |
 | `activationDeactivated` | 当前设备已解绑 | 进入激活界面 |
-| `releaseNotEligible.updateRequired` | 当前版本超出更新权益 | 显示升级权益或下载可用旧版本入口 |
+| `licenseNotValidForVersion` | 当前版本超出 License 更新权益 | 显示升级权益或下载可用旧版本入口 |
 | `unknown` | 还没有足够证据 | 发起一次明确校验或显示重试入口 |
 
 无凭据 `validate()` 只查询当前设备的 Trial 可用性，不会领取 Trial，也不查询 Product Release。
@@ -424,7 +424,7 @@ SDK 不会在冷却结束时自动调用 Server。检查宿主是否在冷启动
 
 ### 当前版本被拒绝
 
-当前只存在 `updateRequired`：License 是带 `updates_until` 的永久授权，Server 查到了完全匹配的 Release，并确认其发布时间晚于更新权益截止。这不是 License 到期。对照版本、操作系统、架构、Server Release 记录和日志中的 `request_id` 排查；没有匹配记录时按宽容策略放行。
+`licenseNotValidForVersion` 表示 License 是带 `updates_until` 的永久授权，Server 查到了完全匹配的 Release，并确认其 `releasedAt` 晚于 `updatesUntil`。这不是 License 到期。两个时间点都是该状态的必填事实；缺失时 SDK 将响应视为协议错误。对照版本、操作系统、架构、Server Release 记录和日志中的 `request_id` 排查；没有匹配记录时按宽容策略放行。
 
 ### 解绑失败后席位仍被占用
 

@@ -135,7 +135,14 @@ public enum EntitlementState: Sendable {
     case activationRequired(trial: TrialAvailability)
     case trial(TrialEntitlement)
     case license(LicenseEntitlement)
-    case releaseNotEligible(ReleaseEligibilityIssue)
+    case licenseNotValidForVersion(
+        code: String,
+        updatesUntil: Date,
+        releaseVersion: String,
+        releasePlatform: String,
+        releaseArch: String,
+        releasedAt: Date
+    )
     case unknown
 }
 ```
@@ -145,7 +152,7 @@ public enum EntitlementState: Sendable {
 - `activationRequired`：当前没有可用 License 或可认证的 Trial；同时携带是否可以开始 Trial；
 - `trial`：当前设备已经领取 Trial，并有可认证的 Trial 状态；
 - `license`：当前设备存在 Activation，并有可认证的 License 状态；
-- `releaseNotEligible`：Server 已找到当前 App Release，但永久 License 的有限期更新权益不包含该 Release；未登记 Release 按宽容策略放行；
+- `licenseNotValidForVersion`：Server 已找到当前 App Release，但永久 License 的有限期更新权益不包含该 Release；两个比较时间点是必填事实，未登记 Release 按宽容策略放行；
 - `unknown`：没有足够证据形成当前授权结论，通常只用于尚未检查或本地数据无法可信解释的场景。
 
 ### 4.2 Trial 可用性
@@ -200,7 +207,7 @@ public enum LicenseEntitlement: Sendable {
 
 - 永久 License 存在 `updates_until`，Server 找到完全匹配的 Product Release，且其发布时间超过更新权益截止：`UPDATE_ENTITLEMENT_REQUIRED`。
 
-它进入 `releaseNotEligible`，并保留原始 code、Release 版本、平台、架构、`updates_until` 与 `released_at` 等可安全返回的数据。未登记 Product Release 不阻断，因为缺失的是服务端可选元数据，不是用户输入错误。
+它进入 `licenseNotValidForVersion`，并保留原始 code、Release 版本、平台、架构、`updates_until` 与 `released_at` 等可安全返回的数据。两个时间点缺失属于协议错误，不能构造残缺状态。未登记 Product Release 不阻断，因为缺失的是服务端可选元数据，不是用户输入错误。
 
 ### 4.6 可用性计算
 
@@ -547,7 +554,7 @@ Server 使用严格 discriminated union 校验请求，不允许混合 License �
 | `LICENSE_REVOKED` | `license.revoked` |
 | `ACTIVATION_REVOKED` | `license.activationRevoked` |
 | `ACTIVATION_DEACTIVATED` | `license.activationDeactivated` |
-| `UPDATE_ENTITLEMENT_REQUIRED` | `releaseNotEligible.updateRequired` |
+| `UPDATE_ENTITLEMENT_REQUIRED` | `licenseNotValidForVersion` |
 
 以下情况仍然是失败，不伪装成授权状态：
 
@@ -626,7 +633,7 @@ SDK 仍然不包含 SwiftUI/AppKit 授权界面。宿主只需要根据统一状
 | `trial.expired/revoked` | 停止 Trial 权益，显示激活或购买入口 |
 | `license.active` | 进入产品并按 features 开放能力 |
 | `license.expired/suspended/revoked` | 停止授权能力并显示准确原因 |
-| `releaseNotEligible` | 显示当前版本不受支持或需要更新权益 |
+| `licenseNotValidForVersion` | 显示当前 License 不包含当前版本，并由宿主决定后续操作 |
 | 操作 `notPerformed(.cooldown)` | 不显示网络加载，不改变现有界面 |
 | 操作 `failure` | 显示可诊断的校验失败；不得伪装成到期或吊销 |
 
@@ -965,7 +972,7 @@ Server 返回 trial.expired 或更新后的可信状态
 | `license.revoked` | 停止权益，展示吊销状态，不自动清除诊断信息 |
 | `license.activationRevoked` | 停止当前设备权益，提供重新激活或设备管理入口 |
 | `license.activationDeactivated` | 清理不再有效的本地 Activation，进入激活界面 |
-| `releaseNotEligible.updateRequired` | 说明当前 App Release 不在更新权益内，不说成 License 到期 |
+| `licenseNotValidForVersion` | 说明当前 App Release 不在 License 更新权益内，不说成 License 到期 |
 
 永久 License 也按相同规则调用 `validate()`。它的 `expiresAt` 可以为空，但冷却窗口结束后，宿主下一次主动调用仍会进行在线校验。
 

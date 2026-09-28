@@ -113,12 +113,21 @@ public enum EntitlementState: Codable, Equatable, Sendable {
     case activationRequired(trial: TrialAvailability)
     case trial(TrialEntitlement)
     case license(LicenseEntitlement)
-    case releaseNotEligible(ReleaseEligibilityIssue)
+    case licenseNotValidForVersion(
+        code: String,
+        updatesUntil: Date,
+        releaseVersion: String,
+        releasePlatform: String,
+        releaseArch: String,
+        releasedAt: Date
+    )
     case unknown
 }
 ```
 
 只有 `trial.active` 与 `license.active` 有可能可用；它们还必须通过 `freshness(at:)`。终态包括 Trial 到期/吊销、License 到期/暂停/吊销、Activation 撤销/解绑，以及更新权益不足。终态是服务端已确认的业务结果，不应当显示为“网络错误”；Product 不存在或已归档则仍通过失败结果保留服务端原始错误。
+
+`licenseNotValidForVersion` 表示 License 本身没有到期，但其更新权益不包含当前 App 版本。`updatesUntil` 和 `releasedAt` 是得出该状态所需的两个时间点；宿主 App 使用这些结构化事实生成本地化提示，并自行决定续费、购买或旧版本下载等后续行为。
 
 `businessCode` 保存 `TRIAL_EXPIRED`、`LICENSE_SUSPENDED`、`UPDATE_ENTITLEMENT_REQUIRED` 等原始业务码；`details` 保存按敏感字段脱敏后的服务端细节。不要只根据面向用户的文案做逻辑分支。
 
