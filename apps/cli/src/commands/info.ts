@@ -22,8 +22,11 @@ export async function infoCommand(): Promise<void> {
   for (const line of describeEntitlementState(stored.lastEntitlementState)) console.log("  " + line);
   console.log("  " + pc.gray("Last Server validation:") + " " + stored.lastValidatedAt);
   console.log(
-    "  " + pc.gray("Validation interval:") + " " + stored.effectiveValidationIntervalSeconds
-    + "s (server: " + (stored.receivedValidationIntervalSeconds ?? "default") + ")"
+    "  " + pc.gray("Validation interval:") + " " + stored.validationIntervalSeconds + "s"
+  );
+  console.log(
+    "  " + pc.gray("Offline grace:") + " "
+    + (stored.offlineGraceSeconds === null ? "not applicable" : stored.offlineGraceSeconds + "s")
   );
   if (stored.lastValidationRequestId) {
     console.log("  " + pc.gray("Request ID:") + " " + stored.lastValidationRequestId);

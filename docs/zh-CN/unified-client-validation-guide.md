@@ -95,11 +95,13 @@ LicenKit.configure(with: configuration)
 
 `opaque` 产品可以省略 `signingPublicKey`。`signed` 产品必须内置 Admin 交付的公钥；SDK 仍检查 Server 返回的 `signing_key_id` 与 Token Header 的 `kid` 一致。运行时从同一个授权服务下载的公钥不能自动成为信任根。
 
-### `signed_token_ttl_seconds` 如何变成 Token 到期时间
+### 在线复核与离线宽限是两个不同维度
 
-`signed_token_ttl_seconds` 是 Server 签发 Signed License Token 时使用的配置输入，不会以原值写入 Token。Server 先用签发时间加上该秒数得到候选截止时间；如果 License 的有效授权截止更早，则取更早的时间，最后把这个绝对时间写入受 Ed25519 签名保护的 `exp` Claim。
+Product 的 `validation_interval_seconds` 只回答“客户端多久应再次尝试在线复核”，默认 3600 秒，范围为 3600 至 86400 秒。License Plan 的 `offline_grace_seconds` 回答“距最近一次成功在线确认多久后进入强提示”，默认 30 天，并在签发时固化到 License。
 
-Server 响应中的 `signed_license_token_expires_at` 是便于解析的明文字段。SDK 不单独信任它，而是验签后要求它与 Token 内受签名保护的 `exp` 完全一致；不一致属于协议错误。宿主 App 不应读取 `signed_token_ttl_seconds` 自行推算 Token 期限，也不应只根据明文 expires 字段放行授权。
+超过在线复核间隔不会使授权失效；超过离线宽限期也不会停止受保护功能。SDK 分别返回 `offlineGrace` 与 `offlineGraceExceeded`，供宿主决定提示强度。真正的不可用边界仍是 Trial/License 业务到期、暂停、吊销、Activation 失效、Release 不合格或 Signed 凭据验签失败。
+
+Signed License Token 不包含 `exp`，响应也没有独立的 Signed Token 到期字段。`opaque` 与 `signed` 使用同一业务到期、在线复核和离线宽限规则；Signed 只额外提供可在本地验证完整性与设备绑定的授权快照。
 
 ## 4. 标准调用时机
 
@@ -112,7 +114,7 @@ Server 响应中的 `signed_license_token_expires_at` 是便于解析的明文�
 | 用户点击“开始试用” | `startTrial()` | 成功结果已经包含新快照 |
 | 用户提交注册码 | `activate()` | 成功结果已经包含新快照 |
 | 用户点击“解绑此设备” | `deactivate()` | 只有远端确认后才视为成功 |
-| 用户在失败界面点击重试 | `validate()` | SDK 按两个冷却判断是否发起新请求 |
+| 用户在失败界面点击重试 | `validate()` | SDK按在线复核间隔与 30 秒请求门槛判断是否发起新请求 |
 
 冷却结束只表示下一次 `validate()` 可以联网。若宿主没有调用，SDK 不会创建任务、发事件或自动请求。不要用每小时 Timer、View 生命周期或按钮 hover 模拟自动校验。
 
@@ -127,18 +129,18 @@ SDK 在 `validate()` 中同时使用：
 - Server 返回的 `validation_interval_seconds`：控制常规在线复核频率；
 - 固定 30 秒请求冷却：防止失败界面、生命周期通知或重复点击在短时间内持续请求 Server。
 
-两者都从最近一次 `validate()` 得到明确 Server 结果的时间 `lastValidateResponseAt` 开始计算。对 opaque License、Trial、无凭据查询和仍然有效的 signed License，两个窗口都结束后才允许再次联网。若 Signed License Token 已过期或本地验证失败，SDK 会绕过 `validation_interval_seconds` 窗口，以便尽快向 Server 重新取得可信凭据；固定 30 秒冷却仍然生效。
+两者都从最近一次 `validate()` 得到明确 Server 结果的时间 `lastValidateResponseAt` 开始计算。对 opaque License、Trial、无凭据查询和有效的 signed License，两个窗口都结束后才允许再次联网。若 Signed License Token 本地验证失败，SDK 会绕过 `validation_interval_seconds` 窗口，以便尽快向 Server 重新取得可信凭据；固定 30 秒冷却仍然生效。
 
 | 当前情况 | `validation_interval_seconds` 窗口 | 固定 30 秒窗口 | 本次 `validate()` |
 | --- | --- | --- | --- |
 | opaque、Trial、无凭据或有效 signed | 尚未结束 | 任意 | 返回 `notPerformed(.cooldown)` |
 | opaque、Trial、无凭据或有效 signed | 已结束 | 尚未结束 | 返回 `notPerformed(.cooldown)` |
 | opaque、Trial、无凭据或有效 signed | 已结束 | 已结束 | 发起一次 Server 请求 |
-| signed Token 无效或过期 | 直接绕过 | 尚未结束 | 返回 `notPerformed(.cooldown)` |
-| signed Token 无效或过期 | 直接绕过 | 已结束 | 发起一次 Server 请求 |
+| signed Token 本地验证失败 | 直接绕过 | 尚未结束 | 返回 `notPerformed(.cooldown)` |
+| signed Token 本地验证失败 | 直接绕过 | 已结束 | 发起一次 Server 请求 |
 | 从未得到过明确的 validate Server 结果 | 没有起算点 | 没有起算点 | 发起一次 Server 请求 |
 
-冷却只决定“现在是否再次发请求”，不会延长授权证据。特别是 Signed Token 已失效但固定 30 秒尚未结束时，`notPerformed(.cooldown)` 不会把旧快照恢复成可用，宿主仍应以 `isUsable()` 的结果阻止受保护功能。
+冷却只决定“现在是否再次发请求”，不决定授权是否可用。Signed Token 本地验证失败时，`notPerformed(.cooldown)` 不会把旧快照恢复成可用；超过离线宽限期但凭据仍有效时，`isUsable()` 仍为 `true`，宿主应根据 `offlineGraceExceeded` 显示强提示。
 
 `lastValidateResponseAt` 是请求节流事实，`validatedAt` 是 Server 成功确认业务状态的时间，二者不能混用：
 
@@ -432,9 +434,9 @@ SDK 不会在冷却结束时自动调用 Server。检查宿主是否在冷启动
 
 ### `startTrial()` 已在 Server 领取成功，但 Keychain 写入失败
 
-Trial Claim 是 Server 上一次性的业务事实。若 Server 已创建 Claim，而客户端随后写 Keychain 失败，当前设备再次调用 `startTrial()` 会得到 `TRIAL_ALREADY_CLAIMED`；SDK 和宿主都不能自动重领、清除本地状态后重试，或把重复领取伪装成恢复成功。
+SDK 在发请求前已经把客户端生成的 Trial Token 写入 Trial 验证中 Keychain 项。再次调用 `startTrial()` 会复用该 Token；Server 验证 Token Hash 后重复下发同一 Trial ID、原到期时间和当前状态。完整 Trial 凭据与快照全部写入成功后才删除验证中项。`validate()` 不会替用户执行 Trial 领取；没有完整凭据时它只使用 `credential.kind=none` 查询状态。
 
-记录本次请求的错误码、`request_id` 和安全诊断信息，引导用户联系支持。恢复能力必须由独立、经过明确设计的服务端凭据恢复流程提供，不能通过放宽 Trial 唯一性实现。
+如果验证中 Keychain 项本身丢失，则不能仅凭设备指纹取得历史 Trial；Server 返回 `TRIAL_CREDENTIALS_INVALID`。这是防止其他设备伪造同一指纹取得既有凭据的必要边界。
 
 ## 13. 验收边界
 
@@ -446,13 +448,13 @@ Trial Claim 是 Server 上一次性的业务事实。若 Server 已创建 Claim�
 - Activation revoked、deactivated；
 - Release unknown、update entitlement required；
 - 常规状态在 Server interval 或固定 30 秒任一窗口内时零网络请求；
-- Signed Token 无效或过期时绕过 Server interval，但仍遵守固定 30 秒；
+- Signed Token 本地验证失败时绕过 Server interval，但仍遵守固定 30 秒；
 - 明确 HTTP 失败更新 `lastValidateResponseAt`，但不推进 `validatedAt`；
 - 连接超时、DNS、TLS、无 HTTP 响应及 2xx 非法业务数据不更新两个时间；
 - 冷却结束但宿主未调用时零网络请求；
 - 并发 `validate()` 只产生一次 Server 请求；
 - 传输失败不推进 `validatedAt`，也不改变成业务终态；请求冷却是否更新按是否收到明确 HTTP 结果判断；
-- 业务期限或 Signed Token 期限早于冷却截止时停止授权；
+- Trial/License 业务期限到达时停止授权；在线复核间隔与离线宽限期本身不停止授权；
 - 激活清除 Trial 凭据，解绑失败保留 License 凭据；
 - 错误日志保留 code、request ID 和安全 details，且没有敏感 Token。
 

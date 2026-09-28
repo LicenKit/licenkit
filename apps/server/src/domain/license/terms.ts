@@ -11,7 +11,7 @@ export interface LicensePlanSnapshot {
   credentialMode: CredentialMode;
   defaultTermSeconds: number | null;
   updateWindowSeconds: number | null;
-  signedTokenTtlSeconds: number;
+  offlineGraceSeconds: number;
   paymentGraceSeconds: number;
   maxActivations: number;
   featuresJson: string;
@@ -23,7 +23,7 @@ export interface ResolvedManualTerms {
   licenseModel: LicenseModel;
   renewalMode: RenewalMode;
   credentialMode: CredentialMode;
-  signedTokenTtlSeconds: number;
+  offlineGraceSeconds: number;
   paymentGraceSeconds: number;
   maxActivations: number;
   featuresJson: string;
@@ -130,7 +130,7 @@ export function resolveManualTerms(
     licenseModel: plan.licenseModel,
     renewalMode,
     credentialMode: plan.credentialMode,
-    signedTokenTtlSeconds: plan.signedTokenTtlSeconds,
+    offlineGraceSeconds: plan.offlineGraceSeconds,
     paymentGraceSeconds: 0,
     maxActivations: plan.maxActivations,
     featuresJson: plan.featuresJson,

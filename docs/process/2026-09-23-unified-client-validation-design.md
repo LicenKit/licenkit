@@ -42,15 +42,15 @@ POST /api/v1/client/trials/validate
 8. Server 只返回 `validated_at` 与 `validation_interval_seconds`；`next_validation_at` 是可由前两者推导的值，不进入网络合同。
 9. 冷却期结束不会自动触发请求。只有宿主代码主动调用 `validate()` 时，SDK 才判断本次是否需要联网。
 10. SDK 不增加后台定时器、自动轮询、App 生命周期自动请求、冷却结束事件或失败自动重试。
-11. 不支持永久离线授权或永久 `localTrusted` 模式。永久 License 只表示 License 没有业务到期时间，不表示以后无需在线校验。
-12. Signed License Token 继续有有效期；所有 License，包括永久 License，都必须受到周期性在线校验策略约束。
+11. Product 的在线复核间隔只决定客户端多久尝试联网；License Plan 的离线宽限期只决定何时进入强提示。超过两者都不会单独停止授权。
+12. Signed License Token 没有独立 `exp`；Opaque 与 Signed 共享业务到期、在线复核和离线宽限规则。
 13. 网络、DNS、TLS、超时、服务端故障、凭据错误和业务授权状态继续分开表达；统一接口不得丢弃原始错误码、请求 ID 或脱敏后的 details。
-14. 第一版不为校验间隔增加 Product 或 License 数据库字段。Server 没有配置覆盖时返回 `null`，由 SDK 使用默认值；未来如需动态配置，只扩展间隔的来源，不改变本合同。
+14. Product 保存必填 `validation_interval_seconds`，默认 3600 秒、范围 3600 至 86400 秒；Plan 保存 `offline_grace_seconds`，默认 30 天，并在签发时固化到 License。
 15. 冷却只约束 `validate()`；`activate()`、`startTrial()` 和 `deactivate()` 不受冷却限制，也不写最近一次 `/validate` 响应时间。
-16. 普通 `validate()` 同时受 Server 建议间隔和硬编码 30 秒门槛。只有 Signed Token 过期或本地验证失败时绕过建议间隔，但仍受 30 秒门槛。
+16. 普通 `validate()` 同时受 Product 在线复核间隔和硬编码 30 秒门槛。只有 Signed Token 本地验证失败时绕过在线复核间隔，但仍受 30 秒门槛。
 17. 两个门槛从最近一次明确 `/validate` Server 结果计算：合法业务成功或明确 HTTP 失败会推进；没有 HTTP 响应的失败和 2xx 非法业务正文不会推进。
 18. HTTP 失败只推进 `/validate` 响应冷却，不推进 `validatedAt`，也不形成新的业务快照。
-19. `signed_token_ttl_seconds` 可以短于建议校验间隔。TTL 原值不进入 Token；签名 Payload 只写绝对 `exp`，明文 `signed_license_token_expires_at` 必须与 `exp` 表示同一绝对时刻。`exp` 是“签发时间 + License 快照 TTL”与 License 最终有效截止时间中的较早值。
+19. `offline_grace_seconds` 同时适用于 Opaque 与 Signed。超过后 SDK 返回 `offlineGraceExceeded`，但 `isUsable()` 仍为真；业务到期和凭据有效性是独立的硬边界。
 
 ## 3. 设计原则
 
@@ -218,14 +218,13 @@ trial.active
 license.active
 ```
 
-但业务状态为 active 仍不足以单独判定可用。最终 `isUsable` 还必须检查：
+业务状态为 active 后，最终 `isUsable` 还必须检查：
 
-1. 当前状态快照仍在在线校验冷却窗口内；
-2. 已知 Trial 或 License 业务到期时间尚未到达；
-3. Signed License Token 尚未过期且本地验证通过；
-4. 当前 Product、设备和 Release 与凭据一致。
+1. 已知 Trial 或 License 业务到期时间尚未到达；
+2. Signed License Token 本地验证通过；
+3. 当前 Product、设备和 Release 与凭据一致。
 
-因此宿主不调用 `validate()` 时，SDK 不会联网，但也不能无限沿用过期快照。`hasFeature()`、`isUsable` 和当前快照读取只进行本地时间与签名检查；一旦在线校验窗口或业务期限结束，就返回不可用或需要在线校验，不隐式发请求。
+在线复核间隔与离线宽限期不参与 `isUsable`。宿主不调用 `validate()` 时，SDK 不会联网；超过离线宽限期后 `freshness()` 返回 `offlineGraceExceeded` 供宿主强提示，但 `hasFeature()` 和 `isUsable()` 仍按业务状态、业务期限与签名有效性判断。
 
 ### 4.7 统一状态快照
 
@@ -293,15 +292,15 @@ Trial 凭据
 
 ```text
 宿主调用 validate()
-  ├─ Signed Token 仍有效，且建议间隔或 30 秒门槛尚未结束
+  ├─ Signed Token 本地有效，且建议间隔或 30 秒门槛尚未结束
   │    ├─ 不发起网络请求
   │    └─ 返回 notPerformed(.cooldown) 与当前缓存快照
-  ├─ Signed Token 已过期/无效，但 30 秒门槛尚未结束
+  ├─ Signed Token 本地验证失败，但 30 秒门槛尚未结束
   │    ├─ 不发起网络请求
   │    └─ 返回 notPerformed(.cooldown) 与当前缓存快照
   └─ 所有适用门槛均已结束
        ├─ 发起一次统一在线校验
-       ├─ 合法业务成功：保存状态、validated_at、interval 和 lastValidateResponseAt
+       ├─ 合法业务成功：保存状态、validated_at、interval、offline grace 和 lastValidateResponseAt
        ├─ 明确 HTTP 失败：只保存 lastValidateResponseAt，返回原始错误与 lastKnownValue
        └─ 无 HTTP 响应或 2xx 非法正文：不更新时间，返回原始错误与 lastKnownValue
 ```
@@ -346,7 +345,8 @@ Swift 实现可以使用内部 `actor`，不引入第三方依赖。
 ```json
 {
   "validation": {
-    "validation_interval_seconds": null,
+    "validation_interval_seconds": 3600,
+    "offline_grace_seconds": 2592000,
     "validated_at": "2026-09-23T10:00:00Z"
   }
 }
@@ -355,13 +355,13 @@ Swift 实现可以使用内部 `actor`，不引入第三方依赖。
 解释规则：
 
 ```text
-null                  -> 3600 秒
-小于 3600 的非空值   -> 有效值按 3600 秒处理
-大于 86400 的非空值  -> 有效值按 86400 秒处理
-3600...86400          -> 使用 Server 返回值
+validation_interval_seconds 3600...86400 -> 使用 Server 返回值
+缺失或超出范围                              -> 协议错误
+offline_grace_seconds 为正整数              -> License 离线宽限期
+offline_grace_seconds 为 null               -> Trial 或无 License 状态不适用
 ```
 
-SDK 保留 Server 原始返回值用于诊断，同时使用规范化后的有效值进行本地判断。Server 自身也必须保证输出满足合同；客户端限制不能替代 Server 配置校验。除此之外，SDK 对 `validate()` 使用硬编码 30 秒最小请求门槛；该值不是 Server 字段。
+Server 自身必须保证输出满足合同，SDK 不为旧的 nullable interval 或越界值提供兼容。除此之外，SDK 对 `validate()` 使用硬编码 30 秒最小请求门槛；该值不是 Server 字段。
 
 ### 6.2 删除 `next_validation_at`
 
@@ -379,6 +379,7 @@ SDK 可以在内存中临时计算两个门槛供诊断使用，但持久化的�
 ```text
 validatedAt
 effectiveInterval
+offlineGracePeriod
 lastValidateResponseAt
 ```
 
@@ -386,22 +387,11 @@ lastValidateResponseAt
 
 ### 6.3 有效窗口
 
-缓存 active 状态的实际本地可用截止时间取最早边界：
+缓存 active 状态的可用性不由在线复核间隔或离线宽限期截止。`freshness()` 依次表达 `fresh`、`offlineGrace` 与 `offlineGraceExceeded`；`isUsable()` 只检查业务状态、Trial/License 业务到期和 Signed 凭据有效性。
 
-```text
-validatedAt + effectiveInterval
-Trial expiresAt（如有）
-License expiresAt（如有）
-Signed License Token exp（如有）
-```
+Signed License Token 不包含 `exp`。本地验证失败时，下一次主动 `validate()` 绕过 Product 在线复核间隔，只保留 30 秒请求门槛；超过离线宽限期但验签仍有效时不绕过可用性判断，只要求宿主显示强提示。
 
-这样冷却策略不能把 Trial、License 或签名凭据延长到它们自己的期限之外。
-
-Signed License Token 可以早于建议校验间隔到期。这不是两个时钟冲突：Token 过期或本地验证失败时，下一次主动 `validate()` 绕过建议间隔，只保留 30 秒门槛。
-
-`signed_token_ttl_seconds` 只用于服务端从签发时刻计算绝对到期时间。实际 `exp` 取“签发时间 + License 快照中的 TTL”与 License 最终有效截止时间（如有）中的较早值；对 billing 订阅，后者已包含 License 快照中的支付宽限。TTL 原值不进入 Token；签名 Payload 写绝对 `exp`，明文响应的 `signed_license_token_expires_at` 是同一绝对时刻的镜像。SDK 必须验证外层时间与签名保护的 `exp` 完全一致，不能信任其中任一份不一致的响应。
-
-Client API 中 License 的 `expires_at` 表示客户端实际可以使用授权的有效截止时间。对 `renewal_mode=billing` 的订阅，它等于数据库账期 `expires_at + payment_grace_seconds`；其他模式保持数据库原值或 `null`。在线状态、激活响应、Signed License Token 的 `lexp` 与 Token `exp` 上限必须使用同一有效截止时间，避免客户端在服务端认可的支付宽限期开始时提前停权。
+Client API 中 License 的 `expires_at` 表示客户端实际可以使用授权的有效截止时间。对 `renewal_mode=billing` 的订阅，它等于数据库账期 `expires_at + payment_grace_seconds`；其他模式保持数据库原值或 `null`。在线状态、激活响应与 Signed License Token 的 `lexp` 必须使用同一有效截止时间，避免客户端在服务端认可的支付宽限期开始时提前停权。
 
 ### 6.4 时钟异常
 
@@ -494,7 +484,8 @@ Server 使用严格 discriminated union 校验请求，不允许混合 License �
       "expires_at": "2026-09-23T09:00:00Z"
     },
     "validation": {
-      "validation_interval_seconds": null,
+      "validation_interval_seconds": 3600,
+      "offline_grace_seconds": null,
       "validated_at": "2026-09-23T10:00:00Z"
     },
     "meta": {
@@ -523,11 +514,11 @@ Server 使用严格 discriminated union 校验请求，不允许混合 License �
     "credential_update": {
       "credential_mode": "signed",
       "signed_license_token": "base64url.base64url.base64url",
-      "signed_license_token_expires_at": "2026-09-24T10:00:00Z",
       "signing_key_id": "key_01..."
     },
     "validation": {
       "validation_interval_seconds": 86400,
+      "offline_grace_seconds": 2592000,
       "validated_at": "2026-09-23T10:00:00Z"
     },
     "meta": {
@@ -574,7 +565,7 @@ Server 必须先验证调用方持有的 Machine Token 或 Trial Token 及设备
 
 无凭据请求只返回最小 Trial 可用性，不返回历史 Claim 标识或管理信息。
 
-同一隐私边界也适用于 `POST /api/v1/client/trials/claim` 的重复或并发领取错误：`TRIAL_ALREADY_CLAIMED` 不得返回既有 `trial_id`，数据库原始错误只能进入脱敏后的服务端诊断来源，不能放进公开 details。
+同一隐私边界也适用于 `POST /api/v1/client/trials/claim`：相同 Product、设备指纹和 Trial Token 的重复或并发请求必须重复下发同一份 Trial 凭据；相同指纹但 Token 不匹配时返回 `TRIAL_CREDENTIALS_INVALID`，且不得返回既有 `trial_id`。数据库原始错误只能进入脱敏后的服务端诊断来源，不能放进公开 details。
 
 ## 8. SDK 持久化与状态更新
 
@@ -585,7 +576,7 @@ SDK 需要按 Product 与设备保存：
 - Server `validated_at`；
 - 规范化后的有效校验间隔；
 - Server 原始间隔值，供诊断；
-- 对应的业务到期时间和 Signed Token 到期时间。
+- 对应的业务到期时间、在线复核间隔和离线强提示宽限期；Signed Token 没有独立 `exp`。
 - 最近一次取得明确 `/validate` Server 结果的 `lastValidateResponseAt`。
 
 只有以下操作可以推进 `validated_at`：
@@ -644,10 +635,12 @@ SDK 仍然不包含 SwiftUI/AppKit 授权界面。宿主只需要根据统一状
 - 自动重试、指数退避、Retry-After 调度或熔断器；
 - SDK 内置激活、购买、Trial 到期界面；
 - 因校验间隔新增 Product/License 数据库字段或管理端配置；
-- 改变激活、Trial Claim、解绑本身的业务权限和设备绑定规则；
+- 引入设备私钥证明、平台证明或其他硬件级设备绑定架构；
 - 把客户端冷却当成服务端防滥用机制。修改后的客户端仍可绕过本地间隔，Server/WAF 继续承担独立流量保护。
 
-本合同仍保留一个已知的分布式失败窗口：`startTrial()` 的 Server Claim 已提交、但一次性 Trial Token 写入 Keychain 失败时，SDK 不能安全地重新领取，也没有恢复旧 Token 的接口。SDK 必须返回原始存储错误，不能清理后自动重领或伪装 Trial 可用。若未来要消除该窗口，需要单独设计可认证的 Trial 凭据恢复协议，不在本次破坏性合同内。
+激活与 Trial 领取都必须先把客户端生成的高熵 Token 写为“验证中凭据”，再发送网络请求。服务端以 Token Hash、资源范围和设备指纹识别同一次领取：相同 Token 的重复或并发请求重复下发同一份正式凭据，不创建第二份资源；不同 Token 不能取得既有凭据。SDK 仅在正式凭据和快照全部落盘后删除验证中凭据。响应丢失、进程退出或正式落盘失败后，宿主分别显式重试 `activate()` 或 `startTrial()`；`validate()` 不替用户执行这两个业务动作。Activation 验证中凭据只保存 Machine Token，不保存 Registration Key 明文或 Hash；重试使用用户本次输入的 Registration Key，由 Server 判断授权目标。
+
+Machine Token 与 Trial Token 属于 bearer credential。V1 的安全边界是：另一设备只知道 Registration Key 或设备指纹时，不能取得既有凭据；客户端 Token 使用 256 位 CSPRNG，传输依赖 TLS，Apple SDK 使用 `ThisDeviceOnly` Keychain，Server 仅保存 Hash 并进行常量时间比较。设备指纹只用于资源范围绑定，不是密码学设备证明。如果攻击者已经从失陷客户端导出 Token 并能伪造设备指纹，V1 不能阻止重放；覆盖该威胁需要另行设计设备私钥签名或平台证明，不应以 Registration Key Hash 或更严格的本地分支伪装成已经解决。
 
 ## 11. 兼容性与受影响组件
 
@@ -655,7 +648,7 @@ SDK 仍然不包含 SwiftUI/AppKit 授权界面。宿主只需要根据统一状
 
 - 替换现有 `validate() async throws -> LicenseStatus`；
 - 删除公开 `validateTrial()` 与 `checkLocalStatus()`，相应能力进入统一 `validate()` 内部；
-- 删除公开 `clearLocalTrial()`；清除本地 Token 不能恢复服务端已经领取的 Trial，把它作为普通产品操作会让用户永久失去尚未结束的 Trial；
+- 删除公开 `clearLocalTrial()`；清除本地 Token 后不能重新取得服务端已经领取的 Trial，把它作为普通产品操作会让用户永久失去尚未结束的 Trial；
 - 用统一泛型结果包装激活、Trial、校验和解绑；
 - 以统一快照替代只表达最后写入值的 `cachedStatus`；
 - `hasFeature()` 必须检查状态新鲜度，不能无限使用旧缓存；
@@ -667,12 +660,12 @@ SDK 仍然不包含 SwiftUI/AppKit 授权界面。宿主只需要根据统一状
 - 删除 `/api/v1/client/trials/validate`；
 - 增加无凭据 Trial 可用性判断；
 - 把明确的授权业务终态转换成成功状态响应；
-- 成功响应增加 request ID、校验时间与 nullable interval；
+- 成功响应增加 request ID、校验时间、Product 在线复核间隔与 License 离线宽限期；
 - 保留现有错误 Envelope 和字段级脱敏边界。
 
 ### 11.3 CLI
 
-当前 CLI 直接调用 License 专用 `/api/v1/client/validate`，必须同步使用新的联合请求和状态响应。CLI 不需要实现 Swift SDK 的内存协调器，但必须遵循相同的业务状态、错误保存和签名验证合同。
+CLI 已同步使用联合请求和状态响应。它不需要实现 Swift SDK 的内存协调器，但遵循相同的业务状态、错误保存、签名验证和 Activation 验证中凭据合同。
 
 CLI 的 `validate` 退出语义固定为：
 
@@ -680,7 +673,7 @@ CLI 的 `validate` 退出语义固定为：
 - Server 已成功确认但当前不可用的业务状态：退出码 `2`，并输出准确状态、业务 code 与 request ID；
 - 网络、协议、凭据认证、Server 或本地存储失败：退出码 `1`。
 
-业务终态虽然使用 HTTP 成功响应，CLI 也不能输出“License validated”并返回 `0`。CLI 的本地 Signed Token 验证还必须检查 `validated_at + effective interval`，不能只检查 Token 自身 `exp`。
+业务终态虽然使用 HTTP 成功响应，CLI 也不能输出“License validated”并返回 `0`。CLI 本地验证超过 Product 在线复核间隔或 Plan 离线宽限期时只提示应联网，不因此返回不可用；业务到期或验签失败仍按不可用处理。
 
 ## 12. 验收矩阵
 
@@ -691,16 +684,16 @@ CLI 的 `validate` 退出语义固定为：
 3. Trial active/expired/revoked 映射正确；
 4. License active/expired/suspended/revoked 与 Activation revoked/deactivated 映射正确；
 5. Release unknown 与 update entitlement required 不映射成 License 到期；
-6. interval 为 `null` 时使用 `3600`；低于最小值、高于最大值时正确规范化并保留诊断；
+6. Product interval 必填且限制在 3600 至 86400 秒，Plan offline grace 正确进入 License 快照；
 7. Opaque、Trial、无凭据与有效 Signed 同时受建议间隔和 30 秒门槛；门槛内返回 `notPerformed(.cooldown)`，网络请求数为零；
-8. Signed Token 过期或无效时只绕过建议间隔，30 秒内仍不发请求；
+8. Signed Token 本地验证失败时只绕过建议间隔，30 秒内仍不发请求；
 9. 冷却结束但宿主没有调用时，网络请求数仍为零；
 10. 冷却结束后的第一次 `validate()` 只发起一个请求；
 11. 多个并发 `validate()` 只产生一个 Server 请求并共享结果；
 12. 在途 `validate()` 与 `activate()`、`startTrial()` 或 `deactivate()` 交错时，旧响应不能覆盖后发生操作写入的凭据和快照；
 13. 合法业务响应与明确 HTTP 失败推进 `lastValidateResponseAt`；无 HTTP 响应与 2xx 非法正文不推进；任何失败都不推进 `validated_at`；
-14. 业务期限或 Signed Token 期限早于本地可用截止时，不继续报告可用；
-15. `hasFeature()` 不发起网络请求，并在快照失效后返回 false；
+14. 业务期限到达或 Signed 凭据无效时不继续报告可用；
+15. `hasFeature()` 不发起网络请求，并在 `offlineGraceExceeded` 时仍按活动授权返回功能；
 16. 激活成功清除 Trial 凭据并初始化新的快照，但不启动 `/validate` 冷却；
 17. `activate()`、`startTrial()` 和 `deactivate()` 不受 `/validate` 冷却限制；
 18. 永久 License 仍会在下一次宿主调用且所有适用门槛结束时在线校验。
@@ -712,12 +705,12 @@ CLI 的 `validate` 退出语义固定为：
 3. 所有列出的业务终态使用 `success: true` 返回，并保留原始 code；
 4. 未列出的异常继续通过错误 Envelope 返回；
 5. 无凭据请求不泄露 Trial Claim 标识和历史详情；
-6. 所有成功状态响应包含 Server `validated_at` 与 nullable interval；
+6. 所有成功状态响应包含 Server `validated_at`、必填 Product interval 和适用的 License offline grace；
 7. 成功响应不包含 `next_validation_at`；
-8. Signed Token Payload 只包含绝对 `exp`，外层 `signed_license_token_expires_at` 与之相同；短 TTL 不被错误拒绝；
+8. Signed Token Payload 不包含 `exp`，响应也没有独立 Signed Token 到期字段；
 9. Server/WAF 流量保护不依赖 SDK 冷却；
 10. License、Trial 与 Release 状态在并发变化时不会返回已经失效的 active 快照；
-11. 重复或并发领取 Trial 不返回既有 Trial ID；
+11. 相同指纹和相同 Trial Token 的重复或并发领取返回既有 Trial ID；不同 Token 拒绝恢复；
 12. Client API 返回的订阅有效截止时间、Signed Token `lexp` 与支付宽限期一致。
 
 ### 12.3 文档与集成
@@ -1085,16 +1078,16 @@ final class LicenseController: ObservableObject {
 
 本设计已在两个仓库实现：
 
-- `licenkit`：Server 统一 Client Validate 合同、Client API 其他操作的统一时间/元数据、CLI 对新网络合同的适配（不包含 Swift SDK 的本地冷却调度），以及 Signed Token 绝对 `exp` 与明文镜像合同；本次 TTL 修正沿用已有的正数 Schema 约束，不增加 D1 迁移；
-- `licenkit-sdk-swift`：统一公开结果类型、授权快照、仅针对 `validate()` 的双门槛被动冷却、并发请求合并、状态写入串行化、Signed Token 与 Server 状态一致性校验，以及旧 Keychain 凭据的读取兼容。
+- `licenkit`：Server 统一 Client Validate 合同、Product 在线复核间隔、Plan/License 离线宽限期、激活与 Trial 的客户端凭据绑定和安全重复下发，以及不含 `exp` 的 Signed Token 合同；通过增量 D1 migration 更新既有数据库；
+- `licenkit-sdk-swift`：统一公开结果类型、授权快照、仅针对 `validate()` 的双门槛被动冷却、并发请求合并、状态写入串行化、Signed Token 与 Server 状态一致性校验，以及请求前持久化的激活/Trial 验证中凭据；不兼容旧凭据合同。
 
 当前本地证据：
 
 - Server、CLI 和 Admin 全仓类型检查通过；
-- Server 218 项、CLI 14 项、Admin 18 项自动化测试通过；
+- Server 235 项、CLI 18 项、Admin 46 项自动化测试通过；
 - 全仓构建与 Wrangler `deploy --dry-run` 通过；
-- 新建 SQLite/D1 Schema 的加载、外键检查和完整性检查通过；本变更无新迁移需要执行；
-- Swift SDK 严格并发与 warnings-as-errors 下 32 项测试通过，Release 构建通过；
+- 新建 SQLite/D1 Schema 的加载、外键检查和完整性检查通过；既有数据库需要按顺序执行增量迁移 `0004_client_validation_policy.sql`，当前未对远端执行；
+- Swift SDK 39 项合同测试通过；
 - 离线 Signed License Token 的签名、硬件绑定、篡改检测和旧 Account 范围 Claim 拒绝检查通过。
 
 这些证据只证明当前工作树中的源码、模拟 HTTP 合同、构建和全新 Schema 加载成立，不等于生产已完成。后续发布必须把 Server 与破坏性升级的 Swift SDK 同步交付，并分别完成：

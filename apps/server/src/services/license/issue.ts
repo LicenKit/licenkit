@@ -16,7 +16,7 @@ interface ManualPlanRow {
   credential_mode: LicensePlanSnapshot["credentialMode"];
   default_term_seconds: number | null;
   update_window_seconds: number | null;
-  signed_token_ttl_seconds: number;
+  offline_grace_seconds: number;
   payment_grace_seconds: number;
   max_activations: number;
   features_json: string;
@@ -50,7 +50,7 @@ export async function issueManualLicense(input: {
     `SELECT
        lp.id, lp.product_id, p.name AS product_name, lp.revision,
        lp.license_model, lp.credential_mode, lp.default_term_seconds,
-       lp.update_window_seconds, lp.signed_token_ttl_seconds,
+       lp.update_window_seconds, lp.offline_grace_seconds,
        lp.payment_grace_seconds, lp.max_activations, lp.features_json,
        lp.status AS plan_status, p.status AS product_status,
        EXISTS (
@@ -87,7 +87,7 @@ export async function issueManualLicense(input: {
     credentialMode: plan.credential_mode,
     defaultTermSeconds: plan.default_term_seconds,
     updateWindowSeconds: plan.update_window_seconds,
-    signedTokenTtlSeconds: plan.signed_token_ttl_seconds,
+    offlineGraceSeconds: plan.offline_grace_seconds,
     paymentGraceSeconds: plan.payment_grace_seconds,
     maxActivations: plan.max_activations,
     featuresJson: plan.features_json,
@@ -134,7 +134,7 @@ export async function issueManualLicense(input: {
   statements.push(input.db.prepare(
     `INSERT INTO licenses (
        id, instance_id, customer_id, product_id, plan_id, plan_revision,
-       license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
+       license_model, renewal_mode, credential_mode, offline_grace_seconds,
        payment_grace_seconds, max_activations, features_json, key_hash,
        key_version, key_rotated_at, source, source_billing_provider_id,
        source_external_transaction_id, is_checkout_verification, status,
@@ -155,7 +155,7 @@ export async function issueManualLicense(input: {
     terms.licenseModel,
     terms.renewalMode,
     terms.credentialMode,
-    terms.signedTokenTtlSeconds,
+    terms.offlineGraceSeconds,
     terms.paymentGraceSeconds,
     terms.maxActivations,
     terms.featuresJson,

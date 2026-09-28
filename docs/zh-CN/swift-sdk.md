@@ -94,7 +94,7 @@ public struct EntitlementSnapshot: Codable, Equatable, Sendable {
     public let validatedAt: Date?
     public let receivedValidationInterval: TimeInterval?
     public let effectiveValidationInterval: TimeInterval?
-    public let signedLicenseTokenExpiresAt: Date?
+    public let offlineGracePeriod: TimeInterval?
     public let lastValidateResponseAt: Date?
     public let signedCredentialValid: Bool?
     public let businessCode: String?
@@ -149,13 +149,11 @@ public enum StateSource: String, Codable, Equatable, Sendable {
 - `.signedLocal`：冷却窗口内复用快照，并重新验证了本地 Signed License Token。
 - `.local`：没有发生服务端确认，例如无 License 凭据时调用 `deactivate()` 后生成的本地“需要激活”状态。
 
-服务端返回 `validated_at` 与可空的 `validation_interval_seconds`。SDK 在后者为 `nil` 时使用 3600 秒，并把非空值限制在 3600 至 86400 秒之间。`validatedAt` 表示最近一次合法业务状态何时由 Server 确认；它不是最近一次 `/validate` 响应时间，也不能用于代替请求冷却记录。业务可用截止时间取以下时间的最早值：
+服务端返回必填的 `validated_at`、Product 级 `validation_interval_seconds`，以及 License 级可空 `offline_grace_seconds`。在线复核间隔范围为 3600 至 86400 秒；离线宽限期来自签发 License 时固化的 Plan 配置，Trial 和无 License 凭据状态返回 `null`。
 
-1. `validatedAt + effectiveValidationInterval`；
-2. License 或 Trial 的业务到期时间；
-3. Signed License Token 的 `exp`。
+`validatedAt` 表示最近一次合法业务状态何时由 Server 确认；它不是最近一次 `/validate` 响应时间。`freshness(at:)` 在在线复核间隔内返回 `.fresh`，间隔之后、离线宽限期之前返回 `.offlineGrace`，超过宽限期返回 `.offlineGraceExceeded`。这三个阶段只表达在线证据的新鲜度和提示强度，不是授权截止时间。
 
-因此，本地可用窗口不会延长业务授权或 Signed Token。`isUsable(at:)` 只在业务状态为 active 且当前时间仍早于该最早截止时间时返回 `true`。
+`isUsable(at:)` 只由 active 业务状态、Trial/License 业务到期和 Signed 凭据是否有效决定。超过在线复核间隔或离线宽限期仍可使用；业务到期、暂停、吊销、Activation 失效、Release 不合格或验签失败才不可用。
 
 ## 6. `validate()`：一个入口、三种凭据
 
@@ -169,7 +167,7 @@ SDK 从 Keychain 选择凭据：优先 License，其次 Trial，否则使用 `no
 
 冷却只约束 `validate()`，不约束 `activate()`、`startTrial()` 或 `deactivate()`。后三个显式操作也不会写入最近 `/validate` 响应时间；因此激活或领取 Trial 成功后，宿主若立即主动调用 `validate()`，SDK 仍允许这次请求。
 
-`validate()` 的普通路径必须同时越过两个门槛：Server 建议的有效间隔，以及硬编码 30 秒。Opaque、Trial、无凭据和 Signed Token 仍然有效的 License 都遵守这两个门槛。只有 Signed Token 已过期或本地验证失败时，SDK 才绕过 Server 建议间隔，但仍遵守 30 秒门槛。
+`validate()` 的普通路径必须同时越过两个门槛：Product 的在线复核间隔，以及硬编码 30 秒。Opaque、Trial、无凭据和 Signed Token 本地验证有效的 License 都遵守这两个门槛。只有 Signed Token 本地验证失败时，SDK 才绕过在线复核间隔，但仍遵守 30 秒门槛。
 
 两个门槛都从最近一次明确 `/validate` Server 结果计算：
 
@@ -195,19 +193,19 @@ public struct ActivationData: Equatable, Sendable {
 两种凭证模式都保存 `activationID + machineToken`，区别是：
 
 - `opaque`：没有可离线验签的授权载荷，签名相关字段必须为 `nil`。
-- `signed`：同时返回 Signed License Token、`signingKeyID` 与外层到期时间；SDK 在保存前完成验签和 Claim 一致性检查。
+- `signed`：同时返回 Signed License Token 与 `signingKeyID`；SDK 在保存前完成验签和 Claim 一致性检查。
 
-Signed Token 必须满足：Header 为 `alg=EdDSA`、`typ=licenkit-license+jwt` 且 `kid` 受信；`ins/prd/act/fp/ver/plt/arc` 与当前配置、Activation 和设备一致；外层 `signed_license_token_expires_at` 与签名内绝对 `exp` 一致；活动 License 的功能、更新期限和最终有效期与签名 Claims 一致。Token 不携带 Product Release ID 或发布时间，SDK 不在本地重复执行 Release 发布时间与更新期限的业务比对。
+Signed Token 必须满足：Header 为 `alg=EdDSA`、`typ=licenkit-license+jwt` 且 `kid` 受信；`ins/prd/act/fp/ver/plt/arc` 与当前配置、Activation 和设备一致；活动 License 的功能、更新期限和最终有效期与签名 Claims 一致。Token 不携带 `exp`、Product Release ID 或发布时间，SDK 不在本地重复执行 Release 发布时间与更新期限的业务比对。
 
-Plan 的 `signed_token_ttl_seconds` 可以短于 3600 秒。它只用于服务端计算绝对 `exp`：实际到期时间是“签发时间 + License 快照 TTL”与 License 最终有效截止时间（如有）中的较早值，后者在 billing 模式下已包含支付宽限。原始 TTL 数值不进入 Token。Token 早于建议校验间隔到期不属于协议冲突：下一次宿主主动调用 `validate()` 时，SDK 绕过建议间隔并只检查 30 秒门槛。
+Plan 的 `offline_grace_seconds` 默认 30 天，签发时固化到 License，Opaque 与 Signed 共用。它只决定何时进入 `.offlineGraceExceeded` 强提示，不会使 `isUsable()` 变为 `false`。Product 的 `validation_interval_seconds` 只决定多久尝试一次在线复核，也不是业务到期时间。
 
-激活成功后不长期保存 Registration Key，并清除同一设备上的 Trial 凭据。
+激活前，SDK 先把客户端生成的 Machine Token 作为“Activation 验证中凭据”写入 Keychain，再使用本次 `activate()` 传入的 Registration Key 发请求。验证中凭据不保存 Registration Key 明文或 Hash，也不保存设备名称。服务端已经创建 Activation 但响应丢失、进程退出或最终凭据写入失败时，再次调用 `activate()` 会复用同一 Machine Token，服务端重复下发同一 Activation 与当前授权信息；完整凭据和快照全部落盘后才删除验证中凭据。`validate()` 不会替用户执行激活。不同 Machine Token 不能仅凭相同设备指纹取得既有 Activation。激活完成后清除同一设备上的 Trial 凭据。
 
 ## 8. Product/设备 Trial
 
-`startTrial()` 调用 `POST /api/v1/client/trials/claim`。首次成功返回的 Trial Token 只写入 Keychain；服务端只保存 Token Hash。正常 License 激活后，SDK 清除 Trial 凭据。
+`startTrial()` 调用 `POST /api/v1/client/trials/claim`。SDK 在请求前生成 Trial Token，并把它作为“Trial 验证中凭据”写入 Keychain；服务端只保存 Token Hash。若响应丢失、进程退出或正式 Trial 凭据/快照写入失败，用户无需再次输入任何内容，只需再次调用 `startTrial()`，SDK 就会复用同一 Trial Token，服务端重复下发同一 Trial。完整 Trial 凭据与快照全部落盘后才清理验证中凭据。正常 License 激活后，SDK 清除 Trial 凭据。
 
-重复领取返回 `TRIAL_ALREADY_CLAIMED` API 错误，不会返回历史 Trial ID，也不会延长试用。后续不再调用独立的 `trials/validate`，而是由统一 `validate()` 自动选择 `credential.kind=trial`。
+相同设备指纹和相同 Trial Token 的重复或并发领取返回同一 Trial，不会延长试用；不同 Token 不能仅凭相同指纹取得历史 Trial。后续不再调用独立的 `trials/validate`，而是由统一 `validate()` 自动选择 `credential.kind=trial`。没有完整 Trial 凭据时，`validate()` 只按 `credential.kind=none` 查询状态，不会替用户领取 Trial。
 
 Paddle 免费订阅试用是普通支付型 License：用户获得 Registration Key 后调用 `activate()`，不调用 `startTrial()`。SDK 不根据 Paddle 前端状态自行推断授权。
 
@@ -249,11 +247,13 @@ HTTP 5xx 属于 `transportError(.server(...))`，但仍保留安全的服务端 
 
 ## 11. 本地凭据边界
 
-Keychain 分别保存 License 凭据、Trial 凭据与授权快照：
+Keychain 分别保存完成态凭据、验证中凭据与授权快照：
 
-- License：Activation ID、Machine Token、凭证模式、可选 Signed Token/key ID/到期时间；
+- License：Activation ID、Machine Token、凭证模式、可选 Signed Token/key ID；
 - Trial：Trial ID、Trial Token；
-- Snapshot：凭据主体、统一状态、服务端业务时间、收到/生效间隔、签名 Token 到期、业务码和安全细节；另保存最近一次取得明确 `/validate` Server 结果的时间，用于请求冷却。
+- Activation Verification：客户端预生成的 Machine Token；
+- Trial Verification：客户端预生成的 Trial Token；
+- Snapshot：凭据主体、统一状态、服务端业务时间、收到/生效的在线复核间隔、离线宽限期、业务码和安全细节；另保存最近一次取得明确 `/validate` Server 结果的时间，用于请求冷却。
 
 `currentSnapshot` 是当前进程内最近加载或写入的快照。宿主 App 应在启动路径调用一次 `validate()`，让 SDK 从 Keychain 读取持久化状态并决定复用缓存还是联网；不要假设刚完成 `configure` 后该属性已经完成磁盘恢复。
 
@@ -263,8 +263,10 @@ Keychain 分别保存 License 凭据、Trial 凭据与授权快照：
 
 - 无凭据设备能得到 Trial 可用/不可用或 Release 不合格状态；
 - `opaque` 与 `signed` 激活、校验和 Token 刷新；
-- 任意正数 Signed Token TTL 都只投影成绝对 `exp`，且外层到期时间与 `exp` 一致；
-- Opaque、Trial、无凭据和有效 Signed 同时受到建议间隔与 30 秒门槛，过期/无效 Signed 只绕过建议间隔；
+- Signed Token 不包含 `exp`，Opaque 与 Signed 使用同一业务到期、在线复核和离线宽限语义；
+- Opaque、Trial、无凭据和有效 Signed 同时受到在线复核间隔与 30 秒请求门槛，验签失败的 Signed 只绕过前者；
+- 在线复核间隔到达后仍可使用，超过离线宽限期进入 `offlineGraceExceeded` 强提示但仍可使用；
+- 激活或 Trial 已在 Server 创建后发生响应丢失、进程退出或 Keychain 最终写入失败时，显式重试复用原客户端 Token，Server 重复下发同一份正式凭据；不同 Token 无法仅凭指纹取得既有凭据；`validate()` 不执行激活或 Trial 领取；
 - 合法 `/validate` 业务响应与明确 HTTP 失败推进最近响应时间；无 HTTP 响应和 2xx 非法正文不推进；HTTP 失败不推进 `validatedAt`；
 - 激活、领取 Trial 和解绑既不受 `/validate` 冷却，也不启动该冷却；
 - License/Trial 到期、暂停、吊销、Activation 失效与 Release 不合格；

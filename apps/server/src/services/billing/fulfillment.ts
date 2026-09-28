@@ -64,7 +64,7 @@ interface LicensePlanOfferRow {
   credential_mode: "opaque" | "signed";
   default_term_seconds: number | null;
   update_window_seconds: number | null;
-  signed_token_ttl_seconds: number;
+  offline_grace_seconds: number;
   payment_grace_seconds: number;
   max_activations: number;
   features_json: string;
@@ -407,7 +407,7 @@ async function lookupOffer(
             product.status AS product_status, product.billing_environment,
             plan.id AS plan_id, plan.revision AS plan_revision, plan.license_model,
             plan.credential_mode, plan.default_term_seconds, plan.update_window_seconds,
-            plan.signed_token_ttl_seconds, plan.payment_grace_seconds,
+            plan.offline_grace_seconds, plan.payment_grace_seconds,
             plan.max_activations, plan.features_json, plan.status AS plan_status,
             provider.environment AS provider_environment
      FROM billing_offers AS offer
@@ -729,7 +729,7 @@ async function fulfillInitialPurchase(input: {
   const statements: D1PreparedStatement[] = [input.env.DB.prepare(
     `INSERT INTO licenses (
        id, instance_id, customer_id, product_id, plan_id, plan_revision,
-       license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
+       license_model, renewal_mode, credential_mode, offline_grace_seconds,
        payment_grace_seconds, max_activations, features_json, key_hash,
        key_version, source, source_billing_provider_id, source_external_transaction_id,
        is_checkout_verification, status, status_reason, expires_at, updates_until,
@@ -748,7 +748,7 @@ async function fulfillInitialPurchase(input: {
     offer.license_model,
     offer.license_model === "subscription" ? "billing" : "none",
     offer.credential_mode,
-    offer.signed_token_ttl_seconds,
+    offer.offline_grace_seconds,
     offer.license_model === "subscription" ? offer.payment_grace_seconds : 0,
     offer.max_activations,
     offer.features_json,

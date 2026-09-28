@@ -19,7 +19,7 @@ const ExternalLicensePlanInputSchema = z.object({
   credential_mode: z.enum(["opaque", "signed"]),
   default_term_seconds: z.number().int().positive().nullable().optional(),
   update_window_seconds: z.number().int().positive().nullable().optional(),
-  signed_token_ttl_seconds: z.number().int().nonnegative(),
+  offline_grace_seconds: z.number().int().positive(),
   payment_grace_seconds: z.number().int().nonnegative().optional(),
   max_activations: z.number().int().min(1),
   features: z.array(z.string().trim().min(1)).default([]),
@@ -32,7 +32,7 @@ const LicensePlanInputSchema = ExternalLicensePlanInputSchema.transform((value) 
   credentialMode: value.credential_mode,
   defaultTermSeconds: value.default_term_seconds,
   updateWindowSeconds: value.update_window_seconds,
-  signedTokenTtlSeconds: value.signed_token_ttl_seconds,
+  offlineGraceSeconds: value.offline_grace_seconds,
   paymentGraceSeconds: value.payment_grace_seconds,
   maxActivations: value.max_activations,
   features: value.features,
@@ -46,7 +46,7 @@ const UpdateLicensePlanSchema = ExternalLicensePlanInputSchema.omit({ product_id
     credentialMode: value.credential_mode,
     defaultTermSeconds: value.default_term_seconds,
     updateWindowSeconds: value.update_window_seconds,
-    signedTokenTtlSeconds: value.signed_token_ttl_seconds,
+    offlineGraceSeconds: value.offline_grace_seconds,
     paymentGraceSeconds: value.payment_grace_seconds,
     maxActivations: value.max_activations,
     features: value.features,
@@ -57,7 +57,7 @@ function validatePlanShape(input: {
   credentialMode: CredentialMode;
   defaultTermSeconds: number | null;
   updateWindowSeconds: number | null;
-  signedTokenTtlSeconds: number;
+  offlineGraceSeconds: number;
   paymentGraceSeconds: number;
 }) {
   if (input.licenseModel === "fixed_term" && !input.defaultTermSeconds) {
@@ -69,11 +69,8 @@ function validatePlanShape(input: {
   if (input.licenseModel !== "perpetual" && input.updateWindowSeconds !== null) {
     throw new AppError("LICENSE_PLAN_UPDATE_WINDOW_FORBIDDEN", "updateWindowSeconds only applies to perpetual plans.");
   }
-  if (input.credentialMode === "opaque" && input.signedTokenTtlSeconds !== 0) {
-    throw new AppError("LICENSE_PLAN_SIGNED_TTL_FORBIDDEN", "Opaque plans require signedTokenTtlSeconds=0.");
-  }
-  if (input.credentialMode === "signed" && input.signedTokenTtlSeconds <= 0) {
-    throw new AppError("LICENSE_PLAN_SIGNED_TTL_REQUIRED", "Signed plans require a positive signedTokenTtlSeconds.");
+  if (input.offlineGraceSeconds <= 0) {
+    throw new AppError("LICENSE_PLAN_OFFLINE_GRACE_INVALID", "License Plans require a positive offlineGraceSeconds.");
   }
   if (input.licenseModel !== "subscription" && input.paymentGraceSeconds !== 0) {
     throw new AppError("LICENSE_PLAN_PAYMENT_GRACE_FORBIDDEN", "Only subscription plans may define payment grace.");
@@ -92,7 +89,7 @@ function formatPlan(plan: any, productName?: string | null) {
     credential_mode: plan.credentialMode,
     default_term_seconds: plan.defaultTermSeconds,
     update_window_seconds: plan.updateWindowSeconds,
-    signed_token_ttl_seconds: plan.signedTokenTtlSeconds,
+    offline_grace_seconds: plan.offlineGraceSeconds,
     payment_grace_seconds: plan.paymentGraceSeconds,
     max_activations: plan.maxActivations,
     features: parseFeatures(plan.featuresJson),
@@ -155,7 +152,7 @@ adminLicensePlansRouter.post("/", requireRole(["owner", "admin"]), async (c) => 
     credentialMode: input.credentialMode,
     defaultTermSeconds: input.defaultTermSeconds ?? null,
     updateWindowSeconds: input.updateWindowSeconds ?? null,
-    signedTokenTtlSeconds: input.signedTokenTtlSeconds,
+    offlineGraceSeconds: input.offlineGraceSeconds,
     paymentGraceSeconds,
   };
   validatePlanShape(values);
@@ -225,13 +222,13 @@ adminLicensePlansRouter.patch("/:planId", requireRole(["owner", "admin"]), async
       paymentGraceSeconds = product.paymentGraceSeconds;
     }
   }
-  const signedTokenTtlSeconds = input.signedTokenTtlSeconds ?? existing.signedTokenTtlSeconds;
+  const offlineGraceSeconds = input.offlineGraceSeconds ?? existing.offlineGraceSeconds;
   validatePlanShape({
     licenseModel,
     credentialMode,
     defaultTermSeconds,
     updateWindowSeconds,
-    signedTokenTtlSeconds,
+    offlineGraceSeconds,
     paymentGraceSeconds,
   });
   if (credentialMode === "signed") {
@@ -247,7 +244,7 @@ adminLicensePlansRouter.patch("/:planId", requireRole(["owner", "admin"]), async
     credentialMode,
     defaultTermSeconds,
     updateWindowSeconds,
-    signedTokenTtlSeconds,
+    offlineGraceSeconds,
     paymentGraceSeconds,
     ...(input.maxActivations !== undefined ? { maxActivations: input.maxActivations } : {}),
     ...(input.features !== undefined ? { featuresJson: JSON.stringify(input.features) } : {}),

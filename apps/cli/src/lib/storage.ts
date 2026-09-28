@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
-  effectiveValidationIntervalSeconds,
+  MAX_VALIDATION_INTERVAL_SECONDS,
+  MIN_VALIDATION_INTERVAL_SECONDS,
   parseEntitlementState,
   type CredentialMode,
   type EntitlementState,
@@ -20,17 +21,24 @@ export interface StoredLicenseData {
   machineToken: string;
   credentialMode: CredentialMode;
   signedLicenseToken?: string;
-  signedLicenseTokenExpiresAt?: string;
   signingKeyId?: string;
   trustedSigningKeys?: Record<string, string>;
   activatedAt: string;
   lastValidatedAt: string;
-  receivedValidationIntervalSeconds: number | null;
-  effectiveValidationIntervalSeconds: number;
+  validationIntervalSeconds: number;
+  offlineGraceSeconds: number | null;
   lastValidationRequestId?: string;
   lastEntitlementState: EntitlementState;
   licenseExpiresAt: string | null;
   terms: LicenseTerms;
+}
+
+export interface ActivationVerificationData {
+  serverUrl: string;
+  productId: string;
+  fingerprint: string;
+  machineToken: string;
+  createdAt: string;
 }
 
 export function getConfigDirectory(): string {
@@ -40,6 +48,10 @@ export function getConfigDirectory(): string {
 
 export function getLicenseFilePath(): string {
   return path.join(getConfigDirectory(), "license.json");
+}
+
+export function getActivationVerificationFilePath(): string {
+  return path.join(getConfigDirectory(), "activation-verification.json");
 }
 
 function normalizeStoredDate(value: string | number | null | undefined): string | null {
@@ -75,18 +87,21 @@ function normalizeStoredLicenseData(value: unknown): StoredLicenseData | null {
     features: rawTerms.features,
     updates_until: normalizeStoredDate(rawTerms.updates_until),
   };
-  const rawReceived = candidate.receivedValidationIntervalSeconds;
-  if (rawReceived !== undefined && rawReceived !== null && !Number.isSafeInteger(rawReceived)) return null;
-  const received = rawReceived ?? null;
+  if (
+    !Number.isSafeInteger(candidate.validationIntervalSeconds) ||
+    Number(candidate.validationIntervalSeconds) < MIN_VALIDATION_INTERVAL_SECONDS ||
+    Number(candidate.validationIntervalSeconds) > MAX_VALIDATION_INTERVAL_SECONDS
+  ) return null;
+  if (
+    candidate.offlineGraceSeconds !== null &&
+    (!Number.isSafeInteger(candidate.offlineGraceSeconds) || Number(candidate.offlineGraceSeconds) <= 0)
+  ) return null;
+  if (!("offlineGraceSeconds" in candidate)) return null;
   const licenseExpiresAt = normalizeStoredDate(
     candidate.licenseExpiresAt as string | number | null | undefined
   );
-  const state = candidate.lastEntitlementState ?? {
-    kind: "license",
-    status: "active",
-    expires_at: licenseExpiresAt,
-    terms: normalizedTerms,
-  };
+  if (!candidate.lastEntitlementState) return null;
+  const state = candidate.lastEntitlementState;
   let parsedState: EntitlementState;
   try {
     parsedState = parseEntitlementState(state);
@@ -95,9 +110,9 @@ function normalizeStoredLicenseData(value: unknown): StoredLicenseData | null {
   }
   return {
     ...candidate,
-    activatedAt: candidate.activatedAt ?? candidate.lastValidatedAt,
-    receivedValidationIntervalSeconds: received,
-    effectiveValidationIntervalSeconds: effectiveValidationIntervalSeconds(received),
+    activatedAt: candidate.activatedAt,
+    validationIntervalSeconds: Number(candidate.validationIntervalSeconds),
+    offlineGraceSeconds: candidate.offlineGraceSeconds,
     lastEntitlementState: parsedState,
     licenseExpiresAt,
     terms: normalizedTerms,
@@ -121,6 +136,46 @@ export function saveStoredLicense(data: StoredLicenseData): void {
   fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 });
   fs.renameSync(tempPath, filePath);
   fs.chmodSync(filePath, 0o600);
+}
+
+function normalizeActivationVerification(value: unknown): ActivationVerificationData | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<ActivationVerificationData>;
+  if (
+    typeof candidate.serverUrl !== "string" ||
+    typeof candidate.productId !== "string" ||
+    typeof candidate.fingerprint !== "string" ||
+    typeof candidate.machineToken !== "string" ||
+    typeof candidate.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(candidate.createdAt))
+  ) return null;
+  return candidate as ActivationVerificationData;
+}
+
+export function loadActivationVerification(): ActivationVerificationData | null {
+  const filePath = getActivationVerificationFilePath();
+  if (!fs.existsSync(filePath)) return null;
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
+  const normalized = normalizeActivationVerification(parsed);
+  if (!normalized) throw new Error(`Activation verification file is invalid: ${filePath}`);
+  return normalized;
+}
+
+export function saveActivationVerification(data: ActivationVerificationData): void {
+  const configDir = getConfigDirectory();
+  fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  const filePath = getActivationVerificationFilePath();
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+  fs.chmodSync(filePath, 0o600);
+}
+
+export function clearActivationVerification(): boolean {
+  const filePath = getActivationVerificationFilePath();
+  if (!fs.existsSync(filePath)) return false;
+  fs.unlinkSync(filePath);
+  return true;
 }
 
 export function clearStoredLicense(): boolean {

@@ -24,7 +24,12 @@ import {
 } from "../src/lib/credentials";
 import { verifyCommand } from "../src/commands/verify";
 import { validateCommand } from "../src/commands/validate";
-import { clearStoredLicense, getLicenseFilePath, loadStoredLicense, saveStoredLicense } from "../src/lib/storage";
+import {
+  clearStoredLicense,
+  getLicenseFilePath,
+  loadStoredLicense,
+  saveStoredLicense,
+} from "../src/lib/storage";
 
 function base64url(data: Uint8Array | string): string {
   return Buffer.from(data).toString("base64url");
@@ -44,7 +49,6 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
     arc: "universal",
     fp: "device-fingerprint",
     iat: now,
-    exp: now + 3600,
     lexp: null,
     upd: now + 1000,
     fea: ["export"],
@@ -60,8 +64,16 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
   };
 }
 
-function validation(validatedAt = "2026-09-23T10:00:00Z", interval: number | null = null) {
-  return { validation_interval_seconds: interval, validated_at: validatedAt };
+function validation(
+  validatedAt = "2026-09-23T10:00:00Z",
+  interval = 3600,
+  offlineGrace: number | null = 2_592_000
+) {
+  return {
+    validation_interval_seconds: interval,
+    offline_grace_seconds: offlineGrace,
+    validated_at: validatedAt,
+  };
 }
 
 function activeState(): ActiveLicenseState {
@@ -84,7 +96,6 @@ function opaqueActivationData(): ActivationResponse {
     machine_token: "mtk_secret_value_123",
     credential_mode: "opaque",
     signed_license_token: null,
-    signed_license_token_expires_at: null,
     signing_key_id: null,
     license_expires_at: null,
     terms: state.terms,
@@ -108,7 +119,6 @@ describe("unified Client API contract", () => {
           credential_update: {
             credential_mode: "opaque",
             signed_license_token: null,
-            signed_license_token_expires_at: null,
             signing_key_id: null,
           },
           validation: validation(),
@@ -144,7 +154,8 @@ describe("unified Client API contract", () => {
       },
     });
     expect(result.state).toMatchObject({ kind: "license", status: "active" });
-    expect(result.validation.validation_interval_seconds).toBeNull();
+    expect(result.validation.validation_interval_seconds).toBe(3600);
+    expect(result.validation.offline_grace_seconds).toBe(2_592_000);
     expect(result.meta.request_id).toBe("req_validate");
   });
 
@@ -385,6 +396,7 @@ describe("unified Client API contract", () => {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
       licenseKey: "LK-SECRET-VALUE-123",
+      machineToken: "mtk_secret_value_123",
       fingerprint: "device-fingerprint",
       devicePlatform: "macos-arm64",
       releaseVersion: "2.4.0",
@@ -421,7 +433,6 @@ describe("signed credential verification", () => {
       machine_token: "mtk_secret_value_123",
       credential_mode: "signed",
       signed_license_token: signed.token,
-      signed_license_token_expires_at: new Date(signed.claims.exp * 1000).toISOString(),
       signing_key_id: "key_v1",
       license_expires_at: null,
       terms: state.terms,
@@ -449,8 +460,8 @@ describe("signed credential verification", () => {
       .rejects.toMatchObject({ code: "TOKEN_FEATURES_MISMATCH" });
   });
 
-  it("accepts a valid short-TTL signed update independently of the online validation interval", async () => {
-    const signed = await signedToken({ exp: Math.floor(Date.now() / 1000) + 1200 });
+  it("accepts a valid signed update without a token expiry claim", async () => {
+    const signed = await signedToken();
     const state: ActiveLicenseState = {
       kind: "license",
       status: "active",
@@ -464,7 +475,6 @@ describe("signed credential verification", () => {
     const update: CredentialUpdate = {
       credential_mode: "signed",
       signed_license_token: signed.token,
-      signed_license_token_expires_at: new Date(signed.claims.exp * 1000).toISOString(),
       signing_key_id: "key_v1",
     };
     await expect(verifyValidationCredentialUpdate(
@@ -480,7 +490,7 @@ describe("signed credential verification", () => {
         nowSeconds: signed.claims.iat,
       },
       state
-    )).resolves.toMatchObject({ exp: signed.claims.exp });
+    )).resolves.toMatchObject({ lic: "lic_1", lexp: null });
   });
 
   it("rejects removed and mismatched signed claims explicitly", async () => {
@@ -502,9 +512,17 @@ describe("signed credential verification", () => {
 
   it("keeps License expiry local while leaving update entitlement decisions to the Server", async () => {
     const now = Math.floor(Date.now() / 1000);
-    const beyondLicense = await signedToken({ iat: now - 100, exp: now + 60, lexp: now + 30 });
-    await expect(verifySignedLicenseToken(beyondLicense.token, beyondLicense.publicKey))
-      .rejects.toMatchObject({ code: "TOKEN_CLAIMS_INVALID" });
+    const beyondLicense = await signedToken({ iat: now - 100, lexp: now + 30 });
+    const licenseClaims = (await verifySignedLicenseToken(beyondLicense.token, beyondLicense.publicKey)).claims;
+    expect(evaluateSignedLicenseClaims(licenseClaims, {
+      productId: "prd_1",
+      activationId: "act_1",
+      fingerprint: "device-fingerprint",
+      releaseVersion: "2.4.0",
+      releasePlatform: "macos",
+      releaseArch: "universal",
+      nowSeconds: now + 31,
+    })).toMatchObject({ valid: false, code: "LICENSE_EXPIRED" });
 
     const updateEnded = await signedToken({ upd: 1_999, lexp: null });
     const updateClaims = (await verifySignedLicenseToken(updateEnded.token, updateEnded.publicKey)).claims;
@@ -550,15 +568,15 @@ describe("local credential state and periodic verification", () => {
       credentialMode: "opaque",
       activatedAt: validatedAt,
       lastValidatedAt: validatedAt,
-      receivedValidationIntervalSeconds: null,
-      effectiveValidationIntervalSeconds: 3600,
+      validationIntervalSeconds: 3600,
+      offlineGraceSeconds: 2_592_000,
       lastEntitlementState: state,
       licenseExpiresAt: null,
       terms: state.terms,
     });
   }
 
-  it("migrates the old local License shape to a default periodic validation window", () => {
+  it("rejects the old local License shape instead of silently applying compatibility defaults", () => {
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(getLicenseFilePath(), JSON.stringify({
       serverUrl: "https://license.example.com",
@@ -575,16 +593,11 @@ describe("local credential state and periodic verification", () => {
       licenseExpiresAt: null,
       terms: { max_activations: 1, features: [], updates_until: null },
     }));
-    const stored = loadStoredLicense();
-    expect(stored).toMatchObject({
-      receivedValidationIntervalSeconds: null,
-      effectiveValidationIntervalSeconds: 3600,
-      lastEntitlementState: { kind: "license", status: "active" },
-    });
+    expect(() => loadStoredLicense()).toThrow("does not match the LicenKit V1 contract");
   });
 
-  it("requires online validate when a valid Signed Token is outside its periodic window", async () => {
-    const signed = await signedToken({ exp: Math.floor(Date.now() / 1000) + 7200 });
+  it("keeps a valid Signed License usable when online validation is due", async () => {
+    const signed = await signedToken();
     const oldValidation = new Date(Date.now() - 3601 * 1000).toISOString();
     saveStoredLicense({
       serverUrl: "https://license.example.com",
@@ -597,13 +610,12 @@ describe("local credential state and periodic verification", () => {
       machineToken: "mtk_secret_value_123",
       credentialMode: "signed",
       signedLicenseToken: signed.token,
-      signedLicenseTokenExpiresAt: new Date(signed.claims.exp * 1000).toISOString(),
       signingKeyId: "key_v1",
       trustedSigningKeys: { key_v1: signed.publicKey },
       activatedAt: oldValidation,
       lastValidatedAt: oldValidation,
-      receivedValidationIntervalSeconds: null,
-      effectiveValidationIntervalSeconds: 3600,
+      validationIntervalSeconds: 3600,
+      offlineGraceSeconds: 2_592_000,
       lastEntitlementState: {
         kind: "license",
         status: "active",
@@ -623,15 +635,15 @@ describe("local credential state and periodic verification", () => {
     });
     const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
     await verifyCommand(undefined, { fingerprint: "device-fingerprint" });
-    expect(process.exitCode).toBe(2);
-    expect(output.mock.calls.flat().join("\n")).toContain("periodic validation window");
+    expect(process.exitCode).toBeUndefined();
+    expect(output.mock.calls.flat().join("\n")).toContain("local authorization remains usable");
     expect(clearStoredLicense()).toBe(true);
   });
 
-  it("rejects an expired short-TTL token even while the saved online window is fresh", async () => {
+  it("warns after the offline grace period without making the Signed License unusable", async () => {
     const now = Math.floor(Date.now() / 1000);
-    const signed = await signedToken({ iat: now - 120, exp: now - 1 });
-    const validatedAt = new Date((now - 100) * 1000).toISOString();
+    const signed = await signedToken({ iat: now - 120 });
+    const validatedAt = new Date((now - 101) * 1000).toISOString();
     const terms = {
       max_activations: 1,
       features: ["export"],
@@ -648,13 +660,12 @@ describe("local credential state and periodic verification", () => {
       machineToken: "mtk_secret_value_123",
       credentialMode: "signed",
       signedLicenseToken: signed.token,
-      signedLicenseTokenExpiresAt: new Date(signed.claims.exp * 1000).toISOString(),
       signingKeyId: "key_v1",
       trustedSigningKeys: { key_v1: signed.publicKey },
       activatedAt: validatedAt,
       lastValidatedAt: validatedAt,
-      receivedValidationIntervalSeconds: null,
-      effectiveValidationIntervalSeconds: 3600,
+      validationIntervalSeconds: 3600,
+      offlineGraceSeconds: 100,
       lastEntitlementState: {
         kind: "license",
         status: "active",
@@ -664,12 +675,12 @@ describe("local credential state and periodic verification", () => {
       licenseExpiresAt: null,
       terms,
     });
-    const output = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await verifyCommand(undefined, { fingerprint: "device-fingerprint" });
 
-    expect(process.exitCode).toBe(1);
-    expect(output.mock.calls.flat().join("\n")).toContain("TOKEN_EXPIRED");
+    expect(process.exitCode).toBeUndefined();
+    expect(output.mock.calls.flat().join("\n")).toContain("Offline grace exceeded");
   });
 
   it("returns exit 2 and persists Server diagnostics for a confirmed unavailable state", async () => {
@@ -684,7 +695,7 @@ describe("local credential state and periodic verification", () => {
           reason: "payment_review",
           details: { license_id: "lic_1", machine_token: "must-redact" },
         },
-        validation: validation("2026-09-23T11:00:00Z", 1200),
+        validation: validation("2026-09-23T11:00:00Z", 3600),
         meta: { request_id: "req_suspended" },
       },
     }), { status: 200, headers: { "content-type": "application/json" } })));
@@ -695,8 +706,8 @@ describe("local credential state and periodic verification", () => {
     expect(process.exitCode).toBe(2);
     expect(loadStoredLicense()).toMatchObject({
       lastValidatedAt: "2026-09-23T11:00:00Z",
-      receivedValidationIntervalSeconds: 1200,
-      effectiveValidationIntervalSeconds: 3600,
+      validationIntervalSeconds: 3600,
+      offlineGraceSeconds: 2_592_000,
       lastValidationRequestId: "req_suspended",
       lastEntitlementState: {
         status: "suspended",

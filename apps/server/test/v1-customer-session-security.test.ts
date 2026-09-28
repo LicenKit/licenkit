@@ -116,18 +116,18 @@ describe("V1 Customer Session security boundaries", () => {
         `INSERT INTO license_plans (
            id, instance_id, product_id, name, revision, license_model,
            credential_mode, default_term_seconds, update_window_seconds,
-           signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+           offline_grace_seconds, payment_grace_seconds, max_activations,
            features_json, status, created_at, updated_at
          ) VALUES (?, ?, ?, 'Perpetual', 1, 'perpetual', 'opaque', NULL, NULL,
-           0, 0, 2, '[]', 'active', ?, ?)`,
+           2592000, 0, 2, '[]', 'active', ?, ?)`,
       ).run(planId, INSTANCE_A, productId, nowIso, nowIso);
       testEnv.sqliteDb.prepare(
         `INSERT INTO licenses (
            id, instance_id, customer_id, product_id, plan_id, plan_revision,
-           license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
+           license_model, renewal_mode, credential_mode, offline_grace_seconds,
            payment_grace_seconds, max_activations, features_json, key_hash,
            key_version, source, is_checkout_verification, status, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, 1, 'perpetual', 'none', 'opaque', 0,
+         ) VALUES (?, ?, ?, ?, ?, 1, 'perpetual', 'none', 'opaque', 2592000,
            0, 2, '[]', ?, 1, 'manual', 0, 'active', ?, ?)`,
       ).run(
         licenseId,

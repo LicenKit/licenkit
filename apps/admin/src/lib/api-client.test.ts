@@ -20,6 +20,7 @@ describe("Admin API JSON boundary", () => {
     await api.admin.products.create({
       name: "Desktop App",
       billingEnvironment: "sandbox",
+      validationIntervalSeconds: 3600,
       trial: { enabled: true, durationSeconds: 3600, features: ["sync"] },
     });
 
@@ -27,6 +28,7 @@ describe("Admin API JSON boundary", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       name: "Desktop App",
       billing_environment: "sandbox",
+      validation_interval_seconds: 3600,
       trial: { enabled: true, duration_seconds: 3600, features: ["sync"] },
     });
   });

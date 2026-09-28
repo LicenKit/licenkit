@@ -47,13 +47,8 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
     }
     const validatedAt = Date.parse(stored.lastValidatedAt);
     const now = Date.now();
-    const validationWindowEndsAt = validatedAt + stored.effectiveValidationIntervalSeconds * 1000;
-    if (!Number.isFinite(validatedAt) || now < validatedAt || now >= validationWindowEndsAt) {
-      console.log(pc.yellow("Online validation required: the periodic validation window has ended or the local clock moved backwards."));
-      console.log("  Last Server validation: " + stored.lastValidatedAt);
-      console.log("  Effective interval: " + stored.effectiveValidationIntervalSeconds + "s");
-      process.exitCode = 2;
-      return;
+    if (!Number.isFinite(validatedAt) || now < validatedAt) {
+      throw new Error("LOCAL_CLOCK_INVALID: last Server validation is in the future");
     }
     if (options.feature && !claims.fea.includes(options.feature)) {
       throw new Error(`FEATURE_NOT_GRANTED: '${options.feature}' is not present in the signed claims`);
@@ -63,7 +58,16 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
     console.log(`  ${pc.gray("Activation ID:")} ${claims.act}`);
     console.log(`  ${pc.gray("Release:")} ${claims.ver} (${claims.plt}/${claims.arc})`);
     console.log(`  ${pc.gray("Features:")} ${claims.fea.join(", ") || "(none)"}`);
-    console.log("  " + pc.gray("Online validation window ends:") + " " + new Date(validationWindowEndsAt).toISOString());
+    const elapsedSeconds = Math.floor((now - validatedAt) / 1000);
+    if (stored.offlineGraceSeconds !== null && elapsedSeconds >= stored.offlineGraceSeconds) {
+      console.log(pc.bold(pc.yellow("⚠ Offline grace exceeded; online validation is strongly recommended.")));
+    } else if (elapsedSeconds >= stored.validationIntervalSeconds) {
+      console.log(pc.yellow("Online validation is due; local authorization remains usable."));
+    }
+    console.log(
+      "  " + pc.gray("Next online validation attempt due:") + " "
+      + new Date(validatedAt + stored.validationIntervalSeconds * 1000).toISOString()
+    );
   } catch (error) {
     for (const line of describeClientError(error)) console.error(pc.red(line));
     process.exitCode = 1;

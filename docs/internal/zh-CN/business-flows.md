@@ -228,13 +228,13 @@ Cron 每分钟触发恢复流程：
 客户端公共配置只使用 Server URL、全局唯一 Product ID，以及 `signed` 模式需要的内置签名公钥。Swift SDK 从宿主 App Bundle 自动读取当前构建的 Release 版本与平台；Server 从 Product ID 解析 Instance：
 
 1. 首次启动或没有本地凭据时，以 `credential.kind=none` 调用统一校验接口；服务端先确认 Release，再返回需要激活以及 Trial 可用性；
-2. 用户提交 Registration Key 后，服务端在 Instance 内查找 License，检查业务状态、包含支付宽限期的最终有效期和席位，并原子创建或复用 Activation；
-3. 激活始终返回 Machine Token；Signed 模式同时返回包含 `ins` Claim 的 Signed License Token。实际 `exp` 取“签发时间 + License 快照 TTL”与最终有效授权截止时间（如有）中的较早值，其中 billing 截止时间已包含支付宽限；原始 TTL 不进入 Token，明文 `signed_license_token_expires_at` 必须与 `exp` 对齐；
-4. Product/设备 Trial 只通过 `trials/claim` 首次领取，之后与 License 一样使用统一 `/client/validate`，但提交 `credential.kind=trial`；
+2. 用户提交 Registration Key 前，客户端先把自己生成的 Machine Token 持久化为 Activation 验证中凭据；服务端在 Instance 内查找 License，检查业务状态、包含支付宽限期的最终有效期和席位，并原子创建 Activation，或在相同 Token 重试时重复下发同一份 Activation 凭据；
+3. 激活回传同一个 Machine Token；Signed 模式同时返回包含 `ins` Claim 且不含 `exp` 的 Signed License Token。业务到期写入 `lexp`，Product 在线复核间隔与 License 离线宽限期通过响应元数据下发；
+4. Product/设备 Trial 在请求前把客户端生成的 Trial Token 持久化为 Trial 验证中凭据，并通过 `trials/claim` 创建 Trial，或在相同 Token 重试时重复下发同一份 Trial 凭据；之后与 License 一样使用统一 `/client/validate`，但提交 `credential.kind=trial`；
 5. 统一校验把 License、Trial、无凭据三条路径投影为同一个授权状态树。到期、暂停、吊销、Activation 失效、Release 不合格和需要激活都是已确认的业务状态，不是传输失败；
-6. Swift SDK 把 `validated_at` 与服务端建议间隔保存为业务快照。收到 `null` 时使用 3600 秒默认值，并把非空值限制在 3600 至 86400 秒之间；
+6. Swift SDK 把 `validated_at`、Product 在线复核间隔与 License 离线宽限期保存为业务快照；超过离线宽限期只进入强提示，不停止授权；
 7. `/validate` 另存 `lastValidateResponseAt`：合法成功业务响应或明确 HTTP 失败会推进它；DNS、TLS、超时、断网等无 HTTP 响应失败，以及 2xx 非法正文不会推进。HTTP 失败也不得推进 `validated_at`；
-8. 冷却只约束 `validate()`。Opaque、Trial、无凭据和 Signed Token 有效的请求必须同时越过建议间隔与硬编码 30 秒门槛；Signed Token 无效或过期只绕过建议间隔，仍受 30 秒门槛；
+8. 冷却只约束 `validate()`。Opaque、Trial、无凭据和 Signed Token 有效的请求必须同时越过建议间隔与硬编码 30 秒门槛；Signed Token 本地验证失败时只绕过建议间隔，仍受 30 秒门槛；
 9. `activate()`、`startTrial()` 和 `deactivate()` 不受冷却限制，也不写 `lastValidateResponseAt`。显式操作返回的 `validated_at` 仍是业务事实，但不能代替最近 `/validate` 响应时间；
 10. 仅在服务端确认解绑后清除 License 凭据。无凭据解绑只产生 `source=local` 的“需要激活”快照，不伪造一次在线验证；
 11. 同一 Swift SDK 实例内的并发 `validate()` 共享一个请求任务；激活、领取 Trial、解绑和快照写入与校验使用同一顺序化边界，避免旧响应覆盖新状态。

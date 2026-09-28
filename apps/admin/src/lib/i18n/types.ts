@@ -283,6 +283,8 @@ export interface ProductsDictionary {
   signingKeyMissing: string;
   billingEnvLabel: string;
   billingEnvNone: string;
+  validationIntervalLabel: string;
+  validationIntervalHours: (hours: number) => string;
   trialLabel: string;
   trialDays: (days: number) => string;
   trialEnabled: string;
@@ -315,6 +317,8 @@ export interface ProductsDictionary {
   fieldDesc: string;
   fieldDescPlaceholder: string;
   fieldBillingEnv: string;
+  fieldValidationInterval: string;
+  fieldValidationIntervalHint: string;
   billingEnvOptionNone: string;
   billingEnvOptionSandbox: string;
   billingEnvOptionLive: string;
@@ -363,7 +367,7 @@ export interface LicensePlansDictionary {
   graceSecondsLabel: string;
   updateWindowLabel: string;
   updateWindowForever: string;
-  tokenTtlLabel: string;
+  offlineGraceLabel: string;
   noFeatures: string;
   revisionNoticeTitle: string;
   revisionNoticeDesc: string;
@@ -395,8 +399,8 @@ export interface LicensePlansDictionary {
   fieldDefaultTermHint: string;
   fieldPaymentGrace: string;
   fieldPaymentGraceHint: string;
-  fieldTokenTtl: string;
-  fieldTokenTtlHint: string;
+  fieldOfflineGrace: string;
+  fieldOfflineGraceHint: string;
   btnCreatePlan: string;
   modalEditTitle: (rev: number) => string;
   modalEditDesc: string;

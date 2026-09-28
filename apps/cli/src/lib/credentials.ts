@@ -54,9 +54,6 @@ function verifyClaimsMatchResponse(
   credential: CredentialUpdate,
   state: ActiveLicenseState
 ): void {
-  if (timestampSeconds(credential.signed_license_token_expires_at) !== claims.exp) {
-    throw new SignedTokenError("TOKEN_EXPIRY_MISMATCH", "Token exp does not match signed_license_token_expires_at");
-  }
   if (claims.lexp !== timestampSeconds(state.expires_at)) {
     throw new SignedTokenError("TOKEN_LICENSE_EXPIRY_MISMATCH", "Token lexp does not match the active License state");
   }
@@ -112,12 +109,12 @@ export async function verifyValidationCredentialUpdate(
   state: ActiveLicenseState
 ): Promise<SignedLicenseClaims | undefined> {
   if (credential.credential_mode === "opaque") {
-    if (credential.signed_license_token || credential.signed_license_token_expires_at || credential.signing_key_id) {
+    if (credential.signed_license_token || credential.signing_key_id) {
       throw new ClientContractError("Opaque credential update unexpectedly contains Signed License Token fields");
     }
     return undefined;
   }
-  if (!credential.signed_license_token || !credential.signing_key_id || !credential.signed_license_token_expires_at) {
+  if (!credential.signed_license_token || !credential.signing_key_id) {
     throw new ClientContractError("Signed credential update is incomplete");
   }
   const header = decodeSignedLicenseHeader(credential.signed_license_token);

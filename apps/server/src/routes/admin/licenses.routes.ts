@@ -36,7 +36,7 @@ function formatLicense(row: any) {
     license_model: license.licenseModel,
     renewal_mode: license.renewalMode,
     credential_mode: license.credentialMode,
-    signed_token_ttl_seconds: license.signedTokenTtlSeconds,
+    offline_grace_seconds: license.offlineGraceSeconds,
     payment_grace_seconds: license.paymentGraceSeconds,
     max_activations: license.maxActivations,
     features: parseFeatures(license.featuresJson),

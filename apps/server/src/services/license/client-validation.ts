@@ -26,6 +26,40 @@ interface TrialProductRow {
   trial_enabled: number;
   trial_duration_seconds: number | null;
   trial_features_json: string;
+  validation_interval_seconds: number;
+}
+
+async function loadProductValidationPolicy(input: {
+  db: D1Database;
+  instanceId: string;
+  productId: string;
+}) {
+  const product = await firstD1<{ validation_interval_seconds: number }>(input.db.prepare(
+    `SELECT validation_interval_seconds FROM products
+     WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+  ).bind(input.instanceId, input.productId));
+  if (!product) throw new NotFoundError("Product not found");
+  return product;
+}
+
+async function loadLicenseValidationPolicy(input: {
+  db: D1Database;
+  instanceId: string;
+  productId: string;
+  activationId: string;
+}) {
+  const policy = await firstD1<{
+    validation_interval_seconds: number;
+    offline_grace_seconds: number;
+  }>(input.db.prepare(
+    `SELECT p.validation_interval_seconds, l.offline_grace_seconds
+     FROM activations a
+     JOIN licenses l ON l.instance_id = a.instance_id AND l.id = a.license_id
+     JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
+     WHERE a.instance_id = ?1 AND l.product_id = ?2 AND a.id = ?3 LIMIT 1`
+  ).bind(input.instanceId, input.productId, input.activationId));
+  if (!policy) throw new NotFoundError("Activation not found");
+  return policy;
 }
 
 function releaseNotEligibleState(
@@ -224,7 +258,6 @@ async function validateLicenseCredential(input: {
       credential_update: {
         credential_mode: data.credential_mode,
         signed_license_token: data.signed_license_token,
-        signed_license_token_expires_at: data.signed_license_token_expires_at,
         signing_key_id: data.signing_key_id,
       },
       validation: data.validation,
@@ -237,9 +270,19 @@ async function validateLicenseCredential(input: {
         arch: input.releaseArch,
       });
     if (!state) throw error;
+    const policy = await loadLicenseValidationPolicy({
+      db: input.db,
+      instanceId: input.instanceId,
+      productId: input.productId,
+      activationId: input.credential.activationId,
+    });
     return {
       state,
-      validation: createServerValidationMetadata(input.now),
+      validation: createServerValidationMetadata({
+        validatedAt: input.now,
+        validationIntervalSeconds: policy.validation_interval_seconds,
+        offlineGraceSeconds: policy.offline_grace_seconds,
+      }),
     };
   }
 }
@@ -269,9 +312,14 @@ async function validateTrialCredential(input: {
   } catch (error) {
     const state = trialTerminalState(error);
     if (!state) throw error;
+    const policy = await loadProductValidationPolicy(input);
     return {
       state,
-      validation: createServerValidationMetadata(input.now),
+      validation: createServerValidationMetadata({
+        validatedAt: input.now,
+        validationIntervalSeconds: policy.validation_interval_seconds,
+        offlineGraceSeconds: null,
+      }),
     };
   }
 }
@@ -287,12 +335,17 @@ async function validateWithoutCredential(input: {
   now: Date;
 }) {
   const product = await firstD1<TrialProductRow>(input.db.prepare(
-    `SELECT status, trial_enabled, trial_duration_seconds, trial_features_json
+    `SELECT status, trial_enabled, trial_duration_seconds, trial_features_json,
+            validation_interval_seconds
      FROM products WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
   ).bind(input.instanceId, input.productId));
   if (!product) throw new NotFoundError("Product not found");
 
-  const validation = createServerValidationMetadata(input.now);
+  const validation = createServerValidationMetadata({
+    validatedAt: input.now,
+    validationIntervalSeconds: product.validation_interval_seconds,
+    offlineGraceSeconds: null,
+  });
   if (product.status !== "active") {
     throw new AppError("PRODUCT_UNAVAILABLE", "The Product is archived.", 409);
   }

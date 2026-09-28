@@ -10,7 +10,6 @@ export interface SignedLicenseClaims {
   arc: string;
   fp: string;
   iat: number;
-  exp: number;
   lexp: number | null;
   upd: number | null;
   fea: string[];
@@ -39,16 +38,4 @@ export function signedClaimInstant(value: Date | string): Date {
     throw new TypeError("Signed License Token claim time must be a valid instant.");
   }
   return new Date(Math.floor(timestamp / 1000) * 1000);
-}
-
-export function signedTokenExpiration(input: {
-  issuedAt: Date;
-  ttlSeconds: number;
-  licenseExpiresAt: string | null;
-}): Date {
-  const ttlExpiry = input.issuedAt.getTime() + input.ttlSeconds * 1000;
-  const expiry = input.licenseExpiresAt
-    ? Math.min(ttlExpiry, new Date(input.licenseExpiresAt).getTime())
-    : ttlExpiry;
-  return signedClaimInstant(new Date(expiry));
 }

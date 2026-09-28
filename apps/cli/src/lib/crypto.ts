@@ -14,7 +14,6 @@ export interface SignedLicenseClaims {
   arc: string;
   fp: string;
   iat: number;
-  exp: number;
   lexp: number | null;
   upd: number | null;
   fea: string[];
@@ -170,6 +169,11 @@ export async function verifySignedLicenseToken(
   if (!verified) throw new SignedTokenError("TOKEN_SIGNATURE_INVALID", "Ed25519 signature verification failed");
 
   const claims = parseStrictObject<Record<string, unknown>>(parts[1]);
+  const allowedClaims = new Set(["lic", "act", "ins", "prd", "ver", "plt", "arc", "fp", "iat", "lexp", "upd", "fea"]);
+  const unknownClaim = Object.keys(claims).find((key) => !allowedClaims.has(key));
+  if (unknownClaim) {
+    throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Unsupported Claim '${unknownClaim}'`);
+  }
   if (Object.prototype.hasOwnProperty.call(claims, "acc")) {
     throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Legacy Claim 'acc' is not supported");
   }
@@ -179,7 +183,7 @@ export async function verifySignedLicenseToken(
       throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be a non-empty string`);
     }
   }
-  for (const field of ["iat", "exp"] as const) {
+  for (const field of ["iat"] as const) {
     if (!Number.isSafeInteger(claims[field])) {
       throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Claim '${field}' must be an integer timestamp`);
     }
@@ -193,10 +197,6 @@ export async function verifySignedLicenseToken(
     throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Claim 'fea' must be an array of strings");
   }
   const typed = claims as unknown as SignedLicenseClaims;
-  if (typed.exp <= typed.iat) throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Token exp must be later than iat");
-  if (typed.lexp !== null && typed.exp > typed.lexp) {
-    throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Token exp cannot be later than License expiration");
-  }
   return { header, claims: typed };
 }
 
@@ -226,7 +226,6 @@ export function evaluateSignedLicenseClaims(claims: SignedLicenseClaims, context
     [claims.plt === context.releasePlatform, "TOKEN_RELEASE_PLATFORM_MISMATCH", "Token release platform does not match this build"],
     [claims.arc === context.releaseArch, "TOKEN_RELEASE_ARCH_MISMATCH", "Token release architecture does not match this build"],
     [claims.iat <= now + 300, "TOKEN_ISSUED_IN_FUTURE", "Token issue time is in the future"],
-    [claims.exp > now, "TOKEN_EXPIRED", "Signed License Token has expired"],
     [claims.lexp === null || claims.lexp > now, "LICENSE_EXPIRED", "License has expired"],
   ];
   const failure = comparisons.find(([matches]) => !matches);

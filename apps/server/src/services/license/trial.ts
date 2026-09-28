@@ -2,7 +2,6 @@ import { ulid } from "ulid";
 import { AppError, NotFoundError } from "../../middleware/error";
 import { sha256Hex, timingSafeEqual } from "../../infra/crypto";
 import {
-  generateTrialToken,
   hashDeviceFingerprint,
   hashTrialToken,
 } from "../../domain/license/credentials";
@@ -15,6 +14,7 @@ interface TrialProductRow {
   trial_enabled: number;
   trial_duration_seconds: number | null;
   trial_features_json: string;
+  validation_interval_seconds: number;
 }
 
 interface TrialClaimRow {
@@ -29,16 +29,125 @@ interface TrialClaimRow {
   revoke_reason: string | null;
 }
 
+function trialResponse(input: {
+  claim: TrialClaimRow;
+  trialToken: string;
+  validatedAt: Date;
+  validationIntervalSeconds: number;
+}) {
+  const features = parseFeatures(input.claim.features_json);
+  const validation = createServerValidationMetadata({
+    validatedAt: input.validatedAt,
+    validationIntervalSeconds: input.validationIntervalSeconds,
+    offlineGraceSeconds: null,
+  });
+  if (input.claim.revoked_at) {
+    return {
+      trial_id: input.claim.id,
+      trial_token: input.trialToken,
+      status: "revoked" as const,
+      expires_at: input.claim.expires_at,
+      features,
+      state: {
+        kind: "trial" as const,
+        status: "revoked" as const,
+        code: "TRIAL_REVOKED" as const,
+        reason: input.claim.revoke_reason,
+        expires_at: input.claim.expires_at,
+        features,
+      },
+      validation,
+    };
+  }
+  if (input.validatedAt.getTime() >= Date.parse(input.claim.expires_at)) {
+    return {
+      trial_id: input.claim.id,
+      trial_token: input.trialToken,
+      status: "expired" as const,
+      expires_at: input.claim.expires_at,
+      features,
+      state: {
+        kind: "trial" as const,
+        status: "expired" as const,
+        code: "TRIAL_EXPIRED" as const,
+        expires_at: input.claim.expires_at,
+        features,
+      },
+      validation,
+    };
+  }
+  return {
+    trial_id: input.claim.id,
+    trial_token: input.trialToken,
+    status: "active" as const,
+    expires_at: input.claim.expires_at,
+    features,
+    state: {
+      kind: "trial" as const,
+      status: "active" as const,
+      expires_at: input.claim.expires_at,
+      features,
+    },
+    validation,
+  };
+}
+
+async function reissueTrialClaim(input: {
+  db: D1Database;
+  instanceId: string;
+  productId: string;
+  fingerprintHash: string;
+  tokenHash: string;
+  trialToken: string;
+  validationIntervalSeconds: number;
+  now: Date;
+}) {
+  const claim = await firstD1<TrialClaimRow>(input.db.prepare(
+    `SELECT id, fingerprint_hash, trial_token_hash, features_json, claimed_at,
+            expires_at, last_validated_at, revoked_at, revoke_reason
+     FROM trial_claims
+     WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
+  ).bind(input.instanceId, input.productId, input.fingerprintHash));
+  if (!claim || !timingSafeEqual(input.tokenHash, claim.trial_token_hash)) {
+    throw new AppError(
+      "TRIAL_CREDENTIALS_INVALID",
+      "The existing Trial Claim cannot be reissued with these credentials.",
+      401,
+    );
+  }
+  if (!claim.revoked_at && input.now.getTime() < Date.parse(claim.expires_at)) {
+    await input.db.prepare(
+      `UPDATE trial_claims SET last_validated_at = ?1, updated_at = ?1
+       WHERE instance_id = ?2 AND product_id = ?3 AND id = ?4
+         AND trial_token_hash = ?5 AND revoked_at IS NULL AND expires_at > ?1`
+    ).bind(
+      input.now.toISOString(),
+      input.instanceId,
+      input.productId,
+      claim.id,
+      input.tokenHash,
+    ).run();
+  }
+  return trialResponse({
+    claim,
+    trialToken: input.trialToken,
+    validatedAt: input.now,
+    validationIntervalSeconds: input.validationIntervalSeconds,
+  });
+}
+
 export async function claimTrial(input: {
   db: D1Database;
   instanceId: string;
   productId: string;
   fingerprint: string;
+  trialToken: string;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
   const product = await firstD1<TrialProductRow>(input.db.prepare(
-    `SELECT status, trial_enabled, trial_duration_seconds, trial_features_json
+    `SELECT status, trial_enabled, trial_duration_seconds, trial_features_json,
+            validation_interval_seconds
      FROM products WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
   ).bind(input.instanceId, input.productId));
   if (!product) throw new NotFoundError("Product not found");
@@ -48,18 +157,23 @@ export async function claimTrial(input: {
     throw new AppError("TRIAL_CONFIGURATION_INVALID", "The Product trial duration is invalid.", 500);
   }
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
-  const existing = await firstD1<{ id: string }>(input.db.prepare(
-    `SELECT id FROM trial_claims
+  const tokenHash = await hashTrialToken(input.trialToken);
+  const existing = await firstD1<{ found: number }>(input.db.prepare(
+    `SELECT 1 AS found FROM trial_claims
      WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
   ).bind(input.instanceId, input.productId, fingerprintHash));
-  if (existing) {
-    throw new AppError("TRIAL_ALREADY_CLAIMED", "This device has already claimed the Product trial.", 409);
-  }
+  if (existing) return reissueTrialClaim({
+    db: input.db,
+    instanceId: input.instanceId,
+    productId: input.productId,
+    fingerprintHash,
+    tokenHash,
+    trialToken: input.trialToken,
+    validationIntervalSeconds: product.validation_interval_seconds,
+    now,
+  });
 
-  const features = parseFeatures(product.trial_features_json);
   const trialId = `trl_${ulid().toLowerCase()}`;
-  const trialToken = generateTrialToken();
-  const tokenHash = await hashTrialToken(trialToken);
   const expiresAt = new Date(now.getTime() + product.trial_duration_seconds * 1000).toISOString();
   try {
     await input.db.prepare(
@@ -79,36 +193,51 @@ export async function claimTrial(input: {
       expiresAt,
     ).run();
   } catch (error) {
-    const raw = String(error);
-    if (raw.includes("trial_claims.instance_id, trial_claims.product_id, trial_claims.fingerprint_hash")) {
-      const concurrent = await firstD1<{ id: string }>(input.db.prepare(
-        `SELECT id FROM trial_claims
-         WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
-      ).bind(input.instanceId, input.productId, fingerprintHash));
+    const persistedForDevice = await firstD1<{ found: number }>(input.db.prepare(
+      `SELECT 1 AS found FROM trial_claims
+       WHERE instance_id = ?1 AND product_id = ?2 AND fingerprint_hash = ?3 LIMIT 1`
+    ).bind(input.instanceId, input.productId, fingerprintHash));
+    if (persistedForDevice) {
+      return reissueTrialClaim({
+        db: input.db,
+        instanceId: input.instanceId,
+        productId: input.productId,
+        fingerprintHash,
+        tokenHash,
+        trialToken: input.trialToken,
+        validationIntervalSeconds: product.validation_interval_seconds,
+        now,
+      });
+    }
+    const persistedForToken = await firstD1<{ found: number }>(input.db.prepare(
+      `SELECT 1 AS found FROM trial_claims
+       WHERE instance_id = ?1 AND trial_token_hash = ?2 LIMIT 1`
+    ).bind(input.instanceId, tokenHash));
+    if (persistedForToken) {
       throw new AppError(
-        "TRIAL_ALREADY_CLAIMED",
-        "This device has already claimed the Product trial.",
-        409,
-        undefined,
-        { database_error: raw, concurrent_claim_found: Boolean(concurrent) },
+        "TRIAL_CREDENTIALS_INVALID",
+        "The Trial Token is already bound to a different Trial Claim.",
+        401,
       );
     }
     throw error;
   }
-  return {
-    trial_id: trialId,
-    trial_token: trialToken,
-    status: "active" as const,
-    expires_at: expiresAt,
-    features,
-    state: {
-      kind: "trial" as const,
-      status: "active" as const,
+  return trialResponse({
+    claim: {
+      id: trialId,
+      fingerprint_hash: fingerprintHash,
+      trial_token_hash: tokenHash,
+      features_json: product.trial_features_json,
+      claimed_at: now.toISOString(),
       expires_at: expiresAt,
-      features,
+      last_validated_at: now.toISOString(),
+      revoked_at: null,
+      revoke_reason: null,
     },
-    validation: createServerValidationMetadata(now),
-  };
+    trialToken: input.trialToken,
+    validatedAt: now,
+    validationIntervalSeconds: product.validation_interval_seconds,
+  });
 }
 
 export async function validateTrial(input: {
@@ -121,11 +250,13 @@ export async function validateTrial(input: {
   now?: Date;
 }) {
   const now = input.now ?? new Date();
-  const claim = await firstD1<TrialClaimRow>(input.db.prepare(
-    `SELECT id, fingerprint_hash, trial_token_hash, features_json, claimed_at,
-            expires_at, last_validated_at, revoked_at, revoke_reason
-     FROM trial_claims
-     WHERE instance_id = ?1 AND product_id = ?2 AND id = ?3 LIMIT 1`
+  const claim = await firstD1<TrialClaimRow & { validation_interval_seconds: number }>(input.db.prepare(
+    `SELECT tc.id, tc.fingerprint_hash, tc.trial_token_hash, tc.features_json, tc.claimed_at,
+            tc.expires_at, tc.last_validated_at, tc.revoked_at, tc.revoke_reason,
+            p.validation_interval_seconds
+     FROM trial_claims tc
+     JOIN products p ON p.instance_id = tc.instance_id AND p.id = tc.product_id
+     WHERE tc.instance_id = ?1 AND tc.product_id = ?2 AND tc.id = ?3 LIMIT 1`
   ).bind(input.instanceId, input.productId, input.trialId));
   if (!claim) throw new NotFoundError("Trial Claim not found");
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
@@ -190,6 +321,10 @@ export async function validateTrial(input: {
       expires_at: claim.expires_at,
       features,
     },
-    validation: createServerValidationMetadata(now),
+    validation: createServerValidationMetadata({
+      validatedAt: now,
+      validationIntervalSeconds: claim.validation_interval_seconds,
+      offlineGraceSeconds: null,
+    }),
   };
 }

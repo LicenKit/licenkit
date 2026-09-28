@@ -17,6 +17,7 @@ const ReleaseFields = {
 const ActivateSchema = z.object({
   product_id: z.string().min(1),
   license_key: z.string().min(16).max(200),
+  machine_token: z.string().min(32).max(512),
   fingerprint: z.string().trim().min(8).max(512),
   device_platform: z.string().trim().min(1).max(100).optional(),
   name: z.string().trim().min(1).max(200).optional(),
@@ -32,6 +33,7 @@ clientRouter.post("/activate", async (c) => {
     instanceId,
     productId: input.product_id,
     licenseKey: input.license_key,
+    machineToken: input.machine_token,
     fingerprint: input.fingerprint,
     devicePlatform: input.device_platform,
     name: input.name,
@@ -107,6 +109,7 @@ clientRouter.post("/validate", async (c) => {
 const TrialClaimSchema = z.object({
   product_id: z.string().min(1),
   fingerprint: z.string().trim().min(8).max(512),
+  trial_token: z.string().min(32).max(512),
   device_platform: z.string().trim().min(1).max(100).optional(),
   ...ReleaseFields,
 }).strict();
@@ -119,6 +122,7 @@ clientRouter.post("/trials/claim", async (c) => {
     instanceId,
     productId: input.product_id,
     fingerprint: input.fingerprint,
+    trialToken: input.trial_token,
   });
   c.header("Cache-Control", "no-store");
   return c.json({

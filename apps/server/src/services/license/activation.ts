@@ -2,11 +2,10 @@ import { ulid } from "ulid";
 import { AppError, NotFoundError } from "../../middleware/error";
 import { decryptEnvelopeV1 } from "../../infra/delivery/crypto";
 import { hashLicenseKey, sha256Hex, timingSafeEqual } from "../../infra/crypto";
-import { generateOpaqueMachineToken, hashDeviceFingerprint } from "../../domain/license/credentials";
+import { hashDeviceFingerprint } from "../../domain/license/credentials";
 import {
   createSignedLicenseToken,
   signedClaimInstant,
-  signedTokenExpiration,
 } from "../../domain/license/signed-token";
 import { effectiveLicenseExpiresAt, parseFeatures } from "../../domain/license/terms";
 import { createServerValidationMetadata } from "../../domain/license/validation-policy";
@@ -32,7 +31,8 @@ interface LicenseRow {
   license_model: "perpetual" | "fixed_term" | "subscription";
   renewal_mode: "none" | "manual" | "billing";
   credential_mode: "opaque" | "signed";
-  signed_token_ttl_seconds: number;
+  offline_grace_seconds: number;
+  validation_interval_seconds: number;
   payment_grace_seconds: number;
   max_activations: number;
   features_json: string;
@@ -178,7 +178,6 @@ async function createCredentialResponse(input: {
     machine_token: input.machineToken,
     credential_mode: input.license.credential_mode,
     signed_license_token: null as string | null,
-    signed_license_token_expires_at: null as string | null,
     signing_key_id: null as string | null,
     license_expires_at: effectiveExpiresAt,
     terms: {
@@ -207,11 +206,6 @@ async function createCredentialResponse(input: {
     rowId: signingKey.id,
     field: "private_key_ciphertext",
   });
-  const tokenExpiry = signedTokenExpiration({
-    issuedAt: input.now,
-    ttlSeconds: input.license.signed_token_ttl_seconds,
-    licenseExpiresAt: effectiveExpiresAt,
-  });
   base.signed_license_token = await createSignedLicenseToken({
     keyId: signingKey.id,
     privateKeyPkcs8: privateKey,
@@ -225,13 +219,11 @@ async function createCredentialResponse(input: {
       arc: input.build.arch,
       fp: input.fingerprint,
       iat: Math.floor(input.now.getTime() / 1000),
-      exp: Math.floor(tokenExpiry.getTime() / 1000),
       lexp: effectiveExpiresAt ? Math.floor(Date.parse(effectiveExpiresAt) / 1000) : null,
       upd: updatesUntil ? Math.floor(Date.parse(updatesUntil) / 1000) : null,
       fea: features,
     },
   });
-  base.signed_license_token_expires_at = tokenExpiry.toISOString();
   base.signing_key_id = signingKey.id;
   return base;
 }
@@ -242,6 +234,7 @@ export async function activateLicense(input: {
   instanceId: string;
   productId: string;
   licenseKey: string;
+  machineToken: string;
   fingerprint: string;
   devicePlatform?: string | null;
   name?: string | null;
@@ -254,12 +247,14 @@ export async function activateLicense(input: {
   const now = input.now ?? new Date();
   const keyHash = await hashLicenseKey(input.licenseKey);
   const license = await firstD1<LicenseRow>(input.db.prepare(
-    `SELECT id, instance_id, product_id, license_model, renewal_mode,
-            credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
-            max_activations, features_json, is_checkout_verification, status,
-            status_reason, expires_at, updates_until, updated_at
-     FROM licenses
-     WHERE instance_id = ?1 AND product_id = ?2 AND key_hash = ?3
+    `SELECT l.id, l.instance_id, l.product_id, l.license_model, l.renewal_mode,
+            l.credential_mode, l.offline_grace_seconds,
+            p.validation_interval_seconds, l.payment_grace_seconds,
+            l.max_activations, l.features_json, l.is_checkout_verification, l.status,
+            l.status_reason, l.expires_at, l.updates_until, l.updated_at
+     FROM licenses l
+     JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
+     WHERE l.instance_id = ?1 AND l.product_id = ?2 AND l.key_hash = ?3
      LIMIT 1`
   ).bind(input.instanceId, input.productId, keyHash));
   if (!license) throw new AppError("LICENSE_KEY_INVALID", "The License Key is invalid.", 404);
@@ -278,7 +273,7 @@ export async function activateLicense(input: {
   });
 
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
-  const machineToken = generateOpaqueMachineToken();
+  const machineToken = input.machineToken;
   const machineTokenHash = await sha256Hex(machineToken);
   let activation = await firstD1<ActivationRow>(input.db.prepare(
     `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
@@ -289,6 +284,13 @@ export async function activateLicense(input: {
 
   let credentialResponse: Awaited<ReturnType<typeof createCredentialResponse>>;
   if (activation) {
+    if (!timingSafeEqual(machineTokenHash, activation.machine_token_hash)) {
+      throw new AppError(
+        "ACTIVATION_CREDENTIALS_INVALID",
+        "The existing Activation cannot be reissued with these credentials.",
+        401,
+      );
+    }
     credentialResponse = await createCredentialResponse({
       db: input.db,
       env: input.env,
@@ -301,38 +303,42 @@ export async function activateLicense(input: {
     });
     const refreshed = await input.db.prepare(
       `UPDATE activations
-       SET machine_token_hash = ?1, name = COALESCE(?2, name),
-           platform = COALESCE(?3, platform), last_validated_at = ?4, updated_at = ?4
-       WHERE instance_id = ?5 AND license_id = ?6 AND id = ?7 AND status = 'active'
+       SET name = COALESCE(?1, name),
+           platform = COALESCE(?2, platform), last_validated_at = ?3, updated_at = ?3
+       WHERE instance_id = ?4 AND license_id = ?5 AND id = ?6 AND status = 'active'
+         AND machine_token_hash = ?7
          AND EXISTS (
            SELECT 1 FROM licenses l
-           WHERE l.instance_id = ?5 AND l.id = ?6 AND l.product_id = ?8
+           WHERE l.instance_id = ?4 AND l.id = ?5 AND l.product_id = ?8
              AND l.updated_at = ?9
              AND l.is_checkout_verification = 0 AND l.status = 'active'
              AND (
                l.expires_at IS NULL
                OR datetime(l.expires_at, '+' || CASE WHEN l.renewal_mode = 'billing'
-                    THEN l.payment_grace_seconds ELSE 0 END || ' seconds') > datetime(?4)
+                    THEN l.payment_grace_seconds ELSE 0 END || ' seconds') > datetime(?3)
              )
          )`
     ).bind(
-      machineTokenHash,
       input.name ?? null,
       input.devicePlatform ?? null,
       now.toISOString(),
       input.instanceId,
       license.id,
       activation.id,
+      machineTokenHash,
       input.productId,
       license.updated_at,
     ).run();
     if ((refreshed.meta?.changes ?? 0) !== 1) {
       const current = await firstD1<LicenseRow>(input.db.prepare(
-        `SELECT id, instance_id, product_id, license_model, renewal_mode,
-                credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
-                max_activations, features_json, is_checkout_verification, status,
-                status_reason, expires_at, updates_until, updated_at
-         FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+        `SELECT l.id, l.instance_id, l.product_id, l.license_model, l.renewal_mode,
+                l.credential_mode, l.offline_grace_seconds,
+                p.validation_interval_seconds, l.payment_grace_seconds,
+                l.max_activations, l.features_json, l.is_checkout_verification, l.status,
+                l.status_reason, l.expires_at, l.updates_until, l.updated_at
+         FROM licenses l
+         JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
+         WHERE l.instance_id = ?1 AND l.id = ?2 LIMIT 1`
       ).bind(input.instanceId, license.id));
       if (!current) throw new NotFoundError("License not found");
       assertLicenseUsable(current, now);
@@ -382,11 +388,14 @@ export async function activateLicense(input: {
       ).run();
       if ((inserted.meta?.changes ?? 0) !== 1) {
         const current = await firstD1<LicenseRow>(input.db.prepare(
-          `SELECT id, instance_id, product_id, license_model, renewal_mode,
-                  credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
-                  max_activations, features_json, is_checkout_verification, status,
-                  status_reason, expires_at, updates_until, updated_at
-           FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+          `SELECT l.id, l.instance_id, l.product_id, l.license_model, l.renewal_mode,
+                  l.credential_mode, l.offline_grace_seconds,
+                  p.validation_interval_seconds, l.payment_grace_seconds,
+                  l.max_activations, l.features_json, l.is_checkout_verification, l.status,
+                  l.status_reason, l.expires_at, l.updates_until, l.updated_at
+           FROM licenses l
+           JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
+           WHERE l.instance_id = ?1 AND l.id = ?2 LIMIT 1`
         ).bind(input.instanceId, license.id));
         if (!current) throw new NotFoundError("License not found");
         assertLicenseUsable(current, now);
@@ -401,7 +410,74 @@ export async function activateLicense(input: {
       };
     } catch (error) {
       const raw = String(error);
-      if (raw.includes("LICENSE_ACTIVATION_LIMIT_REACHED")) {
+      const reachedActivationLimit = raw.includes("LICENSE_ACTIVATION_LIMIT_REACHED");
+      activation = await firstD1<ActivationRow>(input.db.prepare(
+        `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
+         FROM activations
+         WHERE instance_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
+         LIMIT 1`
+      ).bind(input.instanceId, license.id, fingerprintHash));
+      if (activation) {
+        if (!timingSafeEqual(machineTokenHash, activation.machine_token_hash)) {
+          throw new AppError(
+            "ACTIVATION_CREDENTIALS_INVALID",
+            "The existing Activation cannot be reissued with these credentials.",
+            401,
+            undefined,
+            { database_error: raw },
+          );
+        }
+        credentialResponse = await createCredentialResponse({
+          db: input.db,
+          env: input.env,
+          license,
+          activationId: activation.id,
+          machineToken,
+          fingerprint: input.fingerprint,
+          build,
+          now,
+        });
+        const refreshed = await input.db.prepare(
+          `UPDATE activations SET last_validated_at = ?1, updated_at = ?1
+           WHERE instance_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'
+             AND machine_token_hash = ?5
+             AND EXISTS (
+               SELECT 1 FROM licenses l
+               WHERE l.instance_id = ?2 AND l.id = ?3 AND l.product_id = ?6
+                 AND l.updated_at = ?7
+                 AND l.is_checkout_verification = 0 AND l.status = 'active'
+                 AND (
+                   l.expires_at IS NULL
+                   OR datetime(l.expires_at, '+' || CASE WHEN l.renewal_mode = 'billing'
+                        THEN l.payment_grace_seconds ELSE 0 END || ' seconds') > datetime(?1)
+                 )
+             )`
+        ).bind(
+          now.toISOString(),
+          input.instanceId,
+          license.id,
+          activation.id,
+          machineTokenHash,
+          input.productId,
+          license.updated_at,
+        ).run();
+        if ((refreshed.meta?.changes ?? 0) !== 1) {
+          const current = await firstD1<LicenseRow>(input.db.prepare(
+            `SELECT l.id, l.instance_id, l.product_id, l.license_model, l.renewal_mode,
+                    l.credential_mode, l.offline_grace_seconds,
+                    p.validation_interval_seconds, l.payment_grace_seconds,
+                    l.max_activations, l.features_json, l.is_checkout_verification, l.status,
+                    l.status_reason, l.expires_at, l.updates_until, l.updated_at
+             FROM licenses l
+             JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
+             WHERE l.instance_id = ?1 AND l.id = ?2 LIMIT 1`
+          ).bind(input.instanceId, license.id));
+          if (!current) throw new NotFoundError("License not found");
+          assertLicenseUsable(current, now);
+          throw new AppError("ACTIVATION_CONFLICT", "The Activation changed concurrently.", 409);
+        }
+      }
+      if (!activation && reachedActivationLimit) {
         const count = await firstD1<{ count: number }>(input.db.prepare(
           `SELECT COUNT(*) AS count FROM activations
            WHERE instance_id = ?1 AND license_id = ?2 AND status = 'active'`
@@ -419,63 +495,7 @@ export async function activateLicense(input: {
           { database_error: raw },
         );
       }
-      if (raw.includes("activations.instance_id, activations.license_id, activations.fingerprint_hash")) {
-        activation = await firstD1<ActivationRow>(input.db.prepare(
-          `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
-           FROM activations
-           WHERE instance_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
-           LIMIT 1`
-        ).bind(input.instanceId, license.id, fingerprintHash));
-        if (activation) {
-          credentialResponse = await createCredentialResponse({
-            db: input.db,
-            env: input.env,
-            license,
-            activationId: activation.id,
-            machineToken,
-            fingerprint: input.fingerprint,
-            build,
-            now,
-          });
-          const refreshed = await input.db.prepare(
-            `UPDATE activations SET machine_token_hash = ?1, last_validated_at = ?2, updated_at = ?2
-             WHERE instance_id = ?3 AND license_id = ?4 AND id = ?5 AND status = 'active'
-               AND EXISTS (
-                 SELECT 1 FROM licenses l
-                 WHERE l.instance_id = ?3 AND l.id = ?4 AND l.product_id = ?6
-                   AND l.updated_at = ?7
-                   AND l.is_checkout_verification = 0 AND l.status = 'active'
-                   AND (
-                     l.expires_at IS NULL
-                     OR datetime(l.expires_at, '+' || CASE WHEN l.renewal_mode = 'billing'
-                          THEN l.payment_grace_seconds ELSE 0 END || ' seconds') > datetime(?2)
-                   )
-               )`
-          ).bind(
-            machineTokenHash,
-            now.toISOString(),
-            input.instanceId,
-            license.id,
-            activation.id,
-            input.productId,
-            license.updated_at,
-          ).run();
-          if ((refreshed.meta?.changes ?? 0) !== 1) {
-            const current = await firstD1<LicenseRow>(input.db.prepare(
-              `SELECT id, instance_id, product_id, license_model, renewal_mode,
-                      credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
-                      max_activations, features_json, is_checkout_verification, status,
-                      status_reason, expires_at, updates_until, updated_at
-               FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
-            ).bind(input.instanceId, license.id));
-            if (!current) throw new NotFoundError("License not found");
-            assertLicenseUsable(current, now);
-            throw new AppError("ACTIVATION_CONFLICT", "The Activation changed concurrently.", 409);
-          }
-        } else {
-          throw error;
-        }
-      } else {
+      if (!activation && !reachedActivationLimit) {
         throw error;
       }
     }
@@ -489,7 +509,11 @@ export async function activateLicense(input: {
       expires_at: credentialResponse.license_expires_at,
       terms: credentialResponse.terms,
     },
-    validation: createServerValidationMetadata(now),
+    validation: createServerValidationMetadata({
+      validatedAt: now,
+      validationIntervalSeconds: license.validation_interval_seconds,
+      offlineGraceSeconds: license.offline_grace_seconds,
+    }),
   };
 }
 
@@ -511,12 +535,14 @@ export async function validateActivation(input: {
   const activation = await firstD1<any>(input.db.prepare(
     `SELECT a.id, a.license_id, a.fingerprint_hash, a.machine_token_hash, a.status,
             l.instance_id, l.product_id, l.license_model, l.renewal_mode,
-            l.credential_mode, l.signed_token_ttl_seconds, l.payment_grace_seconds,
+            l.credential_mode, l.offline_grace_seconds,
+            p.validation_interval_seconds, l.payment_grace_seconds,
             l.max_activations, l.features_json, l.is_checkout_verification,
             l.status AS license_status, l.status_reason, l.expires_at, l.updates_until,
             l.updated_at AS license_updated_at
      FROM activations a
      JOIN licenses l ON l.instance_id = a.instance_id AND l.id = a.license_id
+     JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
      WHERE a.instance_id = ?1 AND l.product_id = ?2 AND a.id = ?3
      LIMIT 1`
   ).bind(input.instanceId, input.productId, input.activationId));
@@ -545,7 +571,8 @@ export async function validateActivation(input: {
     license_model: activation.license_model,
     renewal_mode: activation.renewal_mode,
     credential_mode: activation.credential_mode,
-    signed_token_ttl_seconds: activation.signed_token_ttl_seconds,
+    offline_grace_seconds: activation.offline_grace_seconds,
+    validation_interval_seconds: activation.validation_interval_seconds,
     payment_grace_seconds: activation.payment_grace_seconds,
     max_activations: activation.max_activations,
     features_json: activation.features_json,
@@ -618,11 +645,14 @@ export async function validateActivation(input: {
       });
     }
     const currentLicense = await firstD1<LicenseRow>(input.db.prepare(
-      `SELECT id, instance_id, product_id, license_model, renewal_mode,
-              credential_mode, signed_token_ttl_seconds, payment_grace_seconds,
-              max_activations, features_json, is_checkout_verification, status,
-              status_reason, expires_at, updates_until, updated_at
-       FROM licenses WHERE instance_id = ?1 AND id = ?2 LIMIT 1`
+      `SELECT l.id, l.instance_id, l.product_id, l.license_model, l.renewal_mode,
+              l.credential_mode, l.offline_grace_seconds,
+              p.validation_interval_seconds, l.payment_grace_seconds,
+              l.max_activations, l.features_json, l.is_checkout_verification, l.status,
+              l.status_reason, l.expires_at, l.updates_until, l.updated_at
+       FROM licenses l
+       JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
+       WHERE l.instance_id = ?1 AND l.id = ?2 LIMIT 1`
     ).bind(input.instanceId, license.id));
     if (!currentLicense) throw new NotFoundError("License not found");
     assertLicenseUsable(currentLicense, now);
@@ -636,7 +666,11 @@ export async function validateActivation(input: {
       expires_at: credentialResponse.license_expires_at,
       terms: credentialResponse.terms,
     },
-    validation: createServerValidationMetadata(now),
+    validation: createServerValidationMetadata({
+      validatedAt: now,
+      validationIntervalSeconds: license.validation_interval_seconds,
+      offlineGraceSeconds: license.offline_grace_seconds,
+    }),
   };
 }
 

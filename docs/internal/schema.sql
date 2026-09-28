@@ -618,7 +618,7 @@ CREATE TABLE `license_plans` (
 	`credential_mode` text NOT NULL,
 	`default_term_seconds` integer,
 	`update_window_seconds` integer,
-	`signed_token_ttl_seconds` integer DEFAULT 0 NOT NULL,
+	`offline_grace_seconds` integer DEFAULT 2592000 NOT NULL,
 	`payment_grace_seconds` integer NOT NULL,
 	`max_activations` integer DEFAULT 1 NOT NULL,
 	`features_json` text DEFAULT '[]' NOT NULL,
@@ -632,7 +632,7 @@ CREATE TABLE `license_plans` (
 	CONSTRAINT "ck_license_plans_credential_mode" CHECK("license_plans"."credential_mode" in ('opaque', 'signed')),
 	CONSTRAINT "ck_license_plans_default_term_seconds" CHECK("license_plans"."default_term_seconds" is null or "license_plans"."default_term_seconds" > 0),
 	CONSTRAINT "ck_license_plans_update_window_seconds" CHECK("license_plans"."update_window_seconds" is null or "license_plans"."update_window_seconds" > 0),
-	CONSTRAINT "ck_license_plans_signed_token_ttl" CHECK("license_plans"."signed_token_ttl_seconds" >= 0),
+	CONSTRAINT "ck_license_plans_offline_grace" CHECK("license_plans"."offline_grace_seconds" > 0),
 	CONSTRAINT "ck_license_plans_payment_grace" CHECK("license_plans"."payment_grace_seconds" >= 0),
 	CONSTRAINT "ck_license_plans_max_activations" CHECK("license_plans"."max_activations" >= 1),
 	CONSTRAINT "ck_license_plans_features_json" CHECK(json_valid("license_plans"."features_json") and json_type("license_plans"."features_json") = 'array'),
@@ -640,8 +640,6 @@ CREATE TABLE `license_plans` (
 	CONSTRAINT "ck_license_plans_term_model" CHECK(("license_plans"."license_model" = 'fixed_term' and "license_plans"."default_term_seconds" is not null)
         or ("license_plans"."license_model" in ('perpetual', 'subscription') and "license_plans"."default_term_seconds" is null)),
 	CONSTRAINT "ck_license_plans_update_model" CHECK("license_plans"."license_model" = 'perpetual' or "license_plans"."update_window_seconds" is null),
-	CONSTRAINT "ck_license_plans_credential_ttl" CHECK(("license_plans"."credential_mode" = 'opaque' and "license_plans"."signed_token_ttl_seconds" = 0)
-        or ("license_plans"."credential_mode" = 'signed' and "license_plans"."signed_token_ttl_seconds" > 0)),
 	CONSTRAINT "ck_license_plans_payment_grace_model" CHECK(("license_plans"."license_model" = 'subscription' and "license_plans"."payment_grace_seconds" >= 0)
         or ("license_plans"."license_model" in ('perpetual', 'fixed_term') and "license_plans"."payment_grace_seconds" = 0))
 );
@@ -659,7 +657,7 @@ CREATE TABLE `licenses` (
 	`license_model` text NOT NULL,
 	`renewal_mode` text NOT NULL,
 	`credential_mode` text NOT NULL,
-	`signed_token_ttl_seconds` integer NOT NULL,
+	`offline_grace_seconds` integer DEFAULT 2592000 NOT NULL,
 	`payment_grace_seconds` integer NOT NULL,
 	`max_activations` integer NOT NULL,
 	`features_json` text DEFAULT '[]' NOT NULL,
@@ -687,7 +685,7 @@ CREATE TABLE `licenses` (
 	CONSTRAINT "ck_licenses_license_model" CHECK("licenses"."license_model" in ('perpetual', 'fixed_term', 'subscription')),
 	CONSTRAINT "ck_licenses_renewal_mode" CHECK("licenses"."renewal_mode" in ('none', 'manual', 'billing')),
 	CONSTRAINT "ck_licenses_credential_mode" CHECK("licenses"."credential_mode" in ('opaque', 'signed')),
-	CONSTRAINT "ck_licenses_signed_token_ttl" CHECK("licenses"."signed_token_ttl_seconds" >= 0),
+	CONSTRAINT "ck_licenses_offline_grace" CHECK("licenses"."offline_grace_seconds" > 0),
 	CONSTRAINT "ck_licenses_payment_grace" CHECK("licenses"."payment_grace_seconds" >= 0),
 	CONSTRAINT "ck_licenses_max_activations" CHECK("licenses"."max_activations" >= 1),
 	CONSTRAINT "ck_licenses_features_json" CHECK(json_valid("licenses"."features_json") and json_type("licenses"."features_json") = 'array'),
@@ -698,8 +696,6 @@ CREATE TABLE `licenses` (
 	CONSTRAINT "ck_licenses_expiry_model" CHECK(("licenses"."license_model" = 'perpetual' and "licenses"."expires_at" is null)
         or ("licenses"."license_model" in ('fixed_term', 'subscription') and "licenses"."expires_at" is not null)),
 	CONSTRAINT "ck_licenses_update_model" CHECK("licenses"."license_model" = 'perpetual' or "licenses"."updates_until" is null),
-	CONSTRAINT "ck_licenses_credential_ttl" CHECK(("licenses"."credential_mode" = 'opaque' and "licenses"."signed_token_ttl_seconds" = 0)
-        or ("licenses"."credential_mode" = 'signed' and "licenses"."signed_token_ttl_seconds" > 0)),
 	CONSTRAINT "ck_licenses_payment_grace_model" CHECK(("licenses"."license_model" = 'subscription' and "licenses"."payment_grace_seconds" >= 0)
         or ("licenses"."license_model" in ('perpetual', 'fixed_term') and "licenses"."payment_grace_seconds" = 0)),
 	CONSTRAINT "ck_licenses_source_reference" CHECK(("licenses"."source" = 'payment'
@@ -761,6 +757,7 @@ CREATE TABLE `products` (
 	`description` text,
 	`billing_environment` text,
 	`payment_grace_seconds` integer DEFAULT 0 NOT NULL,
+	`validation_interval_seconds` integer DEFAULT 3600 NOT NULL,
 	`trial_enabled` integer DEFAULT false NOT NULL,
 	`trial_duration_seconds` integer,
 	`trial_features_json` text DEFAULT '[]' NOT NULL,
@@ -770,6 +767,7 @@ CREATE TABLE `products` (
 	FOREIGN KEY (`instance_id`) REFERENCES `instances`(`id`) ON UPDATE no action ON DELETE restrict,
 	CONSTRAINT "ck_products_billing_environment" CHECK("products"."billing_environment" in ('sandbox', 'live')),
 	CONSTRAINT "ck_products_payment_grace" CHECK("products"."payment_grace_seconds" >= 0),
+	CONSTRAINT "ck_products_validation_interval" CHECK("products"."validation_interval_seconds" between 3600 and 86400),
 	CONSTRAINT "ck_products_trial_enabled" CHECK("products"."trial_enabled" in (0, 1)),
 	CONSTRAINT "ck_products_trial_duration_seconds" CHECK("products"."trial_duration_seconds" is null or "products"."trial_duration_seconds" > 0),
 	CONSTRAINT "ck_products_trial_features_json" CHECK(json_valid("products"."trial_features_json") and json_type("products"."trial_features_json") = 'array'),

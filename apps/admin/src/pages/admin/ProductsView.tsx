@@ -5,8 +5,8 @@ import { Badge, Button, Card, ConfirmModal, CopyValue, EmptyState, ErrorPanel, F
 import { useI18n } from "../../lib/i18n";
 import { daysToSeconds, secondsToDays } from "../../lib/duration";
 
-const emptyProduct = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
-const emptyProductEdit = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
+const emptyProduct = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", validationIntervalHours: "1", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
+const emptyProductEdit = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", validationIntervalHours: "1", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
 const emptyRelease = {
   version: "",
   platform: "macos" as ReleasePlatform,
@@ -63,6 +63,7 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
       const created = await api.admin.products.create({
         name: productForm.name.trim(), description: productForm.description.trim() || null,
         billingEnvironment: productForm.billingEnvironment || null,
+        validationIntervalSeconds: Number(productForm.validationIntervalHours) * 3600,
         trial: { enabled: productForm.trialEnabled, durationSeconds: productForm.trialEnabled ? daysToSeconds(productForm.trialDurationDays) : undefined, features: productForm.trialFeatures.split(",").map((item) => item.trim()).filter(Boolean) },
       });
       setProductModal(false); setProductForm(emptyProduct); await loadProducts(); setSelectedId(created.id);
@@ -76,6 +77,7 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
         name: selected.name,
         description: selected.description ?? "",
         billingEnvironment: selected.billingEnvironment ?? "",
+        validationIntervalHours: String(selected.validationIntervalSeconds / 3600),
         trialEnabled: selected.trial?.enabled ?? false,
         trialDurationDays: selected.trial?.enabled && selected.trial.durationSeconds !== undefined
           ? secondsToDays(selected.trial.durationSeconds)
@@ -97,6 +99,7 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
         name: editProductForm.name.trim(),
         description: editProductForm.description.trim() || null,
         billingEnvironment: editProductForm.billingEnvironment || null,
+        validationIntervalSeconds: Number(editProductForm.validationIntervalHours) * 3600,
         trial: {
           enabled: editProductForm.trialEnabled,
           durationSeconds: editProductForm.trialEnabled ? daysToSeconds(editProductForm.trialDurationDays) : undefined,
@@ -187,6 +190,7 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
                 <div className="metric-grid compact">
                   <div><span>{t.products.productIdLabel}</span><strong><code>{selected.id}</code></strong></div>
                   <div><span>{t.products.billingEnvLabel}</span><strong>{selected.billingEnvironment || t.products.billingEnvNone}</strong></div>
+                  <div><span>{t.products.validationIntervalLabel}</span><strong>{t.products.validationIntervalHours(selected.validationIntervalSeconds / 3600)}</strong></div>
                   <div><span>{t.products.trialLabel}</span><strong>{selected.trial?.enabled ? (selected.trial.durationSeconds ? t.products.trialDays(Math.round(selected.trial.durationSeconds / 86400)) : t.products.trialEnabled) : t.products.trialDisabled}</strong></div>
                   <div><span>{t.products.tableColReleasedAt}</span><strong>{t.products.releasesCount(releases.length)}</strong></div>
                 </div>
@@ -294,6 +298,9 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
               <option value="live">{t.products.billingEnvOptionLive}</option>
             </Select>
           </Field>
+          <Field label={t.products.fieldValidationInterval} hint={t.products.fieldValidationIntervalHint}>
+            <Input type="number" min="1" max="24" step="1" value={productForm.validationIntervalHours} onChange={(event) => setProductForm({ ...productForm, validationIntervalHours: event.target.value })} required />
+          </Field>
           <label className="check-row">
             <input type="checkbox" checked={productForm.trialEnabled} onChange={(event) => setProductForm({ ...productForm, trialEnabled: event.target.checked })} />
             <FlaskConical className="size-4" />
@@ -325,6 +332,9 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
               <option value="sandbox">{t.products.billingEnvOptionSandbox}</option>
               <option value="live">{t.products.billingEnvOptionLive}</option>
             </Select>
+          </Field>
+          <Field label={t.products.fieldValidationInterval} hint={t.products.fieldValidationIntervalHint}>
+            <Input type="number" min="1" max="24" step="1" value={editProductForm.validationIntervalHours} onChange={(event) => setEditProductForm({ ...editProductForm, validationIntervalHours: event.target.value })} required />
           </Field>
           <label className="check-row">
             <input type="checkbox" checked={editProductForm.trialEnabled} onChange={(event) => setEditProductForm({ ...editProductForm, trialEnabled: event.target.checked })} />

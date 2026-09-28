@@ -54,7 +54,7 @@ describe("V1 License core contract", () => {
     credential?: "opaque" | "signed";
     defaultTermSeconds?: number | null;
     updateWindowSeconds?: number | null;
-    signedTtl?: number;
+    offlineGrace?: number;
     paymentGrace?: number;
     maxActivations?: number;
   }) {
@@ -64,7 +64,7 @@ describe("V1 License core contract", () => {
       `INSERT INTO license_plans (
          id, instance_id, product_id, name, revision, license_model,
          credential_mode, default_term_seconds, update_window_seconds,
-         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         offline_grace_seconds, payment_grace_seconds, max_activations,
          features_json, status, created_at, updated_at
        ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, '["pro_export"]', 'active', ?12, ?12)`,
       input.id,
@@ -75,7 +75,7 @@ describe("V1 License core contract", () => {
       credential,
       input.defaultTermSeconds ?? null,
       input.updateWindowSeconds ?? null,
-      input.signedTtl ?? (credential === "signed" ? 3600 : 0),
+      input.offlineGrace ?? 2_592_000,
       input.paymentGrace ?? 0,
       input.maxActivations ?? 2,
       "2026-09-01T00:00:00.000Z",
@@ -138,7 +138,7 @@ describe("V1 License core contract", () => {
         name: "Legacy subscription",
         licenseModel: "subscription",
         credentialMode: "opaque",
-        signedTokenTtlSeconds: 0,
+        offlineGraceSeconds: 2_592_000,
         maxActivations: 2,
         features: [],
       }),
@@ -154,7 +154,7 @@ describe("V1 License core contract", () => {
         name: "Subscription",
         license_model: "subscription",
         credential_mode: "opaque",
-        signed_token_ttl_seconds: 0,
+        offline_grace_seconds: 2_592_000,
         max_activations: 2,
         features: [],
       }),
@@ -330,7 +330,7 @@ describe("V1 License core contract", () => {
   });
 
   it("activates and validates opaque credentials without requiring a registered Product Release", async () => {
-    await seedPlan({ id: "lpl_opaque" });
+    await seedPlan({ id: "lpl_opaque", maxActivations: 1 });
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
@@ -340,21 +340,56 @@ describe("V1 License core contract", () => {
       actor: { type: "user", id: userId },
       now: new Date("2026-09-19T10:00:00.000Z"),
     });
-    const activated = await activateLicense({
+    const activationInput = {
       db: testEnv.d1,
       env: testEnv.env,
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_opaque_device_verification_secret_0001",
       fingerprint: "sha256:opaque-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
       releaseArch: "universal",
       now: new Date("2026-09-19T10:01:00.000Z"),
-    });
+    };
+    const [activated, concurrentRepeat] = await Promise.all([
+      activateLicense(activationInput),
+      activateLicense(activationInput),
+    ]);
+    expect(concurrentRepeat.activation_id).toBe(activated.activation_id);
     expect(activated.credential_mode).toBe("opaque");
-    expect(activated.machine_token).toMatch(/^mtk_[0-9a-f]{64}$/);
+    expect(activated.machine_token).toBe("mtk_opaque_device_verification_secret_0001");
     expect(activated.signed_license_token).toBeNull();
+    const reissued = await activateLicense({
+      db: testEnv.d1,
+      env: testEnv.env,
+      instanceId,
+      productId,
+      licenseKey: issued.license.licenseKey,
+      machineToken: activated.machine_token,
+      fingerprint: "sha256:opaque-device",
+      releaseVersion: "1.0.0",
+      releasePlatform: "macos",
+      releaseArch: "universal",
+      now: new Date("2026-09-19T10:01:30.000Z"),
+    });
+    expect(reissued.activation_id).toBe(activated.activation_id);
+    await expect(activateLicense({
+      db: testEnv.d1,
+      env: testEnv.env,
+      instanceId,
+      productId,
+      licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_other_device_cannot_reissue_00000001",
+      fingerprint: "sha256:opaque-device",
+      releaseVersion: "1.0.0",
+      releasePlatform: "macos",
+      releaseArch: "universal",
+    })).rejects.toMatchObject({ code: "ACTIVATION_CREDENTIALS_INVALID", status: 401 });
+    expect((await testEnv.d1.prepare(
+      `SELECT COUNT(*) AS count FROM activations WHERE instance_id = ?1 AND license_id = ?2`
+    ).bind(instanceId, issued.license.id).get()).count).toBe(1);
     const validated = await validateActivation({
       db: testEnv.d1,
       env: testEnv.env,
@@ -411,6 +446,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_new_release_device_credential_secret",
       fingerprint: "sha256:new-release-device",
       releaseVersion: "2.0.0",
       releasePlatform: "macos",
@@ -427,6 +463,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_unregistered_release_credential_secret",
       fingerprint: "sha256:unregistered-release-device",
       releaseVersion: "9.9.9",
       releasePlatform: "macos",
@@ -454,6 +491,7 @@ describe("V1 License core contract", () => {
         instanceId,
         productId,
         licenseKey: issued.license.licenseKey,
+        machineToken: `mtk_${device}_credential_secret_000000000000`,
         fingerprint: `sha256:${device}`,
         releaseVersion: "1.0.0",
         releasePlatform: "macos",
@@ -490,7 +528,7 @@ describe("V1 License core contract", () => {
       encrypted,
       "2026-09-01T00:00:00.000Z",
     );
-    await seedPlan({ id: "lpl_signed", credential: "signed", signedTtl: 3600 });
+    await seedPlan({ id: "lpl_signed", credential: "signed", offlineGrace: 2_592_000 });
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
@@ -506,6 +544,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_signed_device_credential_secret_0001",
       fingerprint: "sha256:signed-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -529,8 +568,32 @@ describe("V1 License core contract", () => {
     });
     const claims = base64UrlToJson<any>(claimsPart);
     expect(claims).not.toHaveProperty("acc");
+    expect(claims).not.toHaveProperty("exp");
     expect(claims).not.toHaveProperty("rel");
     expect(claims).not.toHaveProperty("rat");
+
+    const reissued = await activateLicense({
+      db: testEnv.d1,
+      env: testEnv.env,
+      instanceId,
+      productId,
+      licenseKey: issued.license.licenseKey,
+      machineToken: activated.machine_token,
+      fingerprint: "sha256:signed-device",
+      releaseVersion: "1.0.0",
+      releasePlatform: "macos",
+      releaseArch: "universal",
+      now: new Date("2026-09-19T10:02:00.000Z"),
+    });
+    expect(reissued.activation_id).toBe(activated.activation_id);
+    expect(base64UrlToJson<any>(reissued.signed_license_token!.split(".")[1])).toMatchObject({
+      lic: issued.license.id,
+      act: activated.activation_id,
+      prd: productId,
+    });
+    expect((await testEnv.d1.prepare(
+      `SELECT COUNT(*) AS count FROM activations WHERE instance_id = ?1 AND license_id = ?2`
+    ).bind(instanceId, issued.license.id).get()).count).toBe(1);
   });
 
   it("resolves Product signing keys from the globally unique Product ID", async () => {
@@ -592,7 +655,7 @@ describe("V1 License core contract", () => {
       encrypted,
       "2026-09-01T00:00:00.000Z",
     );
-    await seedPlan({ id: "lpl_signed_atomic", credential: "signed", signedTtl: 3600 });
+    await seedPlan({ id: "lpl_signed_atomic", credential: "signed", offlineGrace: 2_592_000 });
     const issued = await issueManualLicense({
       db: testEnv.d1,
       env: testEnv.env,
@@ -614,6 +677,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_signed_atomic_credential_secret_0001",
       fingerprint: "sha256:signed-atomic-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -671,6 +735,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_rotate_device_credential_secret_0001",
       fingerprint: "sha256:rotate-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -763,20 +828,35 @@ describe("V1 License core contract", () => {
   });
 
   it("allows one online-only Trial Claim per product and device", async () => {
-    const first = await claimTrial({
+    const trialToken = "ttk_trial_device_verification_secret_00000001";
+    const attempts = await Promise.all([0, 1].map(() => claimTrial({
       db: testEnv.d1,
       instanceId,
       productId,
       fingerprint: "sha256:trial-device",
+      trialToken,
       now: new Date("2026-09-19T10:00:00.000Z"),
-    });
-    expect(first.trial_token).toMatch(/^ttk_[0-9a-f]{64}$/);
+    })));
+    const [first, repeated] = attempts;
+    expect(first.trial_id).toBe(repeated.trial_id);
+    expect(first.trial_token).toBe(trialToken);
     await expect(claimTrial({
       db: testEnv.d1,
       instanceId,
       productId,
       fingerprint: "sha256:trial-device",
-    })).rejects.toMatchObject({ code: "TRIAL_ALREADY_CLAIMED" });
+      trialToken: "ttk_other_device_cannot_reissue_00000001",
+    })).rejects.toMatchObject({ code: "TRIAL_CREDENTIALS_INVALID", status: 401 });
+    await expect(claimTrial({
+      db: testEnv.d1,
+      instanceId,
+      productId,
+      fingerprint: "sha256:other-trial-device",
+      trialToken,
+    })).rejects.toMatchObject({ code: "TRIAL_CREDENTIALS_INVALID", status: 401 });
+    expect((await testEnv.d1.prepare(
+      `SELECT COUNT(*) AS count FROM trial_claims WHERE instance_id = ?1 AND product_id = ?2`
+    ).bind(instanceId, productId).get()).count).toBe(1);
     const validated = await validateTrial({
       db: testEnv.d1,
       instanceId,
@@ -829,7 +909,8 @@ describe("V1 License core contract", () => {
           trial: { status: "available", duration_seconds: 1200, features: ["trial_export"] },
         },
         validation: {
-          validation_interval_seconds: null,
+          validation_interval_seconds: 3600,
+          offline_grace_seconds: null,
           validated_at: expect.any(String),
         },
         meta: { request_id: "req_none_available" },
@@ -916,6 +997,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint,
+      trialToken: "ttk_claimed_device_credential_secret_0001",
     });
     const app = clientApp();
     const unavailable = await app.request("https://license.example.test/api/v1/client/validate", {
@@ -948,14 +1030,15 @@ describe("V1 License core contract", () => {
       body: JSON.stringify({
         product_id: productId,
         fingerprint,
+        trial_token: "ttk_untrusted_device_credential_secret_0001",
         release_version: "1.0.0",
         release_platform: "macos",
       release_arch: "universal",
       }),
     }, testEnv.env);
     const duplicateBody = await duplicate.json() as any;
-    expect(duplicate.status).toBe(409);
-    expect(duplicateBody.error.code).toBe("TRIAL_ALREADY_CLAIMED");
+    expect(duplicate.status).toBe(401);
+    expect(duplicateBody.error.code).toBe("TRIAL_CREDENTIALS_INVALID");
     expect(duplicateBody.error).not.toHaveProperty("details");
     expect(JSON.stringify(duplicateBody)).not.toContain("trl_");
 
@@ -985,6 +1068,7 @@ describe("V1 License core contract", () => {
       body: JSON.stringify({
         product_id: productId,
         license_key: issued.license.licenseKey,
+        machine_token: "mtk_operation_license_credential_secret_0001",
         fingerprint: "sha256:operation-license-device",
         release_version: "1.0.0",
         release_platform: "macos",
@@ -995,7 +1079,11 @@ describe("V1 License core contract", () => {
     expect(activatedResponse.status).toBe(200);
     expect(activatedBody.data).toMatchObject({
       state: { kind: "license", status: "active" },
-      validation: { validation_interval_seconds: null, validated_at: expect.any(String) },
+      validation: {
+        validation_interval_seconds: 3600,
+        offline_grace_seconds: 2_592_000,
+        validated_at: expect.any(String),
+      },
       meta: { request_id: "req_activate_snapshot" },
     });
     expect(activatedBody.data).not.toHaveProperty("next_validation_at");
@@ -1011,6 +1099,7 @@ describe("V1 License core contract", () => {
       body: JSON.stringify({
         product_id: productId,
         fingerprint: "sha256:operation-trial-device",
+        trial_token: "ttk_operation_trial_credential_secret_000001",
         release_version: "1.0.0",
         release_platform: "macos",
       release_arch: "universal",
@@ -1020,7 +1109,11 @@ describe("V1 License core contract", () => {
     expect(claimedResponse.status).toBe(201);
     expect(claimedBody.data).toMatchObject({
       state: { kind: "trial", status: "active" },
-      validation: { validation_interval_seconds: null, validated_at: expect.any(String) },
+      validation: {
+        validation_interval_seconds: 3600,
+        offline_grace_seconds: null,
+        validated_at: expect.any(String),
+      },
       meta: { request_id: "req_trial_snapshot" },
     });
     expect(testEnv.sqliteDb.prepare(
@@ -1053,6 +1146,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint,
+      trialToken: "ttk_trial_state_credential_secret_000001",
     });
     const app = clientApp();
     const validate = (trialToken: string) => app.request(
@@ -1146,6 +1240,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_license_state_credential_secret_0001",
       fingerprint,
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -1180,7 +1275,6 @@ describe("V1 License core contract", () => {
     expect(activeBody.data.credential_update).toEqual({
       credential_mode: "opaque",
       signed_license_token: null,
-      signed_license_token_expires_at: null,
       signing_key_id: null,
     });
     expect(activeBody.data).not.toHaveProperty("machine_token");
@@ -1325,7 +1419,7 @@ describe("V1 License core contract", () => {
     });
   });
 
-  it("keeps signed token lifetime independent from the validation interval", async () => {
+  it("uses Plan offline grace independently from validation interval and omits Signed exp", async () => {
     const keyId = "key_short_ttl";
     const keyPair = await generateEd25519KeyPair();
     const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {
@@ -1352,18 +1446,18 @@ describe("V1 License core contract", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         product_id: productId,
-        name: "Short signed token",
+        name: "Signed offline grace",
         license_model: "perpetual",
         credential_mode: "signed",
         update_window_seconds: 7200,
-        signed_token_ttl_seconds: 1,
+        offline_grace_seconds: 7200,
         max_activations: 1,
         features: [],
       }),
     }, testEnv.env);
     expect(adminResponse.status).toBe(201);
     const plan = (await adminResponse.json() as any).data;
-    expect(plan.signed_token_ttl_seconds).toBe(1);
+    expect(plan.offline_grace_seconds).toBe(7200);
 
     const issued = await issueManualLicense({
       db: testEnv.d1,
@@ -1381,18 +1475,22 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_short_grace_credential_secret_0001",
       fingerprint: "sha256:short-ttl-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
       releaseArch: "universal",
       now: activatedAt,
     });
-    expect(activated.signed_license_token_expires_at).toBe("2026-09-23T10:01:01.000Z");
+    expect(activated).not.toHaveProperty("signed_license_token_expires_at");
+    expect(activated.validation).toMatchObject({
+      validation_interval_seconds: 3600,
+      offline_grace_seconds: 7200,
+    });
     expect(activated.terms.updates_until).toBe("2026-09-23T12:00:00.000Z");
     expect(activated.state.terms.updates_until).toBe("2026-09-23T12:00:00.000Z");
     const claims = base64UrlToJson<any>(activated.signed_license_token!.split(".")[1]);
-    expect(new Date(claims.exp * 1000).toISOString())
-      .toBe(activated.signed_license_token_expires_at);
+    expect(claims).not.toHaveProperty("exp");
     expect(new Date(claims.upd * 1000).toISOString()).toBe(activated.terms.updates_until);
 
     const rejectedZeroTtl = await adminLicensePlansApp().request(
@@ -1400,32 +1498,32 @@ describe("V1 License core contract", () => {
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signed_token_ttl_seconds: 0 }),
+        body: JSON.stringify({ offline_grace_seconds: 0 }),
       },
       testEnv.env,
     );
     expect(rejectedZeroTtl.status).toBe(400);
     expect((await rejectedZeroTtl.json() as any).error.code)
-      .toBe("LICENSE_PLAN_SIGNED_TTL_REQUIRED");
+      .toBe("VALIDATION_ERROR");
 
     const updated = await adminLicensePlansApp().request(
       `https://license.example.test/${plan.id}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signed_token_ttl_seconds: 2 }),
+        body: JSON.stringify({ offline_grace_seconds: 14400 }),
       },
       testEnv.env,
     );
     expect(updated.status).toBe(200);
     expect((await updated.json() as any).data).toMatchObject({
       id: plan.id,
-      signed_token_ttl_seconds: 2,
+      offline_grace_seconds: 14400,
       affects_existing_licenses: false,
     });
   });
 
-  it("uses the billing grace boundary for Client state and signed token expiry", async () => {
+  it("uses the billing grace boundary for Client state and Signed business expiry", async () => {
     const keyId = "key_billing_grace";
     const keyPair = await generateEd25519KeyPair();
     const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {
@@ -1455,7 +1553,7 @@ describe("V1 License core contract", () => {
       id: "lpl_billing_grace",
       model: "subscription",
       credential: "signed",
-      signedTtl: 3600,
+      offlineGrace: 2_592_000,
       paymentGrace: 300,
     });
     const issued = await issueManualLicense({
@@ -1493,6 +1591,7 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
+      machineToken: "mtk_billing_grace_credential_secret_0001",
       fingerprint: "sha256:grace-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -1504,6 +1603,6 @@ describe("V1 License core contract", () => {
     const claims = base64UrlToJson<any>(activated.signed_license_token!.split(".")[1]);
     expect(claims.lexp).toBe(Date.parse("2026-09-19T10:10:00.000Z") / 1000);
     expect(new Date(claims.lexp * 1000).toISOString()).toBe(activated.license_expires_at);
-    expect(claims.exp).toBe(Date.parse("2026-09-19T10:10:00.000Z") / 1000);
+    expect(claims).not.toHaveProperty("exp");
   });
 });

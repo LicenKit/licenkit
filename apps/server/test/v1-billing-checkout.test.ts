@@ -1329,13 +1329,13 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     testEnv.sqliteDb.prepare(
       `INSERT INTO licenses (
          id, instance_id, customer_id, product_id, plan_id, plan_revision,
-         license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
+         license_model, renewal_mode, credential_mode, offline_grace_seconds,
          payment_grace_seconds, max_activations, features_json, key_hash,
          key_version, source, source_billing_provider_id,
          source_external_transaction_id, status, expires_at, created_at, updated_at
        ) VALUES (
          'lic_portal1', ?, 'cus_buyer', 'prd_portal', 'pln_portal', 1,
-         'subscription', 'billing', 'opaque', 0,
+         'subscription', 'billing', 'opaque', 2592000,
          86400, 1, '[]', 'portal-key-hash',
          1, 'payment', ?, 'txn_portal1', 'active',
          '2026-10-19T08:00:00.000Z', ?, ?

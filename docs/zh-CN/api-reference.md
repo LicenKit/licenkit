@@ -200,6 +200,7 @@ Product 可以配置一组 V1 无需支付方式的设备试用规则：
   "name": "Example App",
   "billing_environment": "live",
   "payment_grace_seconds": 0,
+  "validation_interval_seconds": 3600,
   "trial": {
     "enabled": true,
     "duration_seconds": 1209600,
@@ -213,6 +214,8 @@ Product 由服务端生成的全局唯一 `id` 标识，创建请求不接受第
 `billing_environment` 可为 `sandbox|live|null`：`null` 表示普通支付事件不能签发正式 License；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。
 
 `payment_grace_seconds` 是非负整数，Product 创建默认 `0`。创建订阅 License Plan 时省略该字段会固化 Product 当时的值；非订阅 Plan 固定为 `0`。支付型订阅 License 再从 Plan 固化该值，Product 后续修改不追溯已有 Plan 或 License，Plan 后续修改也不追溯已签发 License。启用试用时 `duration_seconds` 必须显式提供正整数；V1 不使用隐式全局试用天数。修改 Product 的试用时长或功能只影响之后领取的 Trial Claim。
+
+`validation_interval_seconds` 是客户端多久应尝试一次在线复核，范围为 3600 至 86400 秒，默认 3600 秒。它只控制联网调度，不是本地授权截止时间；离线多久进入强提示由 License Plan 的 `offline_grace_seconds` 决定。
 
 Trial Claim 查询和吊销只允许 owner/admin，并在持久层同时限定当前 `instance_id + product_id + trial_id`。吊销请求必须提交非空 `reason`；操作幂等地写入 `revoked_at`、原因和管理员审计，不删除领取历史，也不允许通过“编辑到期时间”重置试用。Product 归档只阻止新领取，不隐式吊销已有 Claim。
 
@@ -268,7 +271,7 @@ POST   /api/v1/admin/license-plans/:planId/migrations
   "max_activations": 3,
   "features": ["pro_export", "batch_processing"],
   "update_window_seconds": 31536000,
-  "signed_token_ttl_seconds": 2592000,
+  "offline_grace_seconds": 2592000,
   "payment_grace_seconds": 0
 }
 ```
@@ -276,7 +279,8 @@ POST   /api/v1/admin/license-plans/:planId/migrations
 - `license_model` 描述有效期生命周期：永久、固定期限或随订阅周期更新；
 - `credential_mode` 不描述是否联网。`opaque` 只签发 Machine Token，`signed` 在相同在线流程上额外签发 Signed License Token；
 - `update_window_seconds` 只适用于 `perpetual`；`null` 表示所有未来版本，正整数表示签发后的版本更新窗口；
-- `credential_mode=opaque` 时 `signed_token_ttl_seconds` 必须为 0，`signed` 时必须大于 0；
+- `offline_grace_seconds` 是正整数，默认 2592000 秒（30 天）；它对 `opaque` 与 `signed` 使用同一语义：距最近一次成功在线确认超过该时间后，客户端进入强提示状态，但仍允许使用；
+- 签发 License 时会把 Plan 当时的 `offline_grace_seconds` 固化到 License，之后修改 Plan 不追溯已签发 License；
 - 非订阅方案的 `payment_grace_seconds` 必须为 0；订阅方案省略该字段时，服务端读取当前 Product 值并把解析后的整数写入方案响应与数据库。
 
 更新成功后 revision 递增。响应需要明确：
@@ -727,7 +731,8 @@ Client API 使用同一组授权状态，而不是让 License、Trial 和无凭�
 ```json
 {
   "validation": {
-    "validation_interval_seconds": null,
+    "validation_interval_seconds": 3600,
+    "offline_grace_seconds": 2592000,
     "validated_at": "2026-09-23T10:00:00.000Z"
   },
   "meta": {
@@ -736,9 +741,9 @@ Client API 使用同一组授权状态，而不是让 License、Trial 和无凭�
 }
 ```
 
-`validated_at` 由服务端生成，表示这份业务状态何时被确认。`validation_interval_seconds` 为 `null` 时，Swift SDK 使用 3600 秒默认值；非空值限制在 3600 至 86400 秒之间。它们不等同于 Swift SDK 的最近 `/validate` 响应时间：激活和领取 Trial 虽然返回已确认业务状态，但不会启动 `/validate` 冷却。
+`validated_at` 由服务端生成，表示这份业务状态何时被确认。`validation_interval_seconds` 必填，来自 Product，范围为 3600 至 86400 秒；`offline_grace_seconds` 对 License 来自已签发 License 的 Plan 快照，对 Trial 或无 License 凭据状态为 `null`。激活和领取 Trial 虽然返回已确认业务状态，但不会启动 `/validate` 请求冷却。
 
-Swift SDK 对 `/validate` 同时应用服务端建议间隔和硬编码 30 秒门槛；只有本地 Signed License Token 已过期或无效时可以绕过建议间隔，但仍不能绕过 30 秒门槛。两个门槛都从最近一次明确 `/validate` Server 结果开始计算：合法的成功业务响应，或已收到 HTTP 状态的失败响应。DNS、TLS、超时、断网等没有 HTTP 响应的失败，以及 HTTP 2xx 但正文不符合合同的响应，都不能推进这两个时间。HTTP 失败可以推进 `/validate` 响应冷却，但不得改写 `validated_at` 或伪造新的业务快照。LicenKit CLI 只共享这些网络字段和状态合同；当前每次显式执行 `licenkit validate` 都会联网，不使用 Swift SDK 的本地双门槛。
+Swift SDK 对 `/validate` 同时应用 Product 在线复核间隔和硬编码 30 秒请求门槛。两个门槛只决定何时再次联网，不决定授权是否可用。距 `validated_at` 超过 License 的离线宽限期时，SDK 返回 `offlineGraceExceeded` 供宿主强提示，但仍允许使用；只有业务到期、暂停、吊销、Activation 失效、Release 不合格或签名凭据无效会使授权不可用。
 
 ### 7.1 激活
 
@@ -752,6 +757,7 @@ POST /api/v1/client/activate
 {
   "product_id": "prd_01...",
   "license_key": "LK-...",
+  "machine_token": "mtk_由客户端预先生成并持久化...",
   "fingerprint": "sha256:...",
   "device_platform": "macos-arm64",
   "name": "Alex's MacBook Pro",
@@ -771,7 +777,6 @@ POST /api/v1/client/activate
     "machine_token": "mtk_...",
     "credential_mode": "opaque",
     "signed_license_token": null,
-    "signed_license_token_expires_at": null,
     "signing_key_id": null,
     "license_expires_at": null,
     "terms": {
@@ -794,7 +799,8 @@ POST /api/v1/client/activate
       }
     },
     "validation": {
-      "validation_interval_seconds": null,
+      "validation_interval_seconds": 3600,
+      "offline_grace_seconds": 2592000,
       "validated_at": "2026-09-23T10:00:00.000Z"
     },
     "meta": {
@@ -810,14 +816,15 @@ POST /api/v1/client/activate
 {
   "credential_mode": "signed",
   "signed_license_token": "base64url.base64url.base64url",
-  "signed_license_token_expires_at": "2026-10-19T10:00:00Z",
   "signing_key_id": "key_01..."
 }
 ```
 
 `state.expires_at` 与兼容字段 `license_expires_at` 都表示最终授权截止时间。对 `renewal_mode=billing` 的订阅，它已经包含该 License 固化的支付宽限期；调用方不得再次叠加 `payment_grace_seconds`。
 
-`signed_token_ttl_seconds` 只用于服务端计算签发时的绝对到期时间，不要求大于或等于在线校验间隔，也不会作为原始 TTL 数值写入 Token。实际 `exp` 取“签发时间 + License 快照 TTL”与 License 最终有效截止时间（如有）中的较早值；对 billing 订阅，后者已包含支付宽限。Signed License Token Payload 写入绝对 `exp`；明文响应字段 `signed_license_token_expires_at` 是同一时刻的镜像，SDK 必须验证它与签名保护的 `exp` 完全一致。Token 提前到期时，客户端下一次主动调用 `validate()` 可以绕过建议间隔，但仍受硬编码 30 秒门槛约束。
+Signed License Token 不包含 `exp`，响应也不返回独立的 Signed Token 到期时间。Signed 与 Opaque 的业务规则相同：业务到期使用 `state.expires_at` 和签名内 `lexp`；在线复核调度使用 Product 的 `validation_interval_seconds`；离线强提示使用 License 快照的 `offline_grace_seconds`。不能把在线复核间隔或离线宽限期解释为本地停用时间。
+
+`machine_token` 必须由客户端在发请求前生成，并先作为验证中凭据持久化。相同 License、相同设备指纹和相同 Machine Token 的重复或并发请求返回既有 Activation 与当前授权信息，不创建第二份 Activation；相同指纹但无法提供原 Machine Token 的请求返回 `ACTIVATION_CREDENTIALS_INVALID`，避免其他设备仅凭注册码或指纹取得既有凭据。客户端不需要保存 Registration Key 明文或 Hash；它应使用本次 `activate()` 的 Registration Key 发请求，并在完整凭据与快照全部落盘后再清理验证中凭据。`validate` 不负责重新执行激活。
 
 ### 7.2 在线验证
 
@@ -871,11 +878,11 @@ POST /api/v1/client/validate
     "credential_update": {
       "credential_mode": "signed",
       "signed_license_token": "base64url.base64url.base64url",
-      "signed_license_token_expires_at": "2026-09-23T11:00:00.000Z",
       "signing_key_id": "key_01..."
     },
     "validation": {
-      "validation_interval_seconds": null,
+      "validation_interval_seconds": 3600,
+      "offline_grace_seconds": 2592000,
       "validated_at": "2026-09-23T10:00:00.000Z"
     },
     "meta": {
@@ -897,9 +904,9 @@ POST /api/v1/client/validate
 | --- | --- | --- | --- |
 | `activation_required` | `trial.available` | `duration_seconds`、`features` | 否；用户可选择领取 Trial |
 | `activation_required` | `trial.unavailable` | `reason`、`code` | 否 |
-| `trial` | `active` | `expires_at`、`features` | 是，但仍受客户端新鲜度窗口约束 |
+| `trial` | `active` | `expires_at`、`features` | 是，直到业务到期或被吊销 |
 | `trial` | `expired` / `revoked` | 原始 `code`，以及到期或撤销信息 | 否 |
-| `license` | `active` | `expires_at`、`terms` | 是，但仍受客户端新鲜度窗口和签名 Token 到期约束 |
+| `license` | `active` | `expires_at`、`terms` | 是；超过离线宽限期只进入强提示 |
 | `license` | `expired` / `suspended` / `revoked` | 原始 `code` 与可用诊断字段 | 否 |
 | `license` | `activation_revoked` / `activation_deactivated` | 原始 `code` | 否 |
 | `release_not_eligible` | `update_required` | `UPDATE_ENTITLEMENT_REQUIRED`、版本、平台、架构，以及必填的 `updates_until`、`released_at` | 否 |
@@ -919,6 +926,7 @@ POST /api/v1/client/trials/claim
 ```json
 {
   "product_id": "prd_01...",
+  "trial_token": "ttk_由客户端预先生成并持久化...",
   "fingerprint": "sha256:...",
   "device_platform": "macos-arm64",
   "release_version": "2.4.0",
@@ -945,7 +953,8 @@ POST /api/v1/client/trials/claim
       "features": ["pro_export"]
     },
     "validation": {
-      "validation_interval_seconds": null,
+      "validation_interval_seconds": 3600,
+      "offline_grace_seconds": null,
       "validated_at": "2026-09-23T10:00:00.000Z"
     },
     "meta": {
@@ -955,7 +964,7 @@ POST /api/v1/client/trials/claim
 }
 ```
 
-服务端只保存 Token 哈希。重复或并发领取同一 `instance_id + product_id + fingerprint` 返回 `TRIAL_ALREADY_CLAIMED`，不得延长到期时间或再次返回 Token；这项业务唯一性由 D1 唯一约束承担。Trial Claim 与校验接口的流量保护由 Cloudflare Zone 级 WAF Rate Limiting Rules 按方法、路径和部署套餐支持的请求特征配置，不在应用内复制通用计数状态。
+`trial_token` 必须由客户端在请求前生成，并先作为验证中凭据持久化；服务端只保存其哈希。相同 Product、相同设备指纹和相同 Trial Token 的重复或并发领取返回同一 Trial ID、同一 Token 与原到期时间，不创建第二份 Trial，也不返回 `TRIAL_ALREADY_CLAIMED`。相同指纹但无法提供原 Trial Token 的请求返回 `TRIAL_CREDENTIALS_INVALID`；无凭据查询仍只报告 `TRIAL_ALREADY_CLAIMED`，不会泄露历史 Trial 身份。客户端在响应丢失、进程退出或正式落盘失败后再次调用 `startTrial()` 即可，不需要用户输入；完整 Trial 凭据与快照全部落盘后再清理验证中凭据。`validate` 不负责重新执行 Trial 领取。
 
 后续 Trial 校验使用 7.2 的统一 `/validate`，提交 `credential.kind=trial`。服务端同时限定 Instance 与 Product，验证 Token 哈希、设备绑定、吊销状态和绝对到期时间；成功时更新 `last_validated_at`。到期和吊销分别得到 `trial.expired` 和 `trial.revoked`，不得归一化成 License 错误。Product Release 不参与 Trial 校验。V1 Trial Claim 不签发 Signed License Token。
 

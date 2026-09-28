@@ -121,6 +121,7 @@ export const products = sqliteTable(
     description: text("description"),
     billingEnvironment: text("billing_environment"),
     paymentGraceSeconds: integer("payment_grace_seconds").notNull().default(0),
+    validationIntervalSeconds: integer("validation_interval_seconds").notNull().default(3600),
     trialEnabled: integer("trial_enabled", { mode: "boolean" }).notNull().default(false),
     trialDurationSeconds: integer("trial_duration_seconds"),
     trialFeaturesJson: text("trial_features_json").notNull().default("[]"),
@@ -136,6 +137,10 @@ export const products = sqliteTable(
       sql`${table.billingEnvironment} in ('sandbox', 'live')`,
     ),
     check("ck_products_payment_grace", sql`${table.paymentGraceSeconds} >= 0`),
+    check(
+      "ck_products_validation_interval",
+      sql`${table.validationIntervalSeconds} between 3600 and 86400`,
+    ),
     check("ck_products_trial_enabled", sql`${table.trialEnabled} in (0, 1)`),
     check(
       "ck_products_trial_duration_seconds",
@@ -250,7 +255,7 @@ export const licensePlans = sqliteTable(
     credentialMode: text("credential_mode").notNull(),
     defaultTermSeconds: integer("default_term_seconds"),
     updateWindowSeconds: integer("update_window_seconds"),
-    signedTokenTtlSeconds: integer("signed_token_ttl_seconds").notNull().default(0),
+    offlineGraceSeconds: integer("offline_grace_seconds").notNull().default(2592000),
     paymentGraceSeconds: integer("payment_grace_seconds").notNull(),
     maxActivations: integer("max_activations").notNull().default(1),
     featuresJson: text("features_json").notNull().default("[]"),
@@ -281,7 +286,7 @@ export const licensePlans = sqliteTable(
       "ck_license_plans_update_window_seconds",
       sql`${table.updateWindowSeconds} is null or ${table.updateWindowSeconds} > 0`,
     ),
-    check("ck_license_plans_signed_token_ttl", sql`${table.signedTokenTtlSeconds} >= 0`),
+    check("ck_license_plans_offline_grace", sql`${table.offlineGraceSeconds} > 0`),
     check("ck_license_plans_payment_grace", sql`${table.paymentGraceSeconds} >= 0`),
     check("ck_license_plans_max_activations", sql`${table.maxActivations} >= 1`),
     check(
@@ -297,11 +302,6 @@ export const licensePlans = sqliteTable(
     check(
       "ck_license_plans_update_model",
       sql`${table.licenseModel} = 'perpetual' or ${table.updateWindowSeconds} is null`,
-    ),
-    check(
-      "ck_license_plans_credential_ttl",
-      sql`(${table.credentialMode} = 'opaque' and ${table.signedTokenTtlSeconds} = 0)
-        or (${table.credentialMode} = 'signed' and ${table.signedTokenTtlSeconds} > 0)`,
     ),
     check(
       "ck_license_plans_payment_grace_model",
@@ -465,7 +465,7 @@ export const licenses = sqliteTable(
     licenseModel: text("license_model").notNull(),
     renewalMode: text("renewal_mode").notNull(),
     credentialMode: text("credential_mode").notNull(),
-    signedTokenTtlSeconds: integer("signed_token_ttl_seconds").notNull(),
+    offlineGraceSeconds: integer("offline_grace_seconds").notNull().default(2592000),
     paymentGraceSeconds: integer("payment_grace_seconds").notNull(),
     maxActivations: integer("max_activations").notNull(),
     featuresJson: text("features_json").notNull().default("[]"),
@@ -533,7 +533,7 @@ export const licenses = sqliteTable(
     ),
     check("ck_licenses_renewal_mode", sql`${table.renewalMode} in ('none', 'manual', 'billing')`),
     check("ck_licenses_credential_mode", sql`${table.credentialMode} in ('opaque', 'signed')`),
-    check("ck_licenses_signed_token_ttl", sql`${table.signedTokenTtlSeconds} >= 0`),
+    check("ck_licenses_offline_grace", sql`${table.offlineGraceSeconds} > 0`),
     check("ck_licenses_payment_grace", sql`${table.paymentGraceSeconds} >= 0`),
     check("ck_licenses_max_activations", sql`${table.maxActivations} >= 1`),
     check(
@@ -552,11 +552,6 @@ export const licenses = sqliteTable(
     check(
       "ck_licenses_update_model",
       sql`${table.licenseModel} = 'perpetual' or ${table.updatesUntil} is null`,
-    ),
-    check(
-      "ck_licenses_credential_ttl",
-      sql`(${table.credentialMode} = 'opaque' and ${table.signedTokenTtlSeconds} = 0)
-        or (${table.credentialMode} = 'signed' and ${table.signedTokenTtlSeconds} > 0)`,
     ),
     check(
       "ck_licenses_payment_grace_model",

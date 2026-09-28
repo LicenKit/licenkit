@@ -80,6 +80,7 @@ describe("User and Instance database schema", () => {
         "0001_webhook_verification_evidence.sql",
         "0002_paddle_simulator_verification.sql",
         "0003_split_release_platform_arch.sql",
+        "0004_client_validation_policy.sql",
       ]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);
@@ -175,6 +176,86 @@ describe("User and Instance database schema", () => {
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
   });
 
+  it("migrates the existing Plan TTL column into the shared offline grace snapshot", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    for (const file of [
+      "0000_v1_initial.sql",
+      "0001_webhook_verification_evidence.sql",
+      "0002_paddle_simulator_verification.sql",
+      "0003_split_release_platform_arch.sql",
+    ]) applyMigrationFile(db, file);
+
+    db.prepare(
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_policy', 'Policy Instance', 'https://site.example.test',
+         'https://admin.example.test', 'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO products (id, instance_id, name, status, created_at, updated_at)
+       VALUES ('prd_policy', 'ins_policy', 'Policy Product', 'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO signing_keys (
+         id, instance_id, product_id, source, public_key, private_key_ciphertext,
+         status, created_at
+       ) VALUES ('key_policy', 'ins_policy', 'prd_policy', 'generated',
+         'public-key', 'encrypted-private-key', 'active', ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO customers (id, instance_id, email, status, created_at, updated_at)
+       VALUES ('cus_policy', 'ins_policy', 'policy@example.test', 'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO license_plans (
+         id, instance_id, product_id, name, license_model, credential_mode,
+         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         features_json, status, created_at, updated_at
+       ) VALUES (?, 'ins_policy', 'prd_policy', ?, 'perpetual', ?, ?, 0, 1, '[]', 'active', ?, ?)`,
+    ).run("pln_signed", "Signed", "signed", 86_400, now, now);
+    db.prepare(
+      `INSERT INTO license_plans (
+         id, instance_id, product_id, name, license_model, credential_mode,
+         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         features_json, status, created_at, updated_at
+       ) VALUES (?, 'ins_policy', 'prd_policy', ?, 'perpetual', ?, ?, 0, 1, '[]', 'active', ?, ?)`,
+    ).run("pln_opaque", "Opaque", "opaque", 0, now, now);
+    for (const [id, planID, mode, ttl] of [
+      ["lic_signed", "pln_signed", "signed", 86_400],
+      ["lic_opaque", "pln_opaque", "opaque", 0],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO licenses (
+           id, instance_id, customer_id, product_id, plan_id, plan_revision,
+           license_model, renewal_mode, credential_mode, signed_token_ttl_seconds,
+           payment_grace_seconds, max_activations, features_json, key_hash,
+           source, status, created_at, updated_at
+         ) VALUES (?, 'ins_policy', 'cus_policy', 'prd_policy', ?, 1,
+           'perpetual', 'none', ?, ?, 0, 1, '[]', ?, 'manual', 'active', ?, ?)`,
+      ).run(id, planID, mode, ttl, `hash_${id}`, now, now);
+    }
+
+    applyMigrationFile(db, "0004_client_validation_policy.sql");
+
+    expect(db.prepare(
+      "SELECT id, offline_grace_seconds FROM license_plans ORDER BY id",
+    ).all()).toEqual([
+      { id: "pln_opaque", offline_grace_seconds: 2_592_000 },
+      { id: "pln_signed", offline_grace_seconds: 86_400 },
+    ]);
+    expect(db.prepare(
+      "SELECT id, offline_grace_seconds FROM licenses ORDER BY id",
+    ).all()).toEqual([
+      { id: "lic_opaque", offline_grace_seconds: 2_592_000 },
+      { id: "lic_signed", offline_grace_seconds: 86_400 },
+    ]);
+    expect(db.prepare(
+      "SELECT validation_interval_seconds FROM products WHERE id = 'prd_policy'",
+    ).get()).toEqual({ validation_interval_seconds: 3_600 });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  });
+
   it("keeps User global, Session Instance-free, and the fresh database uninitialized", () => {
     const db = createDb();
     expect(columns(db, "users")).toEqual([
@@ -189,7 +270,7 @@ describe("User and Instance database schema", () => {
     ]);
     expect(columns(db, "products")).toEqual([
       "id", "instance_id", "name", "description", "billing_environment",
-      "payment_grace_seconds", "trial_enabled", "trial_duration_seconds",
+      "payment_grace_seconds", "validation_interval_seconds", "trial_enabled", "trial_duration_seconds",
       "trial_features_json", "status", "created_at", "updated_at",
     ]);
     for (const table of ["users", "instances", "instance_memberships", "deployment_bootstrap"]) {
@@ -318,26 +399,26 @@ describe("User and Instance database schema", () => {
     expect(() => db.prepare(
       `INSERT INTO license_plans (
          id, instance_id, product_id, name, license_model, credential_mode,
-         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         offline_grace_seconds, payment_grace_seconds, max_activations,
          features_json, status, created_at, updated_at
        ) VALUES ('pln_bad', 'ins_a', 'prd_a', 'Bad', 'subscription', 'opaque',
-         0, 60, 1, '[]', 'active', ?, ?)`,
+         2592000, 60, 1, '[]', 'active', ?, ?)`,
     ).run(now, now)).toThrow(/LICENSE_PLAN_PAYMENT_GRACE_MISMATCH/);
     db.prepare("UPDATE products SET payment_grace_seconds = 60 WHERE id = 'prd_a'").run();
     db.prepare(
       `INSERT INTO license_plans (
          id, instance_id, product_id, name, license_model, credential_mode,
-         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         offline_grace_seconds, payment_grace_seconds, max_activations,
          features_json, status, created_at, updated_at
        ) VALUES ('pln_ok', 'ins_a', 'prd_a', 'OK', 'subscription', 'opaque',
-         0, 60, 1, '[]', 'active', ?, ?)`,
+         2592000, 60, 1, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare("UPDATE products SET payment_grace_seconds = 120 WHERE id = 'prd_a'").run();
     expect(db.prepare("SELECT payment_grace_seconds FROM license_plans WHERE id = 'pln_ok'").get())
       .toEqual({ payment_grace_seconds: 60 });
   });
 
-  it("requires a positive signed credential TTL independently of the validation interval", () => {
+  it("requires one positive offline grace for both credential modes", () => {
     const db = createDb();
     seedOwner(db);
     db.prepare(
@@ -348,23 +429,23 @@ describe("User and Instance database schema", () => {
     const insertPlan = db.prepare(
       `INSERT INTO license_plans (
          id, instance_id, product_id, name, license_model, credential_mode,
-         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         offline_grace_seconds, payment_grace_seconds, max_activations,
          features_json, status, created_at, updated_at
        ) VALUES (?, 'ins_a', 'prd_signed', ?, 'perpetual', 'signed',
          ?, 0, 1, '[]', 'active', ?, ?)`,
     );
     expect(() => insertPlan.run("pln_zero", "Zero", 0, now, now))
-      .toThrow(/ck_license_plans_credential_ttl/);
+      .toThrow(/ck_license_plans_offline_grace/);
     insertPlan.run("pln_positive", "Positive", 1, now, now);
     expect(db.prepare(
-      "SELECT signed_token_ttl_seconds FROM license_plans WHERE id = 'pln_positive'",
-    ).get()).toEqual({ signed_token_ttl_seconds: 1 });
+      "SELECT offline_grace_seconds FROM license_plans WHERE id = 'pln_positive'",
+    ).get()).toEqual({ offline_grace_seconds: 1 });
 
     const licenseSchema = db.prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'licenses'",
     ).get() as { sql: string };
     expect(licenseSchema.sql).toContain(
-      `"licenses"."credential_mode" = 'signed' and "licenses"."signed_token_ttl_seconds" > 0`,
+      `CHECK("licenses"."offline_grace_seconds" > 0)`,
     );
   });
 

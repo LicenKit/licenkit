@@ -34,12 +34,14 @@ const CreateProductSchema = z.object({
   description: z.string().trim().max(4000).nullable().optional(),
   billing_environment: z.enum(["sandbox", "live"]).nullable().optional(),
   payment_grace_seconds: z.number().int().nonnegative().default(0),
+  validation_interval_seconds: z.number().int().min(3600).max(86400).default(3600),
   trial: ExternalTrialConfigSchema.optional(),
 }).strict().transform((value) => ({
   name: value.name,
   description: value.description,
   billingEnvironment: value.billing_environment,
   paymentGraceSeconds: value.payment_grace_seconds,
+  validationIntervalSeconds: value.validation_interval_seconds,
   trial: value.trial ? {
     enabled: value.trial.enabled,
     durationSeconds: value.trial.duration_seconds,
@@ -51,12 +53,14 @@ const UpdateProductSchema = z.object({
   description: z.string().trim().max(4000).nullable().optional(),
   billing_environment: z.enum(["sandbox", "live"]).nullable().optional(),
   payment_grace_seconds: z.number().int().nonnegative().optional(),
+  validation_interval_seconds: z.number().int().min(3600).max(86400).optional(),
   trial: ExternalTrialConfigSchema.optional(),
 }).strict().transform((value) => ({
   name: value.name,
   description: value.description,
   billingEnvironment: value.billing_environment,
   paymentGraceSeconds: value.payment_grace_seconds,
+  validationIntervalSeconds: value.validation_interval_seconds,
   trial: value.trial ? {
     enabled: value.trial.enabled,
     durationSeconds: value.trial.duration_seconds,
@@ -94,6 +98,7 @@ function formatProduct(product: any, signingKey?: any | null) {
     description: product.description,
     billing_environment: product.billingEnvironment,
     payment_grace_seconds: product.paymentGraceSeconds,
+    validation_interval_seconds: product.validationIntervalSeconds,
     status: product.status,
     trial: {
       enabled: Boolean(product.trialEnabled),
@@ -202,6 +207,7 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
       description: input.description ?? null,
       billingEnvironment: input.billingEnvironment ?? null,
       paymentGraceSeconds: input.paymentGraceSeconds,
+      validationIntervalSeconds: input.validationIntervalSeconds,
       trialEnabled: trial.enabled,
       trialDurationSeconds: trial.enabled ? trial.durationSeconds! : null,
       trialFeaturesJson: JSON.stringify(trial.features),
@@ -457,6 +463,9 @@ adminProductsRouter.patch("/:productId", requireRole(["owner", "admin"]), async 
     ...(input.description !== undefined ? { description: input.description } : {}),
     ...(input.billingEnvironment !== undefined ? { billingEnvironment: input.billingEnvironment } : {}),
     ...(input.paymentGraceSeconds !== undefined ? { paymentGraceSeconds: input.paymentGraceSeconds } : {}),
+    ...(input.validationIntervalSeconds !== undefined
+      ? { validationIntervalSeconds: input.validationIntervalSeconds }
+      : {}),
     ...(trial !== undefined ? {
       trialEnabled: trial.enabled,
       trialDurationSeconds: trial.enabled ? trial.durationSeconds! : null,

@@ -244,6 +244,7 @@ export interface ProductSigningKey {
 export interface Product {
   id: Identifier; name: string; description?: string | null; status: "active" | "archived";
   billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration; signingKey?: ProductSigningKey | null;
+  validationIntervalSeconds: number;
   createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
 }
 export interface ProductRelease {
@@ -253,12 +254,12 @@ export interface ProductRelease {
 export interface LicensePlan {
   id: Identifier; productId: Identifier; name: string; licenseModel: LicenseModel; credentialMode: CredentialMode;
   maxActivations: number; features: string[]; updateWindowSeconds: number | null; defaultTermSeconds?: number | null;
-  signedTokenTtlSeconds: number; paymentGraceSeconds: number; revision: number; status: "active" | "archived";
+  offlineGraceSeconds: number; paymentGraceSeconds: number; revision: number; status: "active" | "archived";
   createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
 }
 export interface LicenseTerms {
   licenseModel: LicenseModel; renewalMode: RenewalMode; credentialMode: CredentialMode; maxActivations: number; features: string[];
-  updatesUntil: IsoDateTime | null; signedTokenTtlSeconds: number; paymentGraceSeconds: number;
+  updatesUntil: IsoDateTime | null; offlineGraceSeconds: number; paymentGraceSeconds: number;
   sourceLicensePlanId: Identifier; sourceLicensePlanRevision: number;
 }
 export type DeliveryStatus = "pending" | "processing" | "waiting_configuration" | "retry_scheduled" | "accepted" | "failed" | "expired" | "cancelled";
@@ -268,7 +269,7 @@ export interface License {
   licensePlanId?: Identifier; licensePlanName?: string; planRevision?: number;
   status: "active" | "suspended" | "revoked" | "expired"; statusReason?: string | null; licenseModel: LicenseModel;
   renewalMode: RenewalMode; credentialMode?: CredentialMode; expiresAt: IsoDateTime | null; updatesUntil: IsoDateTime | null;
-  maxActivations?: number; activeActivations?: number; features?: string[]; signedTokenTtlSeconds?: number; paymentGraceSeconds?: number;
+  maxActivations?: number; activeActivations?: number; features?: string[]; offlineGraceSeconds?: number; paymentGraceSeconds?: number;
   isCheckoutVerification?: boolean; terms?: LicenseTerms;
   delivery?: DeliveryReference | null; createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
 }
@@ -518,12 +519,13 @@ export const api = {
     products: {
       list: () => request<ListResponse<Product>>("/admin/products", { scope: "admin" }),
       get: (id: string) => request<Product>(`/admin/products/${encodeURIComponent(id)}`, { scope: "admin" }),
-      create: (body: { name: string; description?: string | null; billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration }) => request<Product>("/admin/products", { method: "POST", body, scope: "admin" }),
+      create: (body: { name: string; description?: string | null; billingEnvironment: BillingEnvironment | null; validationIntervalSeconds: number; trial?: TrialConfiguration }) => request<Product>("/admin/products", { method: "POST", body, scope: "admin" }),
       update: (id: string, body: {
         name?: string;
         description?: string | null;
         billingEnvironment?: BillingEnvironment | null;
         paymentGraceSeconds?: number;
+        validationIntervalSeconds?: number;
         trial?: TrialConfiguration;
       }) => request<Product>(`/admin/products/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
       archive: (id: string) => request<Product>(`/admin/products/${encodeURIComponent(id)}/archive`, { method: "POST", scope: "admin" }),
@@ -539,7 +541,7 @@ export const api = {
       create: (body: {
         productId: string; name: string; licenseModel: LicenseModel; credentialMode: CredentialMode; maxActivations: number;
         features: string[]; updateWindowSeconds: number | null; defaultTermSeconds?: number | null;
-        signedTokenTtlSeconds: number; paymentGraceSeconds?: number;
+        offlineGraceSeconds: number; paymentGraceSeconds?: number;
       }) => request<LicensePlan>("/admin/license-plans", { method: "POST", body, scope: "admin" }),
       update: (id: string, body: Partial<Omit<LicensePlan, "id" | "productId" | "revision" | "createdAt" | "updatedAt">>) => request<{ revision: number; affectsExistingLicenses: false }>(`/admin/license-plans/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
       archive: (id: string) => request<LicensePlan>(`/admin/license-plans/${encodeURIComponent(id)}/archive`, { method: "POST", scope: "admin" }),

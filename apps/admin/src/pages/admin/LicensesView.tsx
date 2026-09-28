@@ -486,7 +486,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                 <dl>
                   <div><dt>{t.licensePlans.fieldCredentialMode}</dt><dd>{detail.credentialMode ?? detail.terms?.credentialMode ?? "—"}</dd></div>
                   <div><dt>{t.licensePlans.graceSecondsLabel}</dt><dd>{formatDurationSeconds(detail.paymentGraceSeconds ?? detail.terms?.paymentGraceSeconds)}</dd></div>
-                  <div><dt>{t.licensePlans.tokenTtlLabel}</dt><dd>{formatDurationSeconds(detail.signedTokenTtlSeconds ?? detail.terms?.signedTokenTtlSeconds)}</dd></div>
+                  <div><dt>{t.licensePlans.offlineGraceLabel}</dt><dd>{formatDurationSeconds(detail.offlineGraceSeconds ?? detail.terms?.offlineGraceSeconds)}</dd></div>
                   <div><dt>{t.licensePlans.fieldFeatures}</dt><dd>{(detail.features ?? detail.terms?.features ?? []).join(", ") || t.licensePlans.noFeatures}</dd></div>
                 </dl>
               </div>

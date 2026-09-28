@@ -35,8 +35,8 @@ export async function validateCommand(): Promise<void> {
     let nextStored = {
       ...stored,
       lastValidatedAt: response.validation.validated_at,
-      receivedValidationIntervalSeconds: response.validation.validation_interval_seconds,
-      effectiveValidationIntervalSeconds: effectiveInterval,
+      validationIntervalSeconds: effectiveInterval,
+      offlineGraceSeconds: response.validation.offline_grace_seconds,
       lastValidationRequestId: response.meta.request_id,
       lastEntitlementState: response.state,
     };
@@ -89,8 +89,6 @@ export async function validateCommand(): Promise<void> {
           ...nextStored,
           credentialMode: response.credential_update.credential_mode,
           signedLicenseToken: response.credential_update.signed_license_token || undefined,
-          signedLicenseTokenExpiresAt:
-            response.credential_update.signed_license_token_expires_at || undefined,
           signingKeyId: response.credential_update.signing_key_id || undefined,
         };
       }
@@ -112,7 +110,13 @@ export async function validateCommand(): Promise<void> {
     console.log("  " + pc.gray("Validated at:") + " " + response.validation.validated_at);
     console.log(
       "  " + pc.gray("Validation interval:") + " " + effectiveInterval
-      + "s (server: " + (response.validation.validation_interval_seconds ?? "default") + ")"
+      + "s"
+    );
+    console.log(
+      "  " + pc.gray("Offline grace:") + " "
+      + (response.validation.offline_grace_seconds === null
+        ? "not applicable"
+        : response.validation.offline_grace_seconds + "s")
     );
     console.log("  " + pc.gray("Request ID:") + " " + response.meta.request_id);
 

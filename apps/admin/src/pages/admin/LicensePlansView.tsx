@@ -23,10 +23,10 @@ import { daysToSeconds, secondsToDays } from "../../lib/duration";
 const emptyForm = {
   productId: "", name: "", licenseModel: "perpetual" as LicenseModel, credentialMode: "opaque" as CredentialMode,
   maxActivations: "1", features: "", updateWindowDays: "", defaultTermDays: "",
-  signedTokenTtlDays: "30", paymentGraceDays: "",
+  offlineGraceDays: "30", paymentGraceDays: "",
 };
 
-export const MIN_SIGNED_TOKEN_TTL_DAYS = 1;
+export const MIN_OFFLINE_GRACE_DAYS = 1;
 
 export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
   const { t } = useI18n();
@@ -66,7 +66,7 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
         features: selected.features.join(", "),
         updateWindowDays: selected.updateWindowSeconds !== null && selected.updateWindowSeconds !== undefined ? secondsToDays(selected.updateWindowSeconds) : "",
         defaultTermDays: selected.defaultTermSeconds !== null && selected.defaultTermSeconds !== undefined ? secondsToDays(selected.defaultTermSeconds) : "",
-        signedTokenTtlDays: secondsToDays(selected.signedTokenTtlSeconds || 2_592_000),
+        offlineGraceDays: secondsToDays(selected.offlineGraceSeconds),
         paymentGraceDays: selected.paymentGraceSeconds !== undefined && selected.paymentGraceSeconds !== null ? secondsToDays(selected.paymentGraceSeconds) : "",
       });
     } catch (caught) {
@@ -84,7 +84,7 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
         maxActivations: Number(form.maxActivations), features: form.features.split(",").map((item) => item.trim()).filter(Boolean),
         updateWindowSeconds: form.licenseModel === "perpetual" && form.updateWindowDays ? daysToSeconds(form.updateWindowDays) : null,
         defaultTermSeconds: form.licenseModel === "fixed_term" ? daysToSeconds(form.defaultTermDays) : null,
-        signedTokenTtlSeconds: form.credentialMode === "signed" ? daysToSeconds(form.signedTokenTtlDays) : 0,
+        offlineGraceSeconds: daysToSeconds(form.offlineGraceDays),
         paymentGraceSeconds: form.licenseModel === "subscription" && form.paymentGraceDays !== "" ? daysToSeconds(form.paymentGraceDays) : undefined,
       });
       setModalOpen(false); setForm({ ...emptyForm, productId: products[0]?.id || "" }); await load();
@@ -109,9 +109,7 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
         defaultTermSeconds: editForm.licenseModel === "fixed_term"
           ? daysToSeconds(editForm.defaultTermDays)
           : null,
-        signedTokenTtlSeconds: editForm.credentialMode === "signed"
-          ? daysToSeconds(editForm.signedTokenTtlDays)
-          : 0,
+        offlineGraceSeconds: daysToSeconds(editForm.offlineGraceDays),
         paymentGraceSeconds: editForm.licenseModel === "subscription" && editForm.paymentGraceDays !== ""
           ? daysToSeconds(editForm.paymentGraceDays)
           : 0,
@@ -219,8 +217,8 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
                     <strong>{selected.updateWindowSeconds === null ? t.licensePlans.updateWindowForever : formatDurationSeconds(selected.updateWindowSeconds)}</strong>
                   </div>
                   <div>
-                    <span>{t.licensePlans.tokenTtlLabel}</span>
-                    <strong>{formatDurationSeconds(selected.signedTokenTtlSeconds)}</strong>
+                    <span>{t.licensePlans.offlineGraceLabel}</span>
+                    <strong>{formatDurationSeconds(selected.offlineGraceSeconds)}</strong>
                   </div>
                 </div>
                 <div className="tag-list">
@@ -309,11 +307,9 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
               <Input type="number" min="0" step="1" value={form.paymentGraceDays} onChange={(event) => setForm({ ...form, paymentGraceDays: event.target.value })} placeholder={t.licensePlans.placeholderGraceDays} />
             </Field>
           ) : null}
-          {form.credentialMode === "signed" ? (
-            <Field label={t.licensePlans.fieldTokenTtl} hint={t.licensePlans.fieldTokenTtlHint}>
-              <Input type="number" min={MIN_SIGNED_TOKEN_TTL_DAYS} step="1" value={form.signedTokenTtlDays} onChange={(event) => setForm({ ...form, signedTokenTtlDays: event.target.value })} required />
-            </Field>
-          ) : null}
+          <Field label={t.licensePlans.fieldOfflineGrace} hint={t.licensePlans.fieldOfflineGraceHint}>
+            <Input type="number" min={MIN_OFFLINE_GRACE_DAYS} step="1" value={form.offlineGraceDays} onChange={(event) => setForm({ ...form, offlineGraceDays: event.target.value })} required />
+          </Field>
           <div className="form-actions">
             <Button variant="secondary" type="button" onClick={() => setModalOpen(false)}>{t.common.cancel}</Button>
             <Button loading={saving} type="submit">{t.licensePlans.btnCreatePlan}</Button>
@@ -364,11 +360,9 @@ export function LicensePlansView({ canWrite }: { canWrite: boolean }) {
               <Input type="number" min="0" step="1" value={editForm.paymentGraceDays} onChange={(event) => setEditForm({ ...editForm, paymentGraceDays: event.target.value })} placeholder={t.licensePlans.placeholderGraceDays} />
             </Field>
           ) : null}
-          {editForm.credentialMode === "signed" ? (
-            <Field label={t.licensePlans.fieldTokenTtl} hint={t.licensePlans.fieldTokenTtlHint}>
-              <Input type="number" min={MIN_SIGNED_TOKEN_TTL_DAYS} step="1" value={editForm.signedTokenTtlDays} onChange={(event) => setEditForm({ ...editForm, signedTokenTtlDays: event.target.value })} required />
-            </Field>
-          ) : null}
+          <Field label={t.licensePlans.fieldOfflineGrace} hint={t.licensePlans.fieldOfflineGraceHint}>
+            <Input type="number" min={MIN_OFFLINE_GRACE_DAYS} step="1" value={editForm.offlineGraceDays} onChange={(event) => setEditForm({ ...editForm, offlineGraceDays: event.target.value })} required />
+          </Field>
           <div className="form-actions">
             <Button variant="secondary" type="button" onClick={() => setEditModalOpen(false)}>{t.common.cancel}</Button>
             <Button loading={saving} type="submit">{t.licensePlans.btnSaveNewRevision}</Button>

@@ -4,9 +4,8 @@ export const DEFAULT_VALIDATION_INTERVAL_SECONDS = 3600;
 export const MIN_VALIDATION_INTERVAL_SECONDS = 3600;
 export const MAX_VALIDATION_INTERVAL_SECONDS = 86400;
 
-export function effectiveValidationIntervalSeconds(received: number | null): number {
-  const candidate = received ?? DEFAULT_VALIDATION_INTERVAL_SECONDS;
-  return Math.min(MAX_VALIDATION_INTERVAL_SECONDS, Math.max(MIN_VALIDATION_INTERVAL_SECONDS, candidate));
+export function effectiveValidationIntervalSeconds(received: number): number {
+  return Math.min(MAX_VALIDATION_INTERVAL_SECONDS, Math.max(MIN_VALIDATION_INTERVAL_SECONDS, received));
 }
 
 export interface LicenseTerms {
@@ -16,7 +15,8 @@ export interface LicenseTerms {
 }
 
 export interface ValidationMetadata {
-  validation_interval_seconds: number | null;
+  validation_interval_seconds: number;
+  offline_grace_seconds: number | null;
   validated_at: string;
 }
 
@@ -106,7 +106,6 @@ export type EntitlementState = ActivationRequiredState | TrialState | LicenseSta
 export interface CredentialUpdate {
   credential_mode: CredentialMode;
   signed_license_token: string | null;
-  signed_license_token_expires_at: string | null;
   signing_key_id: string | null;
 }
 
@@ -115,7 +114,6 @@ export interface ActivationResponse {
   machine_token: string;
   credential_mode: CredentialMode;
   signed_license_token: string | null;
-  signed_license_token_expires_at: string | null;
   signing_key_id: string | null;
   license_expires_at: string | null;
   terms: LicenseTerms;
@@ -223,11 +221,16 @@ function parseLicenseTerms(value: unknown): LicenseTerms {
 function parseValidationMetadata(value: unknown): ValidationMetadata {
   const validation = contractObject(value, "Validation metadata");
   const interval = validation.validation_interval_seconds;
-  if (interval !== null && (!Number.isSafeInteger(interval) || Number(interval) < 0)) {
-    throw new ClientContractError("validation_interval_seconds must be null or a non-negative integer");
+  if (!Number.isSafeInteger(interval) || Number(interval) < MIN_VALIDATION_INTERVAL_SECONDS || Number(interval) > MAX_VALIDATION_INTERVAL_SECONDS) {
+    throw new ClientContractError("validation_interval_seconds must be an integer between 3600 and 86400");
+  }
+  const offlineGrace = validation.offline_grace_seconds;
+  if (offlineGrace !== null && (!Number.isSafeInteger(offlineGrace) || Number(offlineGrace) <= 0)) {
+    throw new ClientContractError("offline_grace_seconds must be null or a positive integer");
   }
   return {
-    validation_interval_seconds: interval === null ? null : Number(interval),
+    validation_interval_seconds: Number(interval),
+    offline_grace_seconds: offlineGrace === null ? null : Number(offlineGrace),
     validated_at: contractDate(validation.validated_at, "validated_at"),
   };
 }
@@ -386,13 +389,12 @@ function parseCredentialUpdate(value: unknown): CredentialUpdate {
   const parsed: CredentialUpdate = {
     credential_mode: update.credential_mode,
     signed_license_token: update.signed_license_token === null ? null : contractString(update.signed_license_token, "signed_license_token"),
-    signed_license_token_expires_at: contractNullableDate(update.signed_license_token_expires_at, "signed_license_token_expires_at"),
     signing_key_id: update.signing_key_id === null ? null : contractString(update.signing_key_id, "signing_key_id"),
   };
-  if (parsed.credential_mode === "opaque" && (parsed.signed_license_token || parsed.signed_license_token_expires_at || parsed.signing_key_id)) {
+  if (parsed.credential_mode === "opaque" && (parsed.signed_license_token || parsed.signing_key_id)) {
     throw new ClientContractError("Opaque credential update must not contain Signed License Token fields");
   }
-  if (parsed.credential_mode === "signed" && (!parsed.signed_license_token || !parsed.signed_license_token_expires_at || !parsed.signing_key_id)) {
+  if (parsed.credential_mode === "signed" && (!parsed.signed_license_token || !parsed.signing_key_id)) {
     throw new ClientContractError("Signed credential update is incomplete");
   }
   return parsed;
@@ -584,6 +586,7 @@ export interface ClientContext {
 
 export interface ActivateParams extends ClientContext {
   licenseKey: string;
+  machineToken: string;
   name?: string;
 }
 
@@ -593,6 +596,7 @@ export async function apiActivate(params: ActivateParams): Promise<ActivationRes
     body: JSON.stringify({
       product_id: params.productId,
       license_key: params.licenseKey,
+      machine_token: params.machineToken,
       fingerprint: params.fingerprint,
       device_platform: params.devicePlatform,
       name: params.name,

@@ -88,10 +88,10 @@ describe("License email business paths", () => {
       `INSERT INTO license_plans (
          id, instance_id, product_id, name, revision, license_model,
          credential_mode, default_term_seconds, update_window_seconds,
-         signed_token_ttl_seconds, payment_grace_seconds, max_activations,
+         offline_grace_seconds, payment_grace_seconds, max_activations,
          features_json, status, created_at, updated_at
        ) VALUES (?, ?, ?, 'Perpetual', 1, 'perpetual', 'opaque', NULL, NULL,
-         0, 0, 2, '[]', 'active', ?, ?)`,
+         2592000, 0, 2, '[]', 'active', ?, ?)`,
     ).run(PLAN_ID, INSTANCE_ID, PRODUCT_ID, nowIso, nowIso);
   });
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { MIN_SIGNED_TOKEN_TTL_DAYS } from "./LicensePlansView";
+import { MIN_OFFLINE_GRACE_DAYS } from "./LicensePlansView";
 
-describe("License Plan signed token policy", () => {
-  it("accepts any positive token lifetime independently of the validation interval", () => {
-    expect(MIN_SIGNED_TOKEN_TTL_DAYS).toBe(1);
+describe("License Plan offline grace policy", () => {
+  it("accepts a positive offline grace independently of the Product validation interval", () => {
+    expect(MIN_OFFLINE_GRACE_DAYS).toBe(1);
   });
 });
