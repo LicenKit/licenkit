@@ -81,6 +81,7 @@ describe("User and Instance database schema", () => {
         "0002_paddle_simulator_verification.sql",
         "0003_split_release_platform_arch.sql",
         "0004_client_validation_policy.sql",
+        "0005_single_paddle_webhook.sql",
       ]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);
@@ -130,6 +131,55 @@ describe("User and Instance database schema", () => {
     expect(columns(db, "billing_webhook_simulation_tests")).toContain("event_type");
     expect(db.pragma("foreign_key_check")).toEqual([]);
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  });
+
+  it("retires the second Paddle secret and invalidates old Simulator evidence", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    for (const file of [
+      "0000_v1_initial.sql",
+      "0001_webhook_verification_evidence.sql",
+      "0002_paddle_simulator_verification.sql",
+      "0003_split_release_platform_arch.sql",
+      "0004_client_validation_policy.sql",
+    ]) applyMigrationFile(db, file);
+    db.prepare(
+      `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
+       VALUES ('ins_merge', 'Merge', 'https://site.example.test',
+         'https://admin.example.test', 'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO billing_providers (
+         id, instance_id, provider, environment, client_side_token,
+         webhook_secret_ciphertext, simulator_webhook_secret_ciphertext,
+         status, created_at, updated_at
+       ) VALUES ('bpr_merge', 'ins_merge', 'paddle', 'sandbox',
+         'test_merge_token', 'platform_ciphertext', 'simulation_ciphertext',
+         'active', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO billing_webhook_simulation_tests (
+         id, instance_id, billing_provider_id, event_type,
+         simulator_webhook_secret_version, external_event_id,
+         payload_hash, verified_at, created_at, updated_at
+       ) VALUES ('bwt_merge', 'ins_merge', 'bpr_merge', 'customer.created',
+         1, 'ntfsimevt_old', 'hash', ?, ?, ?)`,
+    ).run(now, now, now);
+
+    applyMigrationFile(db, "0005_single_paddle_webhook.sql");
+    expect(db.prepare(
+      `SELECT webhook_secret_ciphertext, simulator_webhook_secret_ciphertext,
+              simulator_webhook_secret_version
+       FROM billing_providers WHERE id = 'bpr_merge'`,
+    ).get()).toEqual({
+      webhook_secret_ciphertext: "platform_ciphertext",
+      simulator_webhook_secret_ciphertext: null,
+      simulator_webhook_secret_version: 2,
+    });
+    expect(db.prepare(
+      `SELECT simulator_webhook_secret_version FROM billing_webhook_simulation_tests
+       WHERE id = 'bwt_merge'`,
+    ).get()).toEqual({ simulator_webhook_secret_version: 1 });
   });
 
   it("splits legacy Product Release platform values without losing existing rows", () => {

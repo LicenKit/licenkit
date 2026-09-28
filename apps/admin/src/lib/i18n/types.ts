@@ -563,8 +563,10 @@ export interface BillingDictionary {
   modalProviderCheckDesc: string;
   checkClientTokenFormat: string;
   checkWebhookSecretReadable: string;
-  checkSimulatorWebhookSecretReadable: string;
   checkApiKeyConfigured: string;
+  apiKeyReadOk: string;
+  apiKeyReadFailed: string;
+  apiKeyReadNotConfigured: string;
   platformWebhookVerified: string;
   platformWebhookUnverified: string;
   webhookVerifiedAt: string;
@@ -577,8 +579,6 @@ export interface BillingDictionary {
   providerSetupEventsHint: string;
   platformDestinationTitle: string;
   platformDestinationHint: string;
-  simulatorDestinationTitle: string;
-  simulatorDestinationHint: string;
   btnVerifyReadiness: string;
   btnActivateOffer: string;
   btnArchiveOffer: string;
@@ -591,10 +591,7 @@ export interface BillingDictionary {
   fieldClientTokenHint: string;
   fieldWebhookSecret: string;
   fieldWebhookSecretHint: string;
-  fieldSimulatorWebhookSecret: string;
-  fieldSimulatorWebhookSecretHint: string;
   fieldPlatformSecretUpdateHint: string;
-  fieldSimulatorSecretUpdateHint: string;
   fieldApiKey: string;
   fieldApiKeyHint: string;
   fieldApiKeyAction: string;

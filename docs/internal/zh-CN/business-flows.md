@@ -234,10 +234,10 @@ Cron 每分钟触发恢复流程：
 5. 统一校验把 License、Trial、无凭据三条路径投影为同一个授权状态树。到期、暂停、吊销、Activation 失效、Release 不合格和需要激活都是已确认的业务状态，不是传输失败；
 6. Swift SDK 把 `validated_at`、Product 在线复核间隔与 License 离线宽限期保存为业务快照；超过离线宽限期只进入强提示，不停止授权；
 7. `/validate` 另存 `lastValidateResponseAt`：合法成功业务响应或明确 HTTP 失败会推进它；DNS、TLS、超时、断网等无 HTTP 响应失败，以及 2xx 非法正文不会推进。HTTP 失败也不得推进 `validated_at`；
-8. 冷却只约束 `validate()`。Opaque、Trial、无凭据和 Signed Token 有效的请求必须同时越过建议间隔与硬编码 30 秒门槛；Signed Token 本地验证失败时只绕过建议间隔，仍受 30 秒门槛；
+8. SDK 的 `validate(trigger:)` 按宿主标注的用户主动或静默意图区分请求门槛。所有新请求从上次请求尝试起遵守固定 30 秒间隔；Product 在线复核间隔只约束静默调用。用户主动、缓存 active Trial/License 首次到期、Release 身份变化首次静默复核，以及 Signed Token 本地失效可豁免 Product 间隔；到期和 Release 变化的提前尝试各只执行一次。两种未执行原因分别返回 SDK 本地代码 `SDK_VALIDATION_MIN_INTERVAL` 与 `SDK_VALIDATION_PRODUCT_INTERVAL`，不混同服务端 HTTP 429；
 9. `activate()`、`startTrial()` 和 `deactivate()` 不受冷却限制，也不写 `lastValidateResponseAt`。显式操作返回的 `validated_at` 仍是业务事实，但不能代替最近 `/validate` 响应时间；
 10. 仅在服务端确认解绑后清除 License 凭据。无凭据解绑只产生 `source=local` 的“需要激活”快照，不伪造一次在线验证；
-11. 同一 Swift SDK 实例内的并发 `validate()` 共享一个请求任务；激活、领取 Trial、解绑和快照写入与校验使用同一顺序化边界，避免旧响应覆盖新状态。
+11. 同一 Swift SDK 实例内并发发起的实际 `/validate` 请求共享结果；若静默调用因 Product 间隔被跳过，同时到来的用户主动调用仍会独立判断。激活、领取 Trial、解绑和快照写入与校验使用同一顺序化边界，避免旧响应覆盖新状态。
 
 LicenKit CLI 共享 Server 的统一请求、状态和 Signed Token 合同，但不运行 Swift SDK 的本地冷却协调器；当前每次显式执行 `licenkit validate` 都向 Server 发起请求。
 

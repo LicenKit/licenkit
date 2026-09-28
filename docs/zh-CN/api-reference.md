@@ -403,20 +403,19 @@ PATCH  /api/v1/admin/billing/providers/:providerId
 POST   /api/v1/admin/billing/providers/:providerId/test
 ```
 
-测试接口只读取当前配置、正式事件验签时间和 Simulator 逐事件测试证据；它不伪造签名样本，也不创建 License。
+测试接口读取当前配置、正式事件验签时间和 Simulator 逐事件测试证据。已保存 API Key 时，服务端还会用该 Key 向当前环境的 Paddle `GET /customers?per_page=1` 发起只读请求，检验 `customer.read`。响应的 `api_key_customer_read` 保留 `status`、`operation`、LicenKit 错误码、Paddle 原始 `provider_code`、HTTP 状态、request ID、`retry_after` 和错误消息，不回传密钥，也不创建 License。未配置 API Key 时状态为 `not_configured`，不向 Paddle 发请求。
 
-Paddle Provider 配置四类互不替代的凭证：
+Paddle Provider 配置三类互不替代的凭证：
 
 - `client_side_token`：必填、与 `sandbox|live` 环境匹配；LicenKit 记录该公开 Token，并在 Sandbox Admin Checkout 测试中返回给官方 Paddle.js。正式产品页仍自行嵌入对应 Live Token；它不是 Secret；
-- Platform Webhook Secret：必填、加密保存，只验证 Paddle `traffic_source=platform` 正式业务目标发来的原始 Webhook；
-- Simulator Webhook Secret：必填、加密保存，只验证另一条 `traffic_source=simulation` 测试目标发来的原始 Webhook；
+- Webhook Secret：必填、加密保存，验证当前 Paddle 环境的统一通知目标发来的原始 Webhook；该目标的 `traffic_source` 设置为 `all`（Platform, Simulation）；
 - Paddle API Key：可选、加密保存，只在启用服务器端 API 能力时需要；Get Customer/对账至少要求 `customer.read`，托管客户门户要求 `customer_portal_session.write`。
 
-管理 API 返回 `client_side_token` 的值或可用状态，但两类 Webhook Secret 与 API Key 写入后只返回是否已配置，不返回明文。基础购买、事件履约和发码不能要求 API Key；没有 API Key 时 Customer 映射通过 Webhook 收敛。
+管理 API 返回 `client_side_token` 的值或可用状态，但 Webhook Secret 与 API Key 写入后只返回是否已配置，不返回明文。基础购买、事件履约和发码不能要求 API Key；没有 API Key 时 Customer 映射通过 Webhook 收敛。
 
-管理后台把“编辑支付通道”和“检查本地配置”分开：编辑入口负责更新公开 Token、修改两类 Webhook Secret、替换或移除 API Key 以及启停通道；检查入口只读取已保存配置和验证证据，不在诊断界面修改凭证。
+管理后台把“编辑支付通道”和“检查配置”分开：编辑入口负责更新公开 Token、修改 Webhook Secret、替换或移除 API Key 以及启停通道；检查入口读取已保存配置和验证证据，并在配置了 API Key 时执行上述只读 Paddle 请求，不在诊断界面修改凭证。
 
-`provider` 和 `environment` 是连接身份，创建后不可 PATCH；切换 Sandbox/Live 必须创建另一条 Provider。PATCH 只允许修改同一连接的 Client-side Token、两类 Webhook Secret、可选 API Key 或状态。Platform 与 Simulator Secret 分别维护内部版本；任一 Secret 修改后，只使对应入口在修改前形成的验证证据失效。这样已有外部 Customer、Transaction、Subscription 和事件 ID 不会被重新解释到另一环境。
+`provider` 和 `environment` 是连接身份，创建后不可 PATCH；切换 Sandbox/Live 必须创建另一条 Provider。PATCH 只允许修改同一连接的 Client-side Token、Webhook Secret、可选 API Key 或状态。修改 Webhook Secret 后，先前真实事件和模拟事件的验证证据都失效。已有外部 Customer、Transaction、Subscription 和事件 ID 不会被重新解释到另一环境。
 
 启用 Customer API 读穿后，LicenKit 服务端可以发起 Paddle Billing REST API 请求；它不是基础路径，也不是回调 Paddle Webhook：
 
@@ -445,7 +444,7 @@ V1 创建 Billing Provider 时只接受 `provider=paddle`，并分别配置 `san
 GET    /api/v1/admin/billing/offers
 POST   /api/v1/admin/billing/offers
 PATCH  /api/v1/admin/billing/offers/:offerId
-POST   /api/v1/admin/billing/offers/:offerId/verification-config
+GET    /api/v1/admin/billing/offers/:offerId/test-checkout-config
 POST   /api/v1/admin/billing/offers/:offerId/activate
 POST   /api/v1/admin/billing/offers/:offerId/archive
 ```
@@ -462,17 +461,14 @@ POST   /api/v1/admin/billing/offers/:offerId/archive
 }
 ```
 
-创建响应的 `status` 固定为 `draft`。Offer 只有在 Billing Provider 环境等于 Product `billing_environment` 时才允许激活；不同环境的 draft Sandbox Offer 仍可用于管理员闭环验证，但不能签发正式 License。
+创建响应的 `status` 固定为 `draft`。Offer 只有在 Billing Provider 环境等于 Product `billing_environment` 时才允许激活。Sandbox 与 Live 各自独立上线；真实购买测试在上线后进行。
 
-PATCH 只允许修改尚无 Checkout Verification 的 draft Offer。只要存在任一验证尝试，Provider、Price、Product、Plan 和 `purchase_type` 即被锁定；需要改变映射时归档旧 Offer 并创建新 Offer，不能让旧验证证据跟随到新权益。
+PATCH 只允许修改尚无历史 Checkout Verification 的 draft Offer。对历史已发起特殊核验的记录保留该约束，避免旧证据跟随到新权益；新流程不再创建 Checkout Verification。
 
-`verification-config` 使用 POST，因为每次调用都会创建一条短期、一次性的 Checkout Verification。它只允许 owner/admin 针对 draft Sandbox Offer 调用，响应设置 `Cache-Control: no-store`，并只返回打开这一次 Sandbox Checkout 所需的配置：
+`test-checkout-config` 是只读 GET，只允许 owner/admin 针对已激活的 Sandbox Offer 调用。响应设置 `Cache-Control: no-store`，只返回打开普通 Sandbox Checkout 所需的配置：
 
 ```json
 {
-  "verification_mode": true,
-  "verification_token": "vfy_一次性高熵随机值",
-  "expires_at": "2026-09-19T10:15:00Z",
   "checkout": {
     "provider": "paddle",
     "environment": "sandbox",
@@ -483,9 +479,9 @@ PATCH 只允许修改尚无 Checkout Verification 的 draft Offer。只要存在
 }
 ```
 
-服务端只保存 `verification_token` 哈希；管理控制台不得写入日志、localStorage、分析事件或 URL。Admin 内部 TypeScript 把响应转换为 `verificationToken` 后，再通过 Paddle.js 将令牌附加为 `custom_data.licenkit_checkout_verification`；调用方不能另行传入任意 custom data。该 POST 还必须通过管理员 Session 权限、精确 Origin 和双提交 CSRF 校验。该接口不允许 Live Offer、不公开到无鉴权路由，也不绕过一个 Price、数量 1、Webhook、Customer 解析、Fulfillment 或 Email Delivery。令牌的权限只是在完全匹配的 Sandbox 交易中生成一条永久不可激活的验证 License，不授予正式权益。
+管理控制台使用官方 Paddle.js 按该 Price 和数量 1 打开普通 Sandbox Checkout，不附加 `licenkit_checkout_verification`。付款事件按已激活 Offer 的普通履约路径处理，因而会产生普通 Sandbox License 与邮件；管理员应使用测试客户资料。该接口不允许 Live Offer，也不公开到无鉴权路由。
 
-`activate` 不接受调用方传入 `ready=true`；服务端实时执行 Checkout Readiness 检查并返回每项状态。至少包括 Product/Plan/Provider、Provider 环境等于 Product `billing_environment`、Client-side Token 的环境标识与 Provider 匹配、当前 Provider 配置更新时间之后最小 Paddle 事件合同中每一种事件的成功验签证据（通常由官方模拟器触发）、active Email Integration 和可用凭证、`customer.license_issued@1` 的 active Template Binding、`signed` 模式密钥，以及同一 Instance、Product、License Plan 与 `purchase_type` 的 `billing_checkout_verifications.status=completed` 真实 Sandbox 证据。Sandbox Offer 通过 `verification-config` 产生该证据；Live Offer 可以复用对应 Sandbox 闭环证据，不执行真实扣款验证。配置测试、System Issue 与 Scheduler 健康都不作为 Offer 激活门禁；Scheduler 最近成功时间不持久化，远程状态在 Cloudflare Cron Events 与 Workers Logs 中验收。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和管理端可见的具体检查项，不改变 Offer 状态。
+`activate` 不接受调用方传入 `ready=true`；服务端实时检查 Product、Plan、Provider、环境绑定、Client-side Token、Webhook Secret、Email Integration 与凭证、`customer.license_issued@1` Template Binding、处理积压和 `signed` 模式密钥。模拟事件覆盖率和端到端购买是上线后的测试与诊断信息，不作为 Sandbox 或 Live 上线门禁。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和具体检查项，不改变 Offer 状态。上线后，Sandbox 可从管理后台发起普通购买测试；Live 由管理员自行进行真实购买验证。
 
 PricePreview 不属于服务端 Offer 激活门禁，也不保存为 Readiness 证据。静态产品页可以直接显示源码中的价格，也可以自行调用 Paddle PricePreview；一次 Preview 成功不能证明未来页面、Origin 或 Paddle 状态仍然可用。服务端支付履约继续只信任已验签 Webhook，并精确校验 Offer、Price、数量、环境和 Customer 合同。
 
@@ -990,17 +986,16 @@ GET /api/v1/client/products/:productId/signing-keys
 
 ```text
 POST /api/v1/webhooks/payments/:instanceId/paddle/:environment
-POST /api/v1/webhooks/payments/:instanceId/paddle/:environment/simulator
 ```
 
-V1 的支付渠道是 Paddle，`:environment` 只能是 `sandbox` 或 `live`。每个环境都配置两条 Paddle URL Notification Destination：不带 `/simulator` 的地址用于 `traffic_source=platform` 正式业务事件，带 `/simulator` 的地址用于 `traffic_source=simulation` 的 Simulator 测试事件。两条 Destination 使用独立 Secret，不能复用地址或 Secret；Sandbox 与 Live 都遵循同一结构。同一 Instance 的每个 Paddle 环境只允许一条 Billing Provider 配置。
+V1 的支付渠道是 Paddle，`:environment` 只能是 `sandbox` 或 `live`。每个环境配置一条 Paddle URL Notification Destination，`traffic_source=all`（Platform, Simulation），使用该目标的一份 Secret。旧的 `/simulator` 地址不再接收请求；迁移时应停用旧 Simulation-only 目标并将保留的目标改为 `all`。同一 Instance 的每个 Paddle 环境只允许一条 Billing Provider 配置。
 
-正式业务入口的处理顺序固定为：
+统一入口的处理顺序固定为：
 
 1. 根据路径中的 Instance ID 读取 Instance，再以 `instance_id + provider=paddle + environment` 读取唯一 Billing Provider 配置；
 2. 对原始请求体执行渠道签名验证；
-3. 提取稳定的外部事件 ID；
-4. 提取事件中存在的外部 Customer、Transaction、Subscription 与 Adjustment ID，并尝试写入 Inbound Event；
+3. 从已验签的 `event_id` 区分 `ntfsimevt_` 模拟事件和 `evt_` 真实事件；未知前缀返回错误，不进入履约；模拟事件只记录逐事件类型的测试证据并返回 2xx；
+4. 对真实事件提取外部 Customer、Transaction、Subscription 与 Adjustment ID，并尝试写入 Inbound Event；
 5. 重复事件先核对已保存的 payload Hash：Hash 不同表示同一 Event ID 对应了冲突事实并返回 409；Hash 相同则返回已有接收结果。若该事件尚未完成且加密 payload 已清理或过期，本次已验签重投只恢复同一事件的 payload 与到期时间，不复制事件，也不清空事件已有的错误；
 6. 新事件持久化成功后返回 2xx；
 7. 请求后立即尝试履约以降低延迟；
@@ -1008,13 +1003,13 @@ V1 的支付渠道是 Paddle，`:environment` 只能是 `sandbox` 或 `live`。�
 
 路径中的 Paddle 环境只用于定位该 Instance 的支付通道配置，不能替代验签，也不从请求体接受 `instance_id`。Sandbox 与 Live 使用同一处理流程，区别只来自对应环境的 Billing Provider 配置。没有签名配置时返回配置错误，不得继续处理。
 
-Simulator 入口复用完全相同的原始请求体验签和 Paddle Envelope 解析逻辑，但验证自己的 Simulator Secret，且只按 `event_type` 保存测试时间、外部 Event ID、payload Hash 与 Secret 版本。模拟数据不得写入正式 `inbound_events`，不得创建 Customer、License、Subscription 或 Delivery，也不得进入履约状态机。这样 Simulator 可以证明测试目标、Secret 和共享解析逻辑能够处理某一类事件，但不能冒充真实业务事件。
+模拟事件与真实事件共用原始请求体验签和 Paddle Envelope 解析逻辑，只按 `event_type` 保存测试时间、外部 Event ID、payload Hash 与验证版本。模拟数据不得写入正式 `inbound_events`，不得创建 Customer、License、Subscription 或 Delivery，也不得进入履约状态机。旧 Simulation-only 目标形成的证据在迁移时失效，需从统一目标重新测试。
 
 只有 Inbound Event 已可靠持久化才返回 2xx。签名无效返回 4xx，数据库写入失败返回 5xx 让 Paddle 重试；事件已持久化后的 Customer API 超时、依赖未齐或履约失败不再改变本次接收响应，由内部状态机和 Scheduled Worker 重试，避免把 Paddle 重投当作内部任务队列。
 
-当前必需事件由该 Provider 下未归档 Offer 的购买类型决定。仅有一次性购买时为 5 类：`customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在任一订阅 Offer 时再加入 `subscription.created`、`subscription.updated`，共 7 类。Platform 与 Simulator Destination 必须订阅同一份当前清单，管理员必须在 Paddle Simulator 中为每一类分别发送 Single event；一次模拟事件不能证明其他事件可被解析。Simulator Secret 修改后必须重新完成全部当前必需事件测试；新增订阅 Offer 后只会新增尚未验证的订阅事件要求。
+当前必需事件由该 Provider 下未归档 Offer 的购买类型决定。仅有一次性购买时为 5 类：`customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在任一订阅 Offer 时再加入 `subscription.created`、`subscription.updated`，共 7 类。统一目标订阅这份清单，管理员可在 Paddle Simulator 中为每一类分别发送 Single event。修改统一 Webhook Secret 后旧模拟证据失效；如需继续检查模拟投递，可重新发送。新增订阅 Offer 后会新增订阅事件要求。模拟覆盖率是诊断信息，不阻止上线。
 
-逐事件 Simulator 证据只用于验证测试目标和共享解析合同，不证明 Platform Destination 已正确订阅这些事件。正式入口的 `webhook_verified_at` 只能由当前 Platform Secret 下收到的真实 `traffic_source=platform` 事件形成；完整的正式业务闭环仍需在 Sandbox 通过真实 Checkout 验证，并在 Live 上线后观察真实事件。LicenKit 不要求 API Key 才能读取远端订阅配置，也不把 API Key 当作 Webhook 完整性的替代品。
+逐事件 Simulator 证据只用于验证模拟投递和共享解析合同，不证明真实购买成功。`webhook_verified_at` 只能由当前 Secret 下收到的真实 `evt_` 事件形成；Sandbox 与 Live 分别上线后，用各自环境的真实 Checkout 验证购买闭环。LicenKit 不把 API Key 当作 Webhook 完整性的替代品。
 
 Customer 事件 upsert Billing Customer 镜像并尝试建立内部映射。购买事件先按外部 Customer ID 查询映射；缺失时以 `BILLING_CUSTOMER_PENDING` 保持 `pending` 并等待 Customer 事件。只有配置了具备 `customer.read` 权限的 API Key 时才调用 Paddle Get Customer 加速恢复，API 失败不改变 Webhook 等待路径。
 
@@ -1022,7 +1017,7 @@ Customer 事件 upsert Billing Customer 镜像并尝试建立内部映射。购�
 
 普通首次购买还必须根据已验签 Transaction 行项目验证：恰好一个行项目、`quantity=1`、Price 命中当前 active Offer、Offer Provider 环境等于 Product `billing_environment`，并且 Offer、Product、Plan 和 `purchase_type` 一致。任何不满足项都以保留外部 Transaction、Price、数量、Provider 环境、Product 环境和事件 ID 的具体错误进入 `needs_attention`，不创建 Customer、License、Subscription 或 Delivery；不能选择第一项、忽略附加项目或按总金额猜测授权。
 
-唯一例外是首次验证 Transaction 的 `custom_data.licenkit_checkout_verification` 通过哈希等值查询命中同 Instance、当前 Offer 的 `pending` Checkout Verification，且令牌未过期、Provider 为 Sandbox、Price 和数量完全匹配。服务端以条件更新原子消费该令牌，再调用同一 Fulfillment Service 创建 `is_checkout_verification=1`、`suspended + checkout_verification` 的 License 和发码 Delivery；Delivery accepted 后验证状态才变为 completed。错误、过期、重复、Offer 不匹配或 Live Provider 的令牌进入 `needs_attention`，不得回退到普通付款。除这个窄用途随机令牌外，其他 `custom_data` 仍不得参与 Customer、Product、Plan 或授权身份判断。
+历史兼容例外：旧版已发起的首次验证 Transaction 若带有 `custom_data.licenkit_checkout_verification`，并通过哈希等值查询命中同 Instance、草稿 Offer 的 `pending` Checkout Verification，且令牌未过期、Provider 为 Sandbox、Price 和数量完全匹配，服务端仍会原子消费该令牌，并创建 `is_checkout_verification=1`、`suspended + checkout_verification` 的 License 和发码 Delivery。新版管理界面不再生成此令牌；测试购买走已激活 Offer 的普通购买。旧令牌错误、过期、重复、Offer 不匹配或来自 Live Provider 时进入 `needs_attention`，不得回退到普通付款。其他 `custom_data` 不参与 Customer、Product、Plan 或授权身份判断。
 
 Paddle 会把 Checkout Transaction 的 custom data 复制到新 Subscription，并继续复制到该 Subscription 的后续 Transaction。处理器必须先按已验签事件中的外部 Subscription ID 查询既有 Billing Subscription：如果它绑定验证 License，则后续事件按验证订阅镜像处理，不再次消费 token，也不因为 token 已使用而产生新的 `needs_attention`。只有尚无已绑定 Subscription 的首次交易才允许令牌开启验证履约。
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPaddleSimulatorWebhookUrl, buildPaddleWebhookUrl } from "./billing-webhook";
+import { buildPaddleWebhookUrl } from "./billing-webhook";
 
 describe("Paddle webhook URL", () => {
   it("uses the instance Admin/API origin and selected Paddle environment", () => {
@@ -12,11 +12,4 @@ describe("Paddle webhook URL", () => {
       .toBe("https://license.example.test/api/v1/webhooks/payments/my%20app/paddle/live");
   });
 
-  it("builds a separate Simulator-only endpoint", () => {
-    expect(buildPaddleSimulatorWebhookUrl(
-      "https://license.example.test/admin?ignored=1",
-      "3Jd9K_aP0qUwbL6F7sTn2Q",
-      "sandbox",
-    )).toBe("https://license.example.test/api/v1/webhooks/payments/3Jd9K_aP0qUwbL6F7sTn2Q/paddle/sandbox/simulator");
-  });
 });

@@ -97,20 +97,12 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       providerId,
       "webhook_secret_ciphertext",
     );
-    const encryptedSimulatorSecret = await encryptBillingProviderSecret(
-      simulatorWebhookSecret,
-      testEnv.env,
-      instanceId,
-      providerId,
-      "simulator_webhook_secret_ciphertext",
-    );
     db.prepare(
       `INSERT INTO billing_providers (
          id, instance_id, provider, environment, client_side_token,
-         webhook_secret_ciphertext, simulator_webhook_secret_ciphertext,
-         status, created_at, updated_at
-       ) VALUES (?, ?, 'paddle', 'sandbox', 'test_client_token_v1', ?, ?, 'active', ?, ?)`,
-    ).run(providerId, instanceId, encryptedSecret, encryptedSimulatorSecret, nowIso, nowIso);
+         webhook_secret_ciphertext, status, created_at, updated_at
+       ) VALUES (?, ?, 'paddle', 'sandbox', 'test_client_token_v1', ?, 'active', ?, ?)`,
+    ).run(providerId, instanceId, encryptedSecret, nowIso, nowIso);
     db.prepare(
       `INSERT INTO products (
          id, instance_id, name, billing_environment, status, created_at, updated_at
@@ -147,7 +139,6 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       client_side_token: "test_client_token_v1",
       webhook_secret_configured: true,
       webhook_verified_at: null,
-      simulator_webhook_secret_configured: true,
       simulator_test_completed_at: null,
       required_event_types: [
         "customer.created",
@@ -190,7 +181,6 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
         environment: "live",
         client_side_token: "live_admin_client_token_v1",
         webhook_secret: "live_webhook_secret_123456789",
-        simulator_webhook_secret: "live_simulator_webhook_secret_123456789",
       }),
     }, testEnv.env);
     expect(createResponse.status).toBe(201);
@@ -200,7 +190,6 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       client_side_token: "live_admin_client_token_v1",
       webhook_secret_configured: true,
       webhook_verified_at: null,
-      simulator_webhook_secret_configured: true,
       simulator_test_completed_at: null,
       api_key_configured: false,
     });
@@ -218,8 +207,6 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       client_side_token_valid: true,
       webhook_secret_decryptable: true,
       webhook_verified_at: null,
-      simulator_webhook_secret_configured: true,
-      simulator_webhook_secret_decryptable: true,
       simulator_test_completed_at: null,
       required_event_types: [
         "customer.created",
@@ -237,26 +224,87 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
         "adjustment.updated",
       ],
       api_key_configured: false,
+      api_key_customer_read: {
+        status: "not_configured",
+        operation: "customers.list",
+        error_code: null,
+        provider_code: null,
+        http_status: null,
+        request_id: null,
+        retry_after: null,
+        message: null,
+      },
     });
     expect(configurationCheckBody.data).not.toHaveProperty("signature_sample_verified");
     expectNoCamelCaseKeys(configurationCheckBody);
 
-    testEnv.sqliteDb.prepare("UPDATE billing_offers SET status = 'draft' WHERE id = 'off_one'").run();
-    const verificationResponse = await admin.request("http://test/offers/off_one/verification-config", {
-      method: "POST",
-    }, testEnv.env);
-    expect(verificationResponse.status).toBe(201);
-    const verificationBody = await verificationResponse.json() as any;
-    expect(verificationBody.data).toMatchObject({
-      verification_mode: true,
-      verification_token: expect.stringMatching(/^vfy_/),
-      expires_at: expect.any(String),
+    const testCheckoutResponse = await admin.request("http://test/offers/off_one/test-checkout-config", {}, testEnv.env);
+    expect(testCheckoutResponse.status).toBe(200);
+    const testCheckoutBody = await testCheckoutResponse.json() as any;
+    expect(testCheckoutBody.data).toMatchObject({
       checkout: {
         client_side_token: "test_client_token_v1",
         price_id: "pri_one123",
       },
     });
-    expectNoCamelCaseKeys(verificationBody);
+    expect(testCheckoutBody.data).not.toHaveProperty("verification_token");
+    expectNoCamelCaseKeys(testCheckoutBody);
+
+    testEnv.sqliteDb.prepare("UPDATE billing_offers SET status = 'draft' WHERE id = 'off_one'").run();
+    const draftCheckout = await admin.request("http://test/offers/off_one/test-checkout-config", {}, testEnv.env);
+    expect(draftCheckout.status).toBe(409);
+    expect((await draftCheckout.json() as any).error.code).toBe("BILLING_TEST_CHECKOUT_UNAVAILABLE");
+  });
+
+  it("probes the stored Paddle API key and retains Paddle's exact authentication error", async () => {
+    await configureProviderApiKey("Bearer pdl_sdbx_apikey_wrongly_prefixed");
+    const mockedFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(_url).toBe("https://sandbox-api.paddle.com/customers?per_page=1");
+      expect(init?.headers).toMatchObject({
+        Authorization: "Bearer Bearer pdl_sdbx_apikey_wrongly_prefixed",
+      });
+      return new Response(JSON.stringify({
+        error: { code: "authentication_malformed", detail: "Authentication header included, but incorrectly formatted." },
+        meta: { request_id: "req_paddle_malformed" },
+      }), { status: 403, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", mockedFetch);
+
+    const response = await billingAdminApp().request(`http://test/providers/${providerId}/test`, {
+      method: "POST",
+    }, testEnv.env);
+    expect(response.status).toBe(200);
+    expect((await response.json() as any).data.api_key_customer_read).toEqual({
+      status: "error",
+      operation: "customers.list",
+      error_code: "BILLING_PROVIDER_API_AUTH_INVALID",
+      provider_code: "authentication_malformed",
+      http_status: 403,
+      request_id: "req_paddle_malformed",
+      retry_after: null,
+      message: "Authentication header included, but incorrectly formatted.",
+    });
+    expect(mockedFetch).toHaveBeenCalledOnce();
+  });
+
+  it("confirms customer.read with the saved Sandbox key without returning customer data", async () => {
+    await configureProviderApiKey("pdl_sdbx_apikey_test_secret");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      data: [{ id: "ctm_private" }],
+      meta: { request_id: "req_paddle_customer_read" },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    const response = await billingAdminApp().request(`http://test/providers/${providerId}/test`, {
+      method: "POST",
+    }, testEnv.env);
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(body.data.api_key_customer_read).toEqual({
+      status: "ok", operation: "customers.list", error_code: null,
+      provider_code: null, http_status: 200, request_id: "req_paddle_customer_read",
+      retry_after: null, message: null,
+    });
+    expect(JSON.stringify(body)).not.toContain("ctm_private");
   });
 
   async function postEvent(rawBody: string, secret = webhookSecret) {
@@ -274,32 +322,21 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     return { response, body: await response.json() as any };
   }
 
-  async function postSimulatorEvent(rawBody: string, secret = simulatorWebhookSecret) {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = await computeHmacSha256(`${timestamp}:${rawBody}`, secret);
-    const response = await app.request(
-      `/api/v1/webhooks/payments/${instanceId}/paddle/sandbox/simulator`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", "paddle-signature": `ts=${timestamp};h1=${signature}` },
-        body: rawBody,
-      },
-      testEnv.env,
-    );
-    return { response, body: await response.json() as any };
+  async function postSimulatorEvent(rawBody: string, secret = webhookSecret) {
+    return postEvent(rawBody, secret);
   }
 
   async function paddleWebhookRequirements() {
     const provider = await testEnv.env.DB.prepare(
       `SELECT id, instance_id, api_secret_ciphertext,
-              simulator_webhook_secret_ciphertext, simulator_webhook_secret_version
+              webhook_secret_ciphertext, simulator_webhook_secret_version
        FROM billing_providers
        WHERE instance_id = ?1 AND id = ?2`,
     ).bind(instanceId, providerId).first<{
       id: string;
       instance_id: string;
       api_secret_ciphertext: string | null;
-      simulator_webhook_secret_ciphertext: string | null;
+      webhook_secret_ciphertext: string;
       simulator_webhook_secret_version: number;
     }>();
     if (!provider) throw new Error("Expected the Paddle provider fixture to exist.");
@@ -325,14 +362,13 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(legacyResponse.status).toBe(404);
   });
 
-  it("keeps platform and Simulator destinations separate while sharing signature parsing", async () => {
-    const payload = eventPayload("evt_sim_customer_updated", "customer.updated", {
+  it("routes signed Simulator events through the unified destination without fulfillment", async () => {
+    const payload = eventPayload("ntfsimevt_customer_updated", "customer.updated", {
       id: "ctm_sim_customer",
       email: "simulator@example.test",
     });
 
-    expect((await postSimulatorEvent(payload, webhookSecret)).response.status).toBe(401);
-    expect((await postEvent(payload, simulatorWebhookSecret)).response.status).toBe(401);
+    expect((await postSimulatorEvent(payload, simulatorWebhookSecret)).response.status).toBe(401);
 
     const accepted = await postSimulatorEvent(payload);
     expect(accepted.response.status).toBe(200);
@@ -361,7 +397,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ]);
 
     const unsupported = await postSimulatorEvent(eventPayload(
-      "evt_sim_product_updated",
+      "ntfsimevt_product_updated",
       "product.updated",
       { id: "pro_simulator" },
     ));
@@ -372,40 +408,58 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).get()).toEqual({ count: 1 });
   });
 
-  it("lets a migrated Provider add its initially absent Simulator secret", async () => {
-    testEnv.sqliteDb.prepare(
-      `UPDATE billing_providers
-       SET simulator_webhook_secret_ciphertext = NULL
-       WHERE instance_id = ? AND id = ?`,
-    ).run(instanceId, providerId);
+  it("rejects an unknown signed event source instead of treating it as a purchase", async () => {
+    const posted = await postEvent(eventPayload(
+      "unknown_customer_updated", "customer.updated", { id: "ctm_unknown" },
+    ));
+    expect(posted.response.status).toBe(422);
+    expect(posted.body.error.code).toBe("BILLING_WEBHOOK_SOURCE_UNKNOWN");
+    expect(testEnv.sqliteDb.prepare("SELECT count(*) AS count FROM inbound_events").get())
+      .toEqual({ count: 0 });
+  });
 
-    const admin = billingAdminApp();
-    const beforeResponse = await admin.request(`http://test/providers/${providerId}/test`, {
+  it("ignores a legacy misrouted Simulator purchase and refuses to replay it as a platform event", async () => {
+    const eventId = "ine_legacy_simulation";
+    const externalEventId = "ntfsimevt_legacy_purchase";
+    const rawBody = eventPayload(externalEventId, "transaction.completed", {
+      id: "txn_legacy_simulation",
+      items: [{ price: { id: "pri_one123" }, quantity: 1 }],
+    });
+    const ciphertext = await encryptInboundPayload(rawBody, testEnv.env, instanceId, eventId);
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO inbound_events (
+         id, instance_id, billing_provider_id, external_event_id, external_event_type,
+         payload_ciphertext, payload_hash, payload_expires_at, status,
+         received_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'transaction.completed', ?, ?, ?, 'pending', ?, ?)`,
+    ).run(
+      eventId, instanceId, providerId, externalEventId, ciphertext, await sha256Hex(rawBody),
+      new Date(Date.now() + 86_400_000).toISOString(), nowIso, nowIso,
+    );
+
+    const providers = await billingAdminApp().request("http://test/providers", {}, testEnv.env);
+    expect((await providers.json() as any).data.items[0].webhook_verified_at).toBeNull();
+    expect(await processEvent(eventId)).toEqual({ processed: true, status: "processed" });
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT status, result_type, last_error_code FROM inbound_events WHERE id = ?",
+    ).get(eventId)).toEqual({
+      status: "processed", result_type: "ignored_simulation_event", last_error_code: null,
+    });
+
+    testEnv.sqliteDb.prepare(
+      `UPDATE inbound_events SET status = 'needs_attention',
+         last_error_code = 'BILLING_OFFER_MAPPING_MISSING' WHERE id = ?`,
+    ).run(eventId);
+    const replay = await billingAdminApp().request(`http://test/events/${eventId}/replay`, {
       method: "POST",
     }, testEnv.env);
-    expect(beforeResponse.status).toBe(200);
-    expect((await beforeResponse.json() as any).data).toMatchObject({
-      simulator_webhook_secret_configured: false,
-      simulator_webhook_secret_decryptable: false,
-      simulator_test_completed_at: null,
-    });
-    expect((await postSimulatorEvent(eventPayload(
-      "evt_sim_without_secret",
-      "customer.created",
-      { id: "ctm_sim_without_secret" },
-    ))).response.status).toBe(503);
-
-    const saveResponse = await admin.request(`http://test/providers/${providerId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ simulator_webhook_secret: simulatorWebhookSecret }),
-    }, testEnv.env);
-    expect(saveResponse.status).toBe(200);
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as any).error.code).toBe("BILLING_EVENT_NOT_REPLAYABLE");
     expect(testEnv.sqliteDb.prepare(
-      `SELECT simulator_webhook_secret_ciphertext IS NOT NULL AS configured,
-              simulator_webhook_secret_version
-       FROM billing_providers WHERE id = ?`,
-    ).get(providerId)).toEqual({ configured: 1, simulator_webhook_secret_version: 2 });
+      "SELECT status, last_error_code FROM inbound_events WHERE id = ?",
+    ).get(eventId)).toEqual({
+      status: "needs_attention", last_error_code: "BILLING_OFFER_MAPPING_MISSING",
+    });
   });
 
   it("requires every selected event type and invalidates Simulator evidence after secret rotation", async () => {
@@ -418,7 +472,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ] as const;
     for (const [index, eventType] of oneTimeEventTypes.entries()) {
       const posted = await postSimulatorEvent(eventPayload(
-        `evt_sim_one_time_${index}`,
+        `ntfsimevt_one_time_${index}`,
         eventType,
         { id: `sim_one_time_${index}` },
       ));
@@ -465,7 +519,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
     for (const [index, eventType] of ["subscription.created", "subscription.updated"].entries()) {
       expect((await postSimulatorEvent(eventPayload(
-        `evt_sim_subscription_${index}`,
+        `ntfsimevt_subscription_${index}`,
         eventType,
         { id: `sub_simulator_${index}` },
       ))).response.status).toBe(200);
@@ -476,7 +530,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const rotationResponse = await billingAdminApp().request(`http://test/providers/${providerId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ simulator_webhook_secret: rotatedSecret }),
+      body: JSON.stringify({ webhook_secret: rotatedSecret }),
     }, testEnv.env);
     expect(rotationResponse.status).toBe(200);
     expect(testEnv.sqliteDb.prepare(
@@ -489,7 +543,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(afterRotation.completedAt).toBeNull();
 
     const afterRotationPayload = eventPayload(
-      "evt_sim_after_rotation",
+      "ntfsimevt_after_rotation",
       "transaction.completed",
       { id: "txn_sim_after_rotation" },
     );

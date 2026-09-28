@@ -21,21 +21,6 @@ export function encryptBillingProviderSecret(
   });
 }
 
-export function decryptBillingProviderSimulatorWebhookSecret(
-  provider: BillingProviderRecord,
-  env: BillingCryptoEnv,
-): Promise<string> {
-  if (!provider.simulator_webhook_secret_ciphertext) {
-    return Promise.reject(new Error("Paddle Simulator webhook secret is not configured."));
-  }
-  return decryptEnvelopeV1(provider.simulator_webhook_secret_ciphertext, env, {
-    instanceId: provider.instance_id,
-    table: "billing_providers",
-    rowId: provider.id,
-    field: "simulator_webhook_secret_ciphertext",
-  });
-}
-
 export function decryptBillingProviderWebhookSecret(
   provider: BillingProviderRecord,
   env: BillingCryptoEnv,

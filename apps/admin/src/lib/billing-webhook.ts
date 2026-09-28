@@ -11,15 +11,3 @@ export function buildPaddleWebhookUrl(
   url.hash = "";
   return url.toString();
 }
-
-export function buildPaddleSimulatorWebhookUrl(
-  adminApiUrl: string,
-  instanceId: string,
-  environment: BillingEnvironment,
-): string {
-  const url = new URL(adminApiUrl);
-  url.pathname = `/api/v1/webhooks/payments/${encodeURIComponent(instanceId)}/paddle/${environment}/simulator`;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}

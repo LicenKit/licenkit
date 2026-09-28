@@ -4,10 +4,9 @@ import { ulid } from "ulid";
 import type { AppContext } from "../../types";
 import { requireRole } from "../../middleware/auth";
 import { AppError, NotFoundError } from "../../middleware/error";
-import { assertPaddleClientToken } from "../../infra/billing/paddle";
+import { assertPaddleClientToken, probePaddleCustomerRead } from "../../infra/billing/paddle";
 import type { BillingProviderRecord } from "../../infra/billing/types";
 import {
-  decryptBillingProviderSimulatorWebhookSecret,
   decryptBillingProviderWebhookSecret,
   encryptBillingProviderSecret,
 } from "../../infra/billing/storage";
@@ -15,8 +14,7 @@ import { serializeBillingDiagnostic } from "../../infra/billing/redaction";
 import { evaluateBillingOfferReadiness, getBillingOfferReadinessRow } from "../../services/billing/readiness";
 import { reconcileBillingCustomer } from "../../services/billing/customer-sync";
 import { prepareLicenseKeyRotation } from "../../services/license/key-rotation";
-import { sha256Hex } from "../../infra/crypto";
-import { BillingProcessingError } from "../../infra/billing/errors";
+import { BillingProcessingError, PaddleHttpError } from "../../infra/billing/errors";
 import { dispatchDelivery } from "../../infra/delivery/dispatcher";
 import { toSnakeCaseJson } from "./snake-case-json";
 import { getPaddleWebhookRequirements } from "../../services/billing/webhook-requirements";
@@ -32,14 +30,12 @@ const ProviderCreateSchema = z.object({
   environment: z.enum(["sandbox", "live"]),
   client_side_token: z.string().min(6).max(512),
   webhook_secret: z.string().min(16).max(2048),
-  simulator_webhook_secret: z.string().min(16).max(2048),
   api_key: z.string().min(16).max(4096).optional(),
 }).strict().transform((input) => ({
   provider: input.provider,
   environment: input.environment,
   clientSideToken: input.client_side_token,
   webhookSecret: input.webhook_secret,
-  simulatorWebhookSecret: input.simulator_webhook_secret,
   apiKey: input.api_key,
 }));
 
@@ -48,7 +44,6 @@ const ProviderPatchSchema = z.object({
   environment: z.enum(["sandbox", "live"]).optional(),
   client_side_token: z.string().min(6).max(512).optional(),
   webhook_secret: z.string().min(16).max(2048).optional(),
-  simulator_webhook_secret: z.string().min(16).max(2048).optional(),
   api_key: z.string().min(16).max(4096).nullable().optional(),
   status: z.enum(["active", "disabled"]).optional(),
 }).strict().transform((input) => ({
@@ -56,7 +51,6 @@ const ProviderPatchSchema = z.object({
   environment: input.environment,
   clientSideToken: input.client_side_token,
   webhookSecret: input.webhook_secret,
-  simulatorWebhookSecret: input.simulator_webhook_secret,
   apiKey: input.api_key,
   status: input.status,
 }));
@@ -159,7 +153,7 @@ function assertPaddleClientTokenForRoute(environment: "sandbox" | "live", token:
 adminBillingRouter.get("/providers", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
   const result = await c.env.DB.prepare(
     `SELECT id, instance_id, provider, environment, client_side_token,
-            simulator_webhook_secret_ciphertext, simulator_webhook_secret_version,
+            webhook_secret_ciphertext, simulator_webhook_secret_version,
             api_secret_ciphertext,
             status, created_at, updated_at,
             (SELECT event.received_at
@@ -167,6 +161,7 @@ adminBillingRouter.get("/providers", requireRole(["owner", "admin", "member", "v
              WHERE event.instance_id = billing_providers.instance_id
                AND event.billing_provider_id = billing_providers.id
                AND event.webhook_secret_version = billing_providers.webhook_secret_version
+               AND substr(event.external_event_id, 1, 4) = 'evt_'
              ORDER BY event.received_at DESC
              LIMIT 1) AS webhook_verified_at
      FROM billing_providers
@@ -175,7 +170,7 @@ adminBillingRouter.get("/providers", requireRole(["owner", "admin", "member", "v
      LIMIT 100`,
   ).bind(instanceId(c)).all<{
     id: string; instance_id: string; provider: string; environment: string; client_side_token: string;
-    simulator_webhook_secret_ciphertext: string | null; simulator_webhook_secret_version: number;
+    webhook_secret_ciphertext: string; simulator_webhook_secret_version: number;
     api_secret_ciphertext: string | null; status: string; created_at: string; updated_at: string;
     webhook_verified_at: string | null;
   }>();
@@ -189,9 +184,8 @@ adminBillingRouter.get("/providers", requireRole(["owner", "admin", "member", "v
           provider: row.provider,
           environment: row.environment,
           client_side_token: row.client_side_token,
-          webhook_secret_configured: true,
+          webhook_secret_configured: requirements.webhookSecretConfigured,
           webhook_verified_at: row.webhook_verified_at,
-          simulator_webhook_secret_configured: requirements.simulatorSecretConfigured,
           simulator_test_completed_at: requirements.completedAt,
           required_event_types: requirements.requiredEventTypes,
           verified_event_types: requirements.verifiedEventTypes,
@@ -218,13 +212,6 @@ adminBillingRouter.post("/providers", requireRole(["owner", "admin"]), async (c)
     id,
     "webhook_secret_ciphertext",
   );
-  const simulatorWebhookCiphertext = await encryptBillingProviderSecret(
-    input.simulatorWebhookSecret,
-    c.env,
-    instanceId(c),
-    id,
-    "simulator_webhook_secret_ciphertext",
-  );
   const apiCiphertext = input.apiKey
     ? await encryptBillingProviderSecret(input.apiKey, c.env, instanceId(c), id, "api_secret_ciphertext")
     : null;
@@ -233,16 +220,14 @@ adminBillingRouter.post("/providers", requireRole(["owner", "admin"]), async (c)
       c.env.DB.prepare(
         `INSERT INTO billing_providers (
            id, instance_id, provider, environment, client_side_token,
-           webhook_secret_ciphertext, simulator_webhook_secret_ciphertext,
-           api_secret_ciphertext, status, created_at, updated_at
-         ) VALUES (?1, ?2, 'paddle', ?3, ?4, ?5, ?6, ?7, 'active', ?8, ?8)`,
+           webhook_secret_ciphertext, api_secret_ciphertext, status, created_at, updated_at
+         ) VALUES (?1, ?2, 'paddle', ?3, ?4, ?5, ?6, 'active', ?7, ?7)`,
       ).bind(
         id,
         instanceId(c),
         input.environment,
         input.clientSideToken,
         webhookCiphertext,
-        simulatorWebhookCiphertext,
         apiCiphertext,
         now,
       ),
@@ -270,7 +255,6 @@ adminBillingRouter.post("/providers", requireRole(["owner", "admin"]), async (c)
       client_side_token: input.clientSideToken,
       webhook_secret_configured: true,
       webhook_verified_at: null,
-      simulator_webhook_secret_configured: true,
       simulator_test_completed_at: null,
       api_key_configured: Boolean(input.apiKey),
       status: "active",
@@ -296,15 +280,6 @@ adminBillingRouter.patch("/providers/:providerId", requireRole(["owner", "admin"
   const webhookCiphertext = input.webhookSecret
     ? await encryptBillingProviderSecret(input.webhookSecret, c.env, provider.instance_id, provider.id, "webhook_secret_ciphertext")
     : provider.webhook_secret_ciphertext;
-  const simulatorWebhookCiphertext = input.simulatorWebhookSecret
-    ? await encryptBillingProviderSecret(
-        input.simulatorWebhookSecret,
-        c.env,
-        provider.instance_id,
-        provider.id,
-        "simulator_webhook_secret_ciphertext",
-      )
-    : provider.simulator_webhook_secret_ciphertext;
   const apiCiphertext = input.apiKey === undefined
     ? provider.api_secret_ciphertext
     : input.apiKey === null
@@ -316,16 +291,13 @@ adminBillingRouter.patch("/providers/:providerId", requireRole(["owner", "admin"
       `UPDATE billing_providers
        SET client_side_token = ?1, webhook_secret_ciphertext = ?2,
            webhook_secret_version = CASE WHEN ?3 = 1 THEN webhook_secret_version + 1 ELSE webhook_secret_version END,
-           simulator_webhook_secret_ciphertext = ?4,
-           simulator_webhook_secret_version = CASE WHEN ?5 = 1 THEN simulator_webhook_secret_version + 1 ELSE simulator_webhook_secret_version END,
-           api_secret_ciphertext = ?6, status = ?7, updated_at = ?8
-       WHERE instance_id = ?9 AND id = ?10`,
+           simulator_webhook_secret_version = CASE WHEN ?3 = 1 THEN simulator_webhook_secret_version + 1 ELSE simulator_webhook_secret_version END,
+           api_secret_ciphertext = ?4, status = ?5, updated_at = ?6
+       WHERE instance_id = ?7 AND id = ?8`,
     ).bind(
       clientToken,
       webhookCiphertext,
       input.webhookSecret !== undefined ? 1 : 0,
-      simulatorWebhookCiphertext,
-      input.simulatorWebhookSecret !== undefined ? 1 : 0,
       apiCiphertext,
       input.status ?? provider.status,
       now,
@@ -335,7 +307,6 @@ adminBillingRouter.patch("/providers/:providerId", requireRole(["owner", "admin"
     prepareAudit(c, "billing.provider.update", "billing_provider", provider.id, {
       clientSideTokenRotated: input.clientSideToken !== undefined,
       webhookSecretRotated: input.webhookSecret !== undefined,
-      simulatorWebhookSecretRotated: input.simulatorWebhookSecret !== undefined,
       apiKeyChanged: input.apiKey !== undefined,
       status: input.status ?? provider.status,
     }),
@@ -349,10 +320,38 @@ adminBillingRouter.post("/providers/:providerId/test", requireRole(["owner", "ad
   if (!provider) throw new NotFoundError("Billing Provider not found.");
   assertPaddleClientTokenForRoute(provider.environment, provider.client_side_token);
   const secret = await decryptBillingProviderWebhookSecret(provider, c.env);
-  const simulatorSecret = provider.simulator_webhook_secret_ciphertext
-    ? await decryptBillingProviderSimulatorWebhookSecret(provider, c.env)
-    : null;
   const requirements = await getPaddleWebhookRequirements(c.env.DB, provider);
+  let apiKeyCustomerRead: {
+    status: "ok" | "error" | "not_configured";
+    operation: "customers.list";
+    errorCode: string | null;
+    providerCode: string | null;
+    httpStatus: number | null;
+    requestId: string | null;
+    retryAfter: string | null;
+    message: string | null;
+  } = {
+    status: "not_configured", operation: "customers.list", errorCode: null,
+    providerCode: null, httpStatus: null, requestId: null, retryAfter: null, message: null,
+  };
+  if (provider.api_secret_ciphertext) {
+    try {
+      const result = await probePaddleCustomerRead(provider, c.env);
+      apiKeyCustomerRead = { ...apiKeyCustomerRead, status: "ok", httpStatus: 200, requestId: result.requestId };
+    } catch (error) {
+      if (!(error instanceof BillingProcessingError)) throw error;
+      apiKeyCustomerRead = {
+        ...apiKeyCustomerRead,
+        status: "error",
+        errorCode: error.code,
+        providerCode: error instanceof PaddleHttpError ? error.providerDetails.providerCode : null,
+        httpStatus: error instanceof PaddleHttpError ? error.providerDetails.httpStatus : null,
+        requestId: error instanceof PaddleHttpError ? error.providerDetails.requestId : null,
+        retryAfter: error instanceof PaddleHttpError ? error.providerDetails.retryAfter : null,
+        message: error.message,
+      };
+    }
+  }
   return c.json({
     success: true,
     data: {
@@ -362,13 +361,12 @@ adminBillingRouter.post("/providers/:providerId/test", requireRole(["owner", "ad
       client_side_token_valid: true,
       webhook_secret_decryptable: secret.length > 0,
       webhook_verified_at: provider.webhook_verified_at,
-      simulator_webhook_secret_configured: requirements.simulatorSecretConfigured,
-      simulator_webhook_secret_decryptable: simulatorSecret !== null && simulatorSecret.length > 0,
       simulator_test_completed_at: requirements.completedAt,
       required_event_types: requirements.requiredEventTypes,
       verified_event_types: requirements.verifiedEventTypes,
       missing_event_types: requirements.missingEventTypes,
       api_key_configured: requirements.apiKeyConfigured,
+      api_key_customer_read: toSnakeCaseJson(apiKeyCustomerRead),
     },
   });
 });
@@ -460,7 +458,7 @@ adminBillingRouter.patch("/offers/:offerId", requireRole(["owner", "admin"]), as
   return c.json({ success: true, data: { id: c.req.param("offerId"), status: "draft", updated_at: now } });
 });
 
-adminBillingRouter.post("/offers/:offerId/verification-config", requireRole(["owner", "admin"]), async (c) => {
+adminBillingRouter.get("/offers/:offerId/test-checkout-config", requireRole(["owner", "admin"]), async (c) => {
   const instance = instanceId(c);
   const row = await c.env.DB.prepare(
     `SELECT offer.id, offer.external_price_id,
@@ -469,42 +467,22 @@ adminBillingRouter.post("/offers/:offerId/verification-config", requireRole(["ow
      JOIN billing_providers AS provider
        ON provider.instance_id = offer.instance_id AND provider.id = offer.billing_provider_id
      WHERE offer.instance_id = ?1 AND offer.id = ?2
-       AND offer.status = 'draft' AND provider.status = 'active'
+       AND offer.status = 'active' AND provider.status = 'active'
        AND provider.environment = 'sandbox'
      LIMIT 1`,
   ).bind(instance, c.req.param("offerId")).first<any>();
   if (!row) {
     throw new AppError(
-      "BILLING_CHECKOUT_VERIFICATION_UNAVAILABLE",
-      "Checkout verification requires an active Paddle Sandbox Provider and a draft Offer.",
+      "BILLING_TEST_CHECKOUT_UNAVAILABLE",
+      "Test checkout requires an active Paddle Sandbox Provider and an active Offer.",
       409,
       { offer_id: c.req.param("offerId") },
     );
   }
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  const token = `vfy_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-  const tokenHash = await sha256Hex(token);
-  const id = `bcv_${ulid().toLowerCase()}`;
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 15 * 60_000).toISOString();
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT INTO billing_checkout_verifications (
-         id, instance_id, billing_offer_id, requested_by_user_id,
-         token_hash, status, expires_at, created_at, updated_at
-       ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?7)`,
-    ).bind(id, instance, row.id, c.get("userId"), tokenHash, expiresAt, now.toISOString()),
-    prepareAudit(c, "billing.checkout_verification.create", "billing_checkout_verification", id, {
-      offerId: row.id, expiresAt,
-    }),
-  ]);
   c.header("Cache-Control", "no-store");
   return c.json({
     success: true,
     data: {
-      verification_mode: true,
-      verification_token: token,
-      expires_at: expiresAt,
       checkout: {
         provider: "paddle",
         environment: "sandbox",
@@ -513,7 +491,7 @@ adminBillingRouter.post("/offers/:offerId/verification-config", requireRole(["ow
         quantity: 1,
       },
     },
-  }, 201);
+  });
 });
 
 adminBillingRouter.post("/offers/:offerId/activate", requireRole(["owner", "admin"]), async (c) => {
@@ -590,13 +568,14 @@ adminBillingRouter.post("/events/:eventId/replay", requireRole(["owner", "admin"
          updated_at = ?1
      WHERE instance_id = ?2 AND id = ?3
        AND status IN ('failed', 'needs_attention')
+       AND substr(external_event_id, 1, 4) = 'evt_'
        AND payload_ciphertext IS NOT NULL
        AND payload_expires_at > ?1`,
   ).bind(now, instanceId(c), c.req.param("eventId")).run();
   if (!result.meta.changes) {
     throw new AppError(
       "BILLING_EVENT_NOT_REPLAYABLE",
-      "Event is not in a replayable state or its encrypted payload expired.",
+      "Only a failed platform event with an unexpired encrypted payload can be replayed.",
       409,
       { event_id: c.req.param("eventId") },
     );
@@ -708,6 +687,7 @@ async function getProvider(
              WHERE event.instance_id = billing_providers.instance_id
                AND event.billing_provider_id = billing_providers.id
                AND event.webhook_secret_version = billing_providers.webhook_secret_version
+               AND substr(event.external_event_id, 1, 4) = 'evt_'
              ORDER BY event.received_at DESC
              LIMIT 1) AS webhook_verified_at
      FROM billing_providers WHERE instance_id = ?1 AND id = ?2 LIMIT 1`,

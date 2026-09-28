@@ -135,11 +135,11 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 
 一次性安装只补齐缺失 Binding，不覆盖已有配置。安装完成后 LicenKit 不读取、更新、删除或同步 Resend 中的模板；后续模板文案和样式由管理员直接在 Resend 管理。
 
-五种邮件合同分别测试并展示状态；Offer 激活只要求购买闭环直接依赖的 `customer.license_issued@1` Binding 当前测试通过。找回、安全重置、Customer Magic Link 和 Instance Invitation 未就绪不会阻止 Offer 激活，但会使对应服务能力保持未就绪。
+五种邮件合同分别测试并展示状态；Offer 激活只要求购买闭环直接依赖的 `customer.license_issued@1` Binding 已启用且邮件服务凭证可读取。邮件的真实投递结果在上线后的普通 Sandbox 购买中验证。找回、安全重置、Customer Magic Link 和 Instance Invitation 未就绪不会阻止 Offer 激活，但会使对应服务能力保持未就绪。
 
 产品页直接使用 Paddle.js，不调用 LicenKit Checkout API。Paddle Price ID 必须在 LicenKit Offer 中映射到明确的 Product 和 License Plan。
 
-每个 Paddle 环境都必须建立两条 URL Notification Destination：正式业务地址使用 Admin 显示的不带 `/simulator` URL，并把 `traffic_source` 设为 `platform`；测试地址使用带 `/simulator` URL，并把 `traffic_source` 设为 `simulation`。两条地址分别保存各自生成的 Secret，但订阅相同的当前必需事件清单。仅有一次性 Offer 时清单为 `customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在订阅 Offer 时再加入 `subscription.created`、`subscription.updated`。在 Paddle Simulator 中逐类发送 Single event，Admin 显示全部必需事件通过后才算完成 Simulator 合同测试。Simulator 结果不等于正式业务验证；Sandbox 还需执行真实 Checkout，Live 还需在上线后确认 Platform 目标收到真实事件。
+每个 Paddle 环境建立一条 URL Notification Destination：使用 Admin 显示的环境回调 URL，将 `traffic_source` 设为 `all`（Platform, Simulation），保存该目标生成的 Secret。迁移旧配置时停用旧 Simulation-only 目标。仅有一次性 Offer 时订阅 `customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在订阅 Offer 时再加入 `subscription.created`、`subscription.updated`。可在 Paddle Simulator 中逐类发送 Single event 检查模拟投递；这不是上线门禁，也不能替代真实购买。Sandbox 上线后通过管理后台发起普通购买测试，Live 上线后由管理员自行验证真实购买。
 
 ## 8. Customer Site 路由
 

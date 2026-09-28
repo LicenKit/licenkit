@@ -290,18 +290,26 @@ export interface ProviderTestResult {
   clientSideTokenValid: boolean;
   webhookSecretDecryptable: boolean;
   webhookVerifiedAt: IsoDateTime | null;
-  simulatorWebhookSecretConfigured: boolean;
-  simulatorWebhookSecretDecryptable: boolean;
   simulatorTestCompletedAt: IsoDateTime | null;
   requiredEventTypes: string[];
   verifiedEventTypes: string[];
   missingEventTypes: string[];
   apiKeyConfigured: boolean;
+  apiKeyCustomerRead: {
+    status: "ok" | "error" | "not_configured";
+    operation: "customers.list";
+    errorCode: string | null;
+    providerCode: string | null;
+    httpStatus: number | null;
+    requestId: string | null;
+    retryAfter: string | null;
+    message: string | null;
+  };
 }
 export interface BillingProvider {
   id: Identifier; provider: "paddle"; environment: BillingEnvironment; status: "active" | "disabled" | "configuration_error";
   clientSideToken?: string; clientSideTokenConfigured?: boolean; webhookSecretConfigured: boolean; apiKeyConfigured: boolean;
-  webhookVerifiedAt?: IsoDateTime | null; simulatorWebhookSecretConfigured?: boolean; simulatorTestCompletedAt?: IsoDateTime | null;
+  webhookVerifiedAt?: IsoDateTime | null; simulatorTestCompletedAt?: IsoDateTime | null;
   requiredEventTypes?: string[]; verifiedEventTypes?: string[]; missingEventTypes?: string[];
   apiCapabilities?: string[]; updatedAt?: IsoDateTime; readiness?: ReadinessReport;
 }
@@ -310,10 +318,7 @@ export interface BillingOffer {
   licensePlanId: Identifier; licensePlanName?: string; purchaseType: "one_time" | "subscription";
   status: "draft" | "active" | "archived"; readiness?: ReadinessReport; createdAt?: IsoDateTime;
 }
-export interface BillingVerificationConfig {
-  verificationMode: true;
-  verificationToken: string;
-  expiresAt: IsoDateTime;
+export interface BillingTestCheckoutConfig {
   checkout: {
     provider: "paddle";
     environment: "sandbox";
@@ -620,14 +625,14 @@ export const api = {
     billing: {
       providers: {
         list: () => request<ListResponse<BillingProvider>>("/admin/billing/providers", { scope: "admin" }),
-        create: (body: { provider: "paddle"; environment: BillingEnvironment; clientSideToken: string; webhookSecret: string; simulatorWebhookSecret: string; apiKey?: string }) => request<BillingProvider>("/admin/billing/providers", { method: "POST", body, scope: "admin" }),
-        update: (id: string, body: { clientSideToken?: string; webhookSecret?: string; simulatorWebhookSecret?: string; apiKey?: string | null; status?: "active" | "disabled" }) => request<BillingProvider>(`/admin/billing/providers/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
+        create: (body: { provider: "paddle"; environment: BillingEnvironment; clientSideToken: string; webhookSecret: string; apiKey?: string }) => request<BillingProvider>("/admin/billing/providers", { method: "POST", body, scope: "admin" }),
+        update: (id: string, body: { clientSideToken?: string; webhookSecret?: string; apiKey?: string | null; status?: "active" | "disabled" }) => request<BillingProvider>(`/admin/billing/providers/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
         test: (id: string) => request<ProviderTestResult>(`/admin/billing/providers/${encodeURIComponent(id)}/test`, { method: "POST", scope: "admin" }),
       },
       offers: {
         list: () => request<ListResponse<BillingOffer>>("/admin/billing/offers", { scope: "admin" }),
         create: (body: { billingProviderId: string; externalPriceId: string; productId: string; licensePlanId: string; purchaseType: "one_time" | "subscription" }) => request<BillingOffer>("/admin/billing/offers", { method: "POST", body, scope: "admin" }),
-        verificationConfig: (id: string) => requestEnvelope<BillingVerificationConfig>(`/admin/billing/offers/${encodeURIComponent(id)}/verification-config`, { method: "POST", scope: "admin" }),
+        testCheckoutConfig: (id: string) => requestEnvelope<BillingTestCheckoutConfig>(`/admin/billing/offers/${encodeURIComponent(id)}/test-checkout-config`, { scope: "admin" }),
         activate: (id: string) => request<BillingOffer>(`/admin/billing/offers/${encodeURIComponent(id)}/activate`, { method: "POST", scope: "admin" }),
         archive: (id: string) => request<BillingOffer>(`/admin/billing/offers/${encodeURIComponent(id)}/archive`, { method: "POST", scope: "admin" }),
       },

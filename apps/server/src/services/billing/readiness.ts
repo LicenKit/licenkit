@@ -1,5 +1,4 @@
 import type {
-  BillingProviderRecord,
   CheckoutReadiness,
   ReadinessCheck,
 } from "../../infra/billing/types";
@@ -7,7 +6,6 @@ import { assertPaddleClientToken } from "../../infra/billing/paddle";
 import { EMAIL_NOTIFICATION_CONTRACTS } from "../../domain/email/contracts";
 import { decryptEnvelopeV1, type DeliveryCryptoEnv } from "../../infra/delivery/crypto";
 import { getEmailProviderAdapter } from "../../infra/email/provider";
-import { getPaddleWebhookRequirements } from "./webhook-requirements";
 
 export interface BillingOfferReadinessRow {
   id: string;
@@ -26,10 +24,7 @@ export interface BillingOfferReadinessRow {
   provider_status: "active" | "disabled";
   provider_environment: "sandbox" | "live";
   client_side_token: string;
-  simulator_webhook_secret_ciphertext: string | null;
-  simulator_webhook_secret_version: number;
-  api_secret_ciphertext: string | null;
-  provider_updated_at: string;
+  webhook_secret_ciphertext: string;
 }
 
 function check(key: string, ready: boolean, reasonCode?: string, details?: Record<string, unknown>): ReadinessCheck {
@@ -49,9 +44,7 @@ export async function getBillingOfferReadinessRow(
        plan.license_model, plan.credential_mode, plan.status AS plan_status,
        provider.id AS provider_id, provider.status AS provider_status,
        provider.environment AS provider_environment,
-       provider.client_side_token, provider.simulator_webhook_secret_ciphertext,
-       provider.simulator_webhook_secret_version, provider.api_secret_ciphertext,
-       provider.updated_at AS provider_updated_at
+       provider.client_side_token, provider.webhook_secret_ciphertext
      FROM billing_offers AS offer
      JOIN products AS product
        ON product.instance_id = offer.instance_id AND product.id = offer.product_id
@@ -173,32 +166,6 @@ async function processingBacklogHealthy(db: D1Database, instanceId: string, now:
   return !result.results[0];
 }
 
-async function checkoutVerificationReady(
-  db: D1Database,
-  row: BillingOfferReadinessRow,
-): Promise<boolean> {
-  const result = await db.prepare(
-    `SELECT verification.id
-     FROM billing_checkout_verifications AS verification
-     JOIN billing_offers AS evidence_offer
-       ON evidence_offer.instance_id = verification.instance_id
-      AND evidence_offer.id = verification.billing_offer_id
-     JOIN billing_providers AS evidence_provider
-       ON evidence_provider.instance_id = evidence_offer.instance_id
-      AND evidence_provider.id = evidence_offer.billing_provider_id
-     WHERE verification.instance_id = ?1
-       AND verification.status = 'completed'
-       AND evidence_offer.product_id = ?2
-       AND evidence_offer.license_plan_id = ?3
-       AND evidence_offer.purchase_type = ?4
-       AND evidence_provider.environment = 'sandbox'
-     ORDER BY verification.completed_at DESC
-     LIMIT 1`,
-  ).bind(row.instance_id, row.product_id, row.license_plan_id, row.purchase_type)
-    .all<{ id: string }>();
-  return Boolean(result.results[0]);
-}
-
 export async function evaluateBillingOfferReadiness(
   db: D1Database,
   row: BillingOfferReadinessRow,
@@ -230,26 +197,10 @@ export async function evaluateBillingOfferReadiness(
   }
   checks.push(check("client_side_token", tokenReady, "CHECKOUT_PROVIDER_UNAVAILABLE"));
 
-  const webhookRequirements = await getPaddleWebhookRequirements(
-    db,
-    {
-      id: row.provider_id,
-      instance_id: row.instance_id,
-      api_secret_ciphertext: row.api_secret_ciphertext,
-      simulator_webhook_secret_ciphertext: row.simulator_webhook_secret_ciphertext,
-      simulator_webhook_secret_version: row.simulator_webhook_secret_version,
-    },
-  );
   checks.push(check(
-    "webhook_event_contract",
-    webhookRequirements.simulatorSecretConfigured && webhookRequirements.missingEventTypes.length === 0,
-    "CHECKOUT_CONFIGURATION_PENDING",
-    {
-      requiredEventTypes: webhookRequirements.requiredEventTypes,
-      verifiedEventTypes: webhookRequirements.verifiedEventTypes,
-      missingEventTypes: webhookRequirements.missingEventTypes,
-      simulatorSecretConfigured: webhookRequirements.simulatorSecretConfigured,
-    },
+    "webhook_secret",
+    Boolean(row.webhook_secret_ciphertext),
+    "CHECKOUT_PROVIDER_UNAVAILABLE",
   ));
 
   const email = await emailDeliveryReadiness(db, options.env, row.instance_id);
@@ -288,9 +239,6 @@ export async function evaluateBillingOfferReadiness(
   }
   checks.push(check("signing_key", signingKeyReady, "CHECKOUT_CONFIGURATION_PENDING"));
 
-  const verificationReady = await checkoutVerificationReady(db, row);
-  checks.push(check("sandbox_end_to_end_verification", verificationReady, "CHECKOUT_CONFIGURATION_PENDING"));
-
   if (!options.activation) {
     checks.push(check("offer_status", row.offer_status === "active", "NO_ACTIVE_OFFER"));
   }
@@ -299,22 +247,4 @@ export async function evaluateBillingOfferReadiness(
     checks.filter((item) => item.status !== "ready" && item.reasonCode).map((item) => item.reasonCode!),
   )];
   return { ready: publicReasonCodes.length === 0, publicReasonCodes, checks };
-}
-
-export function toProviderRecord(row: BillingOfferReadinessRow): BillingProviderRecord {
-  return {
-    id: row.provider_id,
-    instance_id: row.instance_id,
-    provider: "paddle",
-    environment: row.provider_environment,
-    client_side_token: row.client_side_token,
-    webhook_secret_ciphertext: "",
-    webhook_secret_version: 1,
-    simulator_webhook_secret_ciphertext: row.simulator_webhook_secret_ciphertext,
-    simulator_webhook_secret_version: row.simulator_webhook_secret_version,
-    api_secret_ciphertext: row.api_secret_ciphertext,
-    status: row.provider_status,
-    created_at: row.provider_updated_at,
-    updated_at: row.provider_updated_at,
-  };
 }

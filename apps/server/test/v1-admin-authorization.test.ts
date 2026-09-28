@@ -85,7 +85,7 @@ const OWNER_ADMIN_ROUTE_KEYS = [
   "POST /api/v1/admin/billing/offers",
   "POST /api/v1/admin/billing/offers/:offerId/activate",
   "POST /api/v1/admin/billing/offers/:offerId/archive",
-  "POST /api/v1/admin/billing/offers/:offerId/verification-config",
+  "GET /api/v1/admin/billing/offers/:offerId/test-checkout-config",
   "POST /api/v1/admin/billing/providers",
   "POST /api/v1/admin/billing/providers/:providerId/test",
   "POST /api/v1/admin/customers/:customerId/disable",

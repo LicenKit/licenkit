@@ -36,6 +36,13 @@
       "when": 1790571209702,
       "tag": "0004_client_validation_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1790606206313,
+      "tag": "0005_single_paddle_webhook",
+      "breakpoints": true
     }
   ]
 }

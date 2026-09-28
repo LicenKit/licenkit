@@ -1,14 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BillingVerificationConfig, SuccessEnvelope } from "./api-client";
-import { openVerificationCheckout, type PaddleRuntime } from "./verification-checkout";
+import type { BillingTestCheckoutConfig, SuccessEnvelope } from "./api-client";
+import { openSandboxTestCheckout, type PaddleRuntime } from "./sandbox-test-checkout";
 
-function response(): SuccessEnvelope<BillingVerificationConfig> {
+function response(): SuccessEnvelope<BillingTestCheckoutConfig> {
   return {
     success: true,
     data: {
-      verificationMode: true,
-      verificationToken: "vfy_one_time_secret",
-      expiresAt: "2026-09-20T08:00:00.000Z",
       checkout: {
         provider: "paddle",
         environment: "sandbox",
@@ -20,8 +17,8 @@ function response(): SuccessEnvelope<BillingVerificationConfig> {
   };
 }
 
-describe("openVerificationCheckout", () => {
-  it("loads authenticated configuration, opens one Sandbox Price, and clears the token", async () => {
+describe("openSandboxTestCheckout", () => {
+  it("opens the ordinary Sandbox checkout without a verification token", async () => {
     const payload = response();
     const checkoutOpen = vi.fn();
     const environmentSet = vi.fn();
@@ -32,23 +29,30 @@ describe("openVerificationCheckout", () => {
       Checkout: { open: checkoutOpen },
     };
 
-    await openVerificationCheckout(vi.fn(async () => payload), async () => paddle);
+    await openSandboxTestCheckout(vi.fn(async () => payload), async () => paddle);
 
     expect(environmentSet).toHaveBeenCalledWith("sandbox");
     expect(initialize).toHaveBeenCalledWith({ token: "test_client_token" });
     expect(checkoutOpen).toHaveBeenCalledWith({
       items: [{ priceId: "pri_monthly123", quantity: 1 }],
-      customData: { licenkit_checkout_verification: "vfy_one_time_secret" },
     });
-    expect(payload.data.verificationToken).toBe("");
   });
 
   it("fails before loading Paddle when the authenticated response is invalid", async () => {
     const loadPaddle = vi.fn();
-    await expect(openVerificationCheckout(
-      vi.fn(async () => ({ success: true, data: {} } as SuccessEnvelope<BillingVerificationConfig>)),
+    await expect(openSandboxTestCheckout(
+      vi.fn(async () => ({ success: true, data: {} } as SuccessEnvelope<BillingTestCheckoutConfig>)),
       loadPaddle,
-    )).rejects.toThrow("PADDLE_VERIFICATION_CONFIG_INVALID");
+    )).rejects.toThrow("PADDLE_TEST_CHECKOUT_CONFIG_INVALID");
     expect(loadPaddle).not.toHaveBeenCalled();
+  });
+
+  it("does not open checkout if Paddle.js cannot select Sandbox", async () => {
+    const checkoutOpen = vi.fn();
+    await expect(openSandboxTestCheckout(
+      vi.fn(async () => response()),
+      async () => ({ Initialize: vi.fn(), Checkout: { open: checkoutOpen } }),
+    )).rejects.toThrow("PADDLE_INITIALIZATION_FAILED");
+    expect(checkoutOpen).not.toHaveBeenCalled();
   });
 });

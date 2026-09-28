@@ -1411,6 +1411,20 @@ export async function processBillingInboundEvent(input: {
   }
 
   try {
+    // A Simulator event stored by an older webhook route must never enter the
+    // platform fulfillment path when the scheduler encounters it later.
+    if (event.external_event_id.startsWith("ntfsimevt_")) {
+      await markProcessed(input.env.DB, event, input.workerId, "ignored_simulation_event", null, now.toISOString());
+      return { processed: true, status: "processed" };
+    }
+    if (!event.external_event_id.startsWith("evt_")) {
+      throw new BillingProcessingError(
+        "BILLING_WEBHOOK_SOURCE_UNKNOWN",
+        "Stored Paddle event ID does not identify a platform event.",
+        "needs_attention",
+        { inboundEventId: event.id, externalEventId: event.external_event_id },
+      );
+    }
     const payload = await loadEventPayload(input.env, event, now);
     const provider = await getBillingProvider(input.env.DB, event.instance_id, event.billing_provider_id);
     if (!provider || provider.provider !== "paddle") {

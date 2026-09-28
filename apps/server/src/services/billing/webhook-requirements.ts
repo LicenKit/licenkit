@@ -7,7 +7,7 @@ export interface PaddleWebhookRequirements {
   missingEventTypes: PaddleSupportedEventType[];
   includesSubscriptionOffers: boolean;
   apiKeyConfigured: boolean;
-  simulatorSecretConfigured: boolean;
+  webhookSecretConfigured: boolean;
   completedAt: string | null;
 }
 
@@ -18,7 +18,7 @@ export async function getPaddleWebhookRequirements(
     | "id"
     | "instance_id"
     | "api_secret_ciphertext"
-    | "simulator_webhook_secret_ciphertext"
+    | "webhook_secret_ciphertext"
     | "simulator_webhook_secret_version"
   >,
 ): Promise<PaddleWebhookRequirements> {
@@ -50,8 +50,8 @@ export async function getPaddleWebhookRequirements(
   const verified = new Map(evidence.results.map((row) => [row.event_type, row.verified_at]));
   const verifiedEventTypes = requiredEventTypes.filter((eventType) => verified.has(eventType));
   const missingEventTypes = requiredEventTypes.filter((eventType) => !verified.has(eventType));
-  const simulatorSecretConfigured = Boolean(provider.simulator_webhook_secret_ciphertext);
-  const completedAt = simulatorSecretConfigured && missingEventTypes.length === 0
+  const webhookSecretConfigured = Boolean(provider.webhook_secret_ciphertext);
+  const completedAt = webhookSecretConfigured && missingEventTypes.length === 0
     ? verifiedEventTypes.reduce<string | null>((latest, eventType) => {
         const verifiedAt = verified.get(eventType) ?? null;
         return !latest || (verifiedAt && verifiedAt > latest) ? verifiedAt : latest;
@@ -63,7 +63,7 @@ export async function getPaddleWebhookRequirements(
     missingEventTypes,
     includesSubscriptionOffers,
     apiKeyConfigured,
-    simulatorSecretConfigured,
+    webhookSecretConfigured,
     completedAt,
   };
 }

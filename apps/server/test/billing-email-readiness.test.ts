@@ -27,7 +27,7 @@ const OFFER_ROW: BillingOfferReadinessRow = {
   provider_status: "active",
   provider_environment: "sandbox",
   client_side_token: "test_billing_email_readiness",
-  provider_updated_at: NOW.toISOString(),
+  webhook_secret_ciphertext: "encrypted_webhook_secret",
 };
 
 describe("Billing Email Delivery Readiness", () => {
@@ -94,6 +94,23 @@ describe("Billing Email Delivery Readiness", () => {
     expect(result.checks.map((item) => item.key)).not.toContain("email_system_issues");
     expect(result.checks.map((item) => item.key)).not.toContain("scheduled_worker_health");
     expect(check(result, "email_template_bindings").status).toBe("ready");
+  });
+
+  it("allows each environment to activate before its first real purchase test", async () => {
+    await seedIntegration();
+    seedBindings([LICENSE_ISSUED]);
+    const sandbox = await evaluate();
+    expect(sandbox.ready).toBe(true);
+    expect(sandbox.checks.map((item) => item.key)).not.toContain("sandbox_end_to_end_verification");
+    expect(sandbox.checks.map((item) => item.key)).not.toContain("webhook_event_contract");
+
+    const live = await evaluateBillingOfferReadiness(testEnv.d1, {
+      ...OFFER_ROW,
+      billing_environment: "live",
+      provider_environment: "live",
+      client_side_token: "live_billing_email_readiness",
+    }, { env: testEnv.env, activation: true, now: NOW });
+    expect(live.ready).toBe(true);
   });
 
   it("does not let unrelated email Bindings replace the purchase email Binding", async () => {

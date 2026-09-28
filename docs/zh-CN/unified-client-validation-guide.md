@@ -4,7 +4,7 @@
 
 ## 1. 先理解一次校验返回的内容
 
-`validate()` 的结果包含两个互不替代的层次：
+`validate(trigger:)` 的结果包含两个互不替代的层次：
 
 1. **本次操作结果**：这次调用成功取得了可信结论、因为冷却期而没有发请求，还是执行失败。
 2. **当前授权快照**：用户处于未激活、Trial、正式 License、当前版本不受支持等哪一种状态。
@@ -12,10 +12,10 @@
 这一区分会直接影响界面行为：
 
 - `success` 只表示校验过程成功完成；其中的授权状态仍可能是到期、暂停、吊销或当前版本不受支持。
-- `notPerformed(.cooldown)` 是正常的客户端流控结果，不是错误。SDK 返回当前缓存快照；它是否还能放行功能，仍以 `isUsable()` 为准。
+- `notPerformed(.minimumInterval)` 与 `notPerformed(.productInterval)` 是不同的本地未执行结果，不是服务端错误。SDK 返回当前缓存快照；它是否还能放行功能，仍以 `isUsable()` 为准。
 - `failure` 表示本次没有形成新的可信结论。断网、DNS、TLS、超时、服务端故障或凭据认证失败都不能改写成“License 已到期”。
 
-授权快照还会给出证据来源和新鲜度。只有 Trial 或 License 为 active，并且快照仍然 fresh，`isUsable()` 才会返回 `true`。功能开关还要继续通过 `hasFeature()` 检查。
+授权快照还会给出证据来源和新鲜度。Trial 或 License 为 active、业务未到期且 Signed 凭据未被判定无效时，`isUsable()` 可以返回 `true`；仅因在线复核间隔或离线宽限期经过，不会停止授权。功能开关还要继续通过 `hasFeature()` 检查。
 
 ## 2. Server、SDK 与宿主 App 的职责
 
@@ -38,9 +38,9 @@ SDK 是客户端授权事实的唯一入口，负责：
 - 按“正式 License、Trial、无凭据”的顺序选择校验对象；
 - 将 Server 响应转换为 `EntitlementSnapshot`；
 - 把 Machine Token、Trial Token 与签名凭据保存在 Keychain；
-- 使用 Server 校验间隔和固定 30 秒请求冷却，共同判断本次 `validate()` 是否联网；
+- 按宿主传入的主动/静默意图、Product 在线复核间隔和固定 30 秒请求限制判断本次 `validate(trigger:)` 是否联网；
 - 合并同一 Product 和设备上的并发校验请求；
-- 校验 Signed License Token，并把业务期限、签名期限和在线校验窗口中的最早边界作为本地可用截止；
+- 校验 Signed License Token；本地可用性由业务状态、业务期限和签名有效性决定，在线复核间隔与离线宽限只影响复核和提示；
 - 在错误中保留诊断信息，不把传输失败转换成业务状态。
 
 SDK 不包含 SwiftUI/AppKit 授权界面，不启动后台定时器，不在冷却结束时自动联网，也不自动重试失败请求。
@@ -107,52 +107,50 @@ Signed License Token 不包含 `exp`，响应也没有独立的 Signed Token 到
 
 | 场景 | 宿主调用 | 处理方式 |
 | --- | --- | --- |
-| SDK 配置后的冷启动 | `validate()` 一次 | 用结果建立首个界面快照 |
-| App 再次进入前台 | 可以调用 `validate()` 一次 | SDK 决定返回缓存还是联网 |
+| SDK 配置后的冷启动 | `validate(trigger: .silent)` 一次 | 用结果建立首个界面快照 |
+| App 再次进入前台 | 可以调用 `validate(trigger: .silent)` 一次 | SDK 决定返回缓存还是联网 |
 | View 重绘、菜单展开、窗口切换 | 不调用网络操作 | 只读取当前快照 |
-| 用户使用受保护功能 | 先读 `freshness()` 与 `hasFeature()` | 只有需要新证据时才调用 `validate()` |
+| 用户使用受保护功能 | 先读 `hasFeature()` 与 `isUsable()` | 只有需要新证据时才调用 `validate(trigger: .userInitiated)` |
 | 用户点击“开始试用” | `startTrial()` | 成功结果已经包含新快照 |
 | 用户提交注册码 | `activate()` | 成功结果已经包含新快照 |
 | 用户点击“解绑此设备” | `deactivate()` | 只有远端确认后才视为成功 |
-| 用户在失败界面点击重试 | `validate()` | SDK按在线复核间隔与 30 秒请求门槛判断是否发起新请求 |
+| 用户在失败界面点击重试 | `validate(trigger: .userInitiated)` | 跳过 Product 间隔，仍受固定 30 秒限制 |
 
-冷却结束只表示下一次 `validate()` 可以联网。若宿主没有调用，SDK 不会创建任务、发事件或自动请求。不要用每小时 Timer、View 生命周期或按钮 hover 模拟自动校验。
+门槛结束只表示下一次 `validate(trigger:)` 可能联网。若宿主没有调用，SDK 不会创建任务、发事件或自动请求。不要用每小时 Timer、View 生命周期或按钮 hover 模拟自动校验。
 
-### `validate()` 的两个冷却
+### `validate(trigger:)` 的两个请求门槛
 
-冷却只约束 `validate()`。`activate()`、`startTrial()` 和 `deactivate()` 是用户明确触发的操作，既不受这两个门槛限制，也不写入 `lastValidateResponseAt`。
+请求门槛只约束 `validate(trigger:)`。`activate()`、`startTrial()` 和 `deactivate()` 是用户明确触发的其他业务操作，不受这两个门槛限制，也不写入 `lastValidateResponseAt`。
 
 `activate()` 和 `startTrial()` 的成功快照仍可携带 Server `validatedAt`，因为 Server 确实在该操作中确认了授权业务状态；这个时间不是 `validate()` 请求冷却的起算点。
 
-SDK 在 `validate()` 中同时使用：
+SDK 在 `validate(trigger:)` 中使用两个独立的时间事实：
 
-- Server 返回的 `validation_interval_seconds`：控制常规在线复核频率；
-- 固定 30 秒请求冷却：防止失败界面、生命周期通知或重复点击在短时间内持续请求 Server。
+- `lastValidateResponseAt + validation_interval_seconds`：只限制静默调用的常规在线复核。合法业务响应及明确 HTTP 失败才推进最近响应时间；
+- 最近一次实际请求尝试时间 + 30 秒：限制所有新请求，包括随后超时、断网或收到非法正文的尝试。
 
-两者都从最近一次 `validate()` 得到明确 Server 结果的时间 `lastValidateResponseAt` 开始计算。对 opaque License、Trial、无凭据查询和有效的 signed License，两个窗口都结束后才允许再次联网。若 Signed License Token 本地验证失败，SDK 会绕过 `validation_interval_seconds` 窗口，以便尽快向 Server 重新取得可信凭据；固定 30 秒冷却仍然生效。
+用户明确点击检查或重试时传入 `.userInitiated`，跳过 Product 间隔；应用启动、进入前台等传入 `.silent`。静默调用在缓存的 active Trial/License 首次到达已知业务到期、宿主 Release 版本/平台/架构变化后首次复核，或 Signed Token 本地失效时，也跳过 Product 间隔。到期和 Release 变化各只允许一次提前静默尝试；已由 Server 确认的到期终态不持续豁免。所有情况仍受固定 30 秒限制。无参数 `validate()` 暂按 `.silent` 执行，并已弃用。
 
-| 当前情况 | `validation_interval_seconds` 窗口 | 固定 30 秒窗口 | 本次 `validate()` |
+| 当前情况 | 固定 30 秒 | Product 间隔 | 本次结果 |
 | --- | --- | --- | --- |
-| opaque、Trial、无凭据或有效 signed | 尚未结束 | 任意 | 返回 `notPerformed(.cooldown)` |
-| opaque、Trial、无凭据或有效 signed | 已结束 | 尚未结束 | 返回 `notPerformed(.cooldown)` |
-| opaque、Trial、无凭据或有效 signed | 已结束 | 已结束 | 发起一次 Server 请求 |
-| signed Token 本地验证失败 | 直接绕过 | 尚未结束 | 返回 `notPerformed(.cooldown)` |
-| signed Token 本地验证失败 | 直接绕过 | 已结束 | 发起一次 Server 请求 |
-| 从未得到过明确的 validate Server 结果 | 没有起算点 | 没有起算点 | 发起一次 Server 请求 |
+| 任意新校验请求 | 尚未结束 | 任意 | `notPerformed(.minimumInterval)`；代码 `SDK_VALIDATION_MIN_INTERVAL`，附剩余时间 |
+| 常规静默调用 | 已结束 | 尚未结束 | `notPerformed(.productInterval)`；代码 `SDK_VALIDATION_PRODUCT_INTERVAL`，附下次可复核时间 |
+| 用户主动、首次到期、Release 变化首次或 Signed Token 本地失效 | 已结束 | 豁免 | 发起一次 Server 请求 |
+| 常规静默调用 | 已结束 | 已结束或没有旧响应 | 发起一次 Server 请求 |
 
-冷却只决定“现在是否再次发请求”，不决定授权是否可用。Signed Token 本地验证失败时，`notPerformed(.cooldown)` 不会把旧快照恢复成可用；超过离线宽限期但凭据仍有效时，`isUsable()` 仍为 `true`，宿主应根据 `offlineGraceExceeded` 显示强提示。
+两个未执行原因都是 SDK 本地结果，没有新请求，也没有 Request ID；服务端 HTTP 429 继续作为原始错误返回。门槛只决定“现在是否再次发请求”，不决定授权是否可用。Signed Token 本地验证失败时，缓存快照不会恢复成可用；缺少或无效的内置公钥则保留配置错误，不靠联网重试。超过离线宽限期但凭据仍有效时，`isUsable()` 仍为 `true`，宿主应根据 `offlineGraceExceeded` 显示强提示。
 
 `lastValidateResponseAt` 是请求节流事实，`validatedAt` 是 Server 成功确认业务状态的时间，二者不能混用：
 
-| `validate()` 结果 | 更新 `lastValidateResponseAt` | 推进 `validatedAt` |
-| --- | --- | --- |
-| 合法 2xx 业务结果，包括到期、暂停、吊销等不可用状态 | 是 | 是，使用 Server 返回值 |
-| 明确收到 HTTP 失败，例如 401、403、429、500 | 是 | 否 |
-| 连接超时、DNS、TLS 或其他未收到 HTTP 响应的失败 | 否 | 否 |
-| HTTP 2xx 但响应缺少合法业务数据或不能通过合同校验 | 否 | 否 |
-| `notPerformed(.cooldown)`，没有发请求 | 否 | 否 |
+| `validate` 结果 | 记录请求尝试 | 更新 `lastValidateResponseAt` | 推进 `validatedAt` |
+| --- | --- | --- | --- |
+| 合法 2xx 业务结果，包括到期、暂停、吊销等不可用状态 | 是 | 是 | 是，使用 Server 返回值 |
+| 明确收到 HTTP 失败，例如 401、403、429、500 | 是 | 是 | 否 |
+| 连接超时、DNS、TLS 或其他未收到 HTTP 响应的失败 | 是 | 否 | 否 |
+| HTTP 2xx 但响应缺少合法业务数据或不能通过合同校验 | 是 | 否 | 否 |
+| `notPerformed`，没有发请求 | 否 | 否 | 否 |
 
-因此，“失败不推进 `validatedAt`”仍然成立，但不等于“失败不产生请求冷却”。明确 HTTP 失败会启动两个请求冷却，避免持续打向已经明确拒绝或故障的 Server；没有收到 HTTP 响应，或收到无法形成合法业务结果的 2xx，则不会改写这个起算点。
+因此，“失败不推进 `validatedAt`”仍然成立；请求只要发起尝试就受固定 30 秒限制。没有收到 HTTP 响应，或收到无法形成合法业务结果的 2xx，不会推进 Product 间隔所用的 `lastValidateResponseAt`。
 
 ## 5. 建立应用级授权控制器
 
@@ -167,14 +165,19 @@ final class LicenseController: ObservableObject {
     @Published private(set) var snapshot: EntitlementSnapshot?
     @Published private(set) var lastKnownSnapshot: EntitlementSnapshot?
     @Published private(set) var lastError: LicenKitError?
+    @Published private(set) var retryAfterSeconds: TimeInterval?
     @Published private(set) var isPerformingUserAction = false
 
     func validateForLaunch() async {
-        apply(await LicenKit.shared.validate())
+        apply(await LicenKit.shared.validate(trigger: .silent))
     }
 
     func validateForForeground() async {
-        apply(await LicenKit.shared.validate())
+        apply(await LicenKit.shared.validate(trigger: .silent))
+    }
+
+    func validateForUserRetry() async {
+        apply(await LicenKit.shared.validate(trigger: .userInitiated))
     }
 
     func startTrial() async {
@@ -227,16 +230,24 @@ final class LicenseController: ObservableObject {
             snapshot = value
             lastKnownSnapshot = nil
             lastError = nil
+            retryAfterSeconds = nil
 
-        case let .notPerformed(.cooldown, cachedValue, _):
+        case let .notPerformed(.minimumInterval(retryAfter), cachedValue, _):
             if let cachedValue {
                 snapshot = cachedValue
             }
             lastError = nil
+            retryAfterSeconds = retryAfter
+
+        case let .notPerformed(.productInterval, cachedValue, _):
+            if let cachedValue { snapshot = cachedValue }
+            lastError = nil
+            retryAfterSeconds = nil
 
         case let .failure(error, lastKnownValue, _):
             lastKnownSnapshot = lastKnownValue
             lastError = error
+            retryAfterSeconds = nil
         }
     }
 }
@@ -296,7 +307,7 @@ func performProExport(using controller: LicenseController) async {
 }
 ```
 
-`hasFeature()` 是纯本地读取，不会隐式联网。快照的在线窗口、业务到期时间或签名 Token 期限任一结束后，它会返回 `false`。此时由宿主选择一个明确调用点执行 `validate()`。
+`hasFeature()` 是纯本地读取，不会隐式联网。active 业务到期、业务终态或 Signed 凭据被判定无效时，它返回 `false`；仅超过在线复核间隔或离线宽限期不会使它返回 `false`。宿主需要新证据时，在明确的调用点执行 `validate(trigger:)`。
 
 ## 8. 激活、Trial 与解绑
 
@@ -384,15 +395,15 @@ CLI 不是宿主 App 的授权运行时。App 不应通过启动子进程调用 
 迁移时逐项确认：
 
 - [ ] 删除宿主对 `validateTrial()`、`checkLocalStatus()`、`clearLocalTrial()` 和 `cachedStatus` 的直接调用；
-- [ ] 所有当前授权判断改为一个 `validate()`；
+- [ ] 所有当前授权判断改为一个 `validate(trigger:)`，按用户主动或宿主静默调用显式传入意图；
 - [ ] 不再把 `validate()` 视为“正式 License 专用”；
 - [ ] 删除宿主自己的固定间隔 Timer、自动重试和宽限期计算；
 - [ ] 用 `EntitlementSnapshot` 代替持久化的 `isPro`、`trialExpired` 等第二份事实；
 - [ ] 对 `success` 继续检查 `state`、`freshness()` 与 feature；
-- [ ] 把 `notPerformed(.cooldown)` 作为正常分支；
+- [ ] 分别处理 `notPerformed(.minimumInterval)` 与 `notPerformed(.productInterval)`；用户主动时可提示前者的剩余时间；
 - [ ] `failure` 保留原始错误，不转换成授权终态；
-- [ ] 分开保存业务事实时间 `validatedAt` 与请求冷却时间 `lastValidateResponseAt`；
-- [ ] 明确 HTTP 失败只更新请求冷却，不推进 `validatedAt`；无 HTTP 响应和非法 2xx 两者都不更新；
+- [ ] 区分业务事实时间 `validatedAt`、Product 间隔起点 `lastValidateResponseAt` 与最近实际请求尝试时间；
+- [ ] 明确任何请求尝试都启动固定 30 秒；只有合法业务响应或明确 HTTP 失败推进 Product 间隔起点；
 - [ ] Trial 只在用户明确操作时领取；
 - [ ] 激活或开始 Trial 成功后不追加 `validate()`；
 - [ ] 解绑失败时不清除本地凭据；
@@ -410,15 +421,15 @@ Server 的旧 `POST /api/v1/client/trials/validate` 已由统一 `POST /api/v1/c
 
 ### `validate()` 没有产生网络请求
 
-若结果是 `notPerformed(.cooldown)`，这是预期行为。先区分 `validatedAt` 与 `lastValidateResponseAt`：前者是最近一次成功业务校验，后者是两个请求冷却的起算点。明确 HTTP 失败会更新后者但不会推进前者；连接超时、DNS、TLS、未收到 HTTP 响应，以及 2xx 无合法业务数据都不会更新后者。`activate()`、`startTrial()` 和 `deactivate()` 也不写这个时间。
+若结果是 `notPerformed(.minimumInterval)`，检查最近一次实际 `/validate` 请求尝试是否不足 30 秒；用户主动操作可显示 `retryAfter`。若结果是 `notPerformed(.productInterval)`，说明本次是静默调用且尚未达到 Product 间隔；检查宿主是否把用户点击误标为 `.silent`。`validatedAt` 是最近一次合法业务校验，`lastValidateResponseAt` 是 Product 间隔的起算点。明确 HTTP 失败会更新后者但不会推进前者；连接超时、DNS、TLS、未收到 HTTP 响应，以及非法 2xx 都不更新后者，但会记录本次请求尝试。`activate()`、`startTrial()` 和 `deactivate()` 不启动这两个门槛。
 
 ### App 一直不重新校验
 
-SDK 不会在冷却结束时自动调用 Server。检查宿主是否在冷启动、进入前台或受保护功能发现 `validationRequired` 时主动调用了 `validate()`。
+SDK 不会在门槛结束时自动调用 Server。检查宿主是否在冷启动、进入前台或受保护功能需要新证据时调用了对应意图的 `validate(trigger:)`。
 
 ### 明明是永久 License，仍要求联网
 
-永久 License 没有业务到期时间，但不是永久离线凭据。在线校验窗口或 Signed License Token 到期后，下一次宿主主动调用仍需联网。
+永久 License 没有业务到期时间，但并非不再接受在线复核。Product 间隔结束后，下一次宿主静默调用会联网；用户主动检查可在固定 30 秒门槛结束后联网。Signed License Token 没有独立的 `exp` 到期字段。
 
 ### 用户断网后界面显示“License 已到期”
 
@@ -447,13 +458,13 @@ SDK 在发请求前已经把客户端生成的 Trial Token 写入 Trial 验证�
 - License active、expired、suspended、revoked；
 - Activation revoked、deactivated；
 - Release unknown、update entitlement required；
-- 常规状态在 Server interval 或固定 30 秒任一窗口内时零网络请求；
-- Signed Token 本地验证失败时绕过 Server interval，但仍遵守固定 30 秒；
+- 用户主动与静默调用正确区分；静默 Product 间隔与固定 30 秒分别返回独立的未执行原因和代码；
+- Trial/License 首次业务到期、Release 身份变化首次静默复核及 Signed Token 本地失效跳过 Product 间隔，但仍遵守固定 30 秒；
 - 明确 HTTP 失败更新 `lastValidateResponseAt`，但不推进 `validatedAt`；
-- 连接超时、DNS、TLS、无 HTTP 响应及 2xx 非法业务数据不更新两个时间；
+- 连接超时、DNS、TLS、无 HTTP 响应及 2xx 非法业务数据不推进 `validatedAt` 或 `lastValidateResponseAt`，但记录请求尝试并启动固定 30 秒；
 - 冷却结束但宿主未调用时零网络请求；
 - 并发 `validate()` 只产生一次 Server 请求；
-- 传输失败不推进 `validatedAt`，也不改变成业务终态；请求冷却是否更新按是否收到明确 HTTP 结果判断；
+- 传输失败不推进 `validatedAt`，也不改变成业务终态；Product 间隔是否推进按是否收到明确 HTTP 结果判断；
 - Trial/License 业务期限到达时停止授权；在线复核间隔与离线宽限期本身不停止授权；
 - 激活清除 Trial 凭据，解绑失败保留 License 凭据；
 - 错误日志保留 code、request ID 和安全 details，且没有敏感 Token。
