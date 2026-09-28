@@ -235,7 +235,7 @@ describe("User and Instance database schema", () => {
       ).run(id, planID, mode, ttl, `hash_${id}`, now, now);
     }
 
-    applyMigrationFile(db, "0004_client_validation_policy.sql");
+    db.transaction(() => applyMigrationFile(db, "0004_client_validation_policy.sql"))();
 
     expect(db.prepare(
       "SELECT id, offline_grace_seconds FROM license_plans ORDER BY id",
@@ -254,6 +254,32 @@ describe("User and Instance database schema", () => {
     ).get()).toEqual({ validation_interval_seconds: 3_600 });
     expect(db.pragma("foreign_key_check")).toEqual([]);
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  });
+
+  it("rolls back migration 0004 if existing rows violate foreign keys", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    for (const file of [
+      "0000_v1_initial.sql",
+      "0001_webhook_verification_evidence.sql",
+      "0002_paddle_simulator_verification.sql",
+      "0003_split_release_platform_arch.sql",
+    ]) applyMigrationFile(db, file);
+
+    db.pragma("foreign_keys = OFF");
+    db.prepare(
+      `INSERT INTO admin_sessions (
+         id, user_id, session_token_hash, csrf_token_hash, expires_at, created_at
+       ) VALUES ('ses_orphan', 'usr_missing', 'token_hash', 'csrf_hash', ?, ?)`,
+    ).run(future, now);
+    db.pragma("foreign_keys = ON");
+
+    expect(() => db.transaction(() => applyMigrationFile(db, "0004_client_validation_policy.sql"))())
+      .toThrow(/ck_migration_fk_guard/);
+    expect(columns(db, "license_plans")).toContain("signed_token_ttl_seconds");
+    expect(columns(db, "license_plans")).not.toContain("offline_grace_seconds");
+    expect(db.prepare("SELECT user_id FROM admin_sessions WHERE id = 'ses_orphan'").get())
+      .toEqual({ user_id: "usr_missing" });
   });
 
   it("keeps User global, Session Instance-free, and the fresh database uninitialized", () => {

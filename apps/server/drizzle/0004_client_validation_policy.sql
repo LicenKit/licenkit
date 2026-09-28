@@ -1,4 +1,4 @@
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
+PRAGMA defer_foreign_keys=ON;--> statement-breakpoint
 DROP TRIGGER `trg_activations_enforce_limit_on_insert`;--> statement-breakpoint
 DROP TRIGGER `trg_activations_enforce_limit_on_reactivate`;--> statement-breakpoint
 DROP TRIGGER `trg_products_guard_billing_environment_change`;--> statement-breakpoint
@@ -327,4 +327,11 @@ BEGIN
       AND payment_grace_seconds = NEW.payment_grace_seconds
   ) THEN RAISE(ABORT, 'LICENSE_PAYMENT_GRACE_MISMATCH') END);
 END;--> statement-breakpoint
-PRAGMA foreign_keys=ON;
+-- Verify all references before ending deferral after the table rebuilds.
+CREATE TABLE `__migration_fk_guard` (
+	`ok` integer NOT NULL CONSTRAINT `ck_migration_fk_guard` CHECK (`ok` = 1)
+);--> statement-breakpoint
+INSERT INTO `__migration_fk_guard` (`ok`)
+SELECT CASE WHEN EXISTS (SELECT 1 FROM pragma_foreign_key_check) THEN 0 ELSE 1 END;--> statement-breakpoint
+DROP TABLE `__migration_fk_guard`;--> statement-breakpoint
+PRAGMA defer_foreign_keys=OFF;
