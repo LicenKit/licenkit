@@ -192,7 +192,7 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
                   <div><span>{t.products.billingEnvLabel}</span><strong>{selected.billingEnvironment || t.products.billingEnvNone}</strong></div>
                   <div><span>{t.products.validationIntervalLabel}</span><strong>{t.products.validationIntervalHours(selected.validationIntervalSeconds / 3600)}</strong></div>
                   <div><span>{t.products.trialLabel}</span><strong>{selected.trial?.enabled ? (selected.trial.durationSeconds ? t.products.trialDays(Math.round(selected.trial.durationSeconds / 86400)) : t.products.trialEnabled) : t.products.trialDisabled}</strong></div>
-                  <div><span>{t.products.tableColReleasedAt}</span><strong>{t.products.releasesCount(releases.length)}</strong></div>
+                  <div><span>{t.products.releaseRecordsLabel}</span><strong>{t.products.releasesCount(releases.length)}</strong></div>
                 </div>
                 {selected.trial?.enabled ? (
                   <Notice>

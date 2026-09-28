@@ -289,6 +289,7 @@ export interface ProductsDictionary {
   trialDays: (days: number) => string;
   trialEnabled: string;
   trialDisabled: string;
+  releaseRecordsLabel: string;
   releasesCount: (count: number) => string;
   trialNoticeTitle: string;
   trialNoticeDesc: (features: string) => string;
