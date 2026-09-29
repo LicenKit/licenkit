@@ -27,6 +27,7 @@ const ALL_ROLE_ROUTE_KEYS = [
   "GET /api/v1/admin/billing/customers",
   "GET /api/v1/admin/billing/customers/:billingCustomerId",
   "GET /api/v1/admin/billing/events",
+  "GET /api/v1/admin/billing/events/rejections",
   "GET /api/v1/admin/billing/events/:eventId",
   "GET /api/v1/admin/billing/offers",
   "GET /api/v1/admin/billing/providers",

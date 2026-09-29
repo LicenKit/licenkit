@@ -111,7 +111,7 @@ export function statusTone(status?: string): "success" | "warning" | "danger" | 
   if (!status) return "neutral";
   if (["active", "ready", "accepted", "processed", "completed", "linked"].includes(status)) return "success";
   if (["draft", "pending", "processing", "retry_scheduled", "waiting_configuration", "past_due", "stale", "needs_attention", "open"].includes(status)) return "warning";
-  if (["failed", "expired", "cancelled", "revoked", "disabled", "not_ready", "configuration_error", "email_mismatch"].includes(status)) return "danger";
+  if (["failed", "rejected", "expired", "cancelled", "revoked", "disabled", "not_ready", "configuration_error", "email_mismatch"].includes(status)) return "danger";
   return "info";
 }
 

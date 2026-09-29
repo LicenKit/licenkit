@@ -18,6 +18,42 @@ import { processBillingInboundEvent } from "../services/billing/fulfillment";
 
 export const webhookRouter = new Hono<AppContext>();
 
+async function recordRejectedPaddleWebhook(
+  c: Context<AppContext>,
+  route: BillingProviderRecord,
+  errorCode: string,
+  httpStatus: 400 | 401,
+  rawBody: string,
+): Promise<void> {
+  const requestId = c.get("requestId");
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO webhook_rejections (
+         id, instance_id, billing_provider_id, request_id, error_code,
+         http_status, webhook_secret_version, payload_hash, received_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    ).bind(
+      `whr_${ulid().toLowerCase()}`,
+      route.instance_id,
+      route.id,
+      requestId,
+      errorCode,
+      httpStatus,
+      route.webhook_secret_version,
+      rawBody ? await hashPaddlePayload(rawBody) : null,
+      new Date().toISOString(),
+    ).run();
+  } catch (error) {
+    throw new AppError(
+      "BILLING_WEBHOOK_REJECTION_RECORD_FAILED",
+      "The rejected Paddle request could not be recorded.",
+      500,
+      { provider: "paddle", billing_provider_id: route.id, original_error_code: errorCode },
+      { cause: error instanceof Error ? error.message : String(error) },
+    );
+  }
+}
+
 function inboundPayloadTtlSeconds(value: string | undefined): number {
   if (value === undefined || value.trim() === "") return 86_400;
   const parsed = Number(value);
@@ -38,6 +74,7 @@ async function verifyAndParsePaddleWebhook(
   const rawBody = await c.req.text();
   const signatureHeader = c.req.header("paddle-signature");
   if (!rawBody || !signatureHeader) {
+    await recordRejectedPaddleWebhook(c, route, "BILLING_WEBHOOK_SIGNATURE_OR_BODY_MISSING", 400, rawBody);
     throw new AppError(
       "BILLING_WEBHOOK_SIGNATURE_OR_BODY_MISSING",
       "Paddle-Signature and a raw request body are required.",
@@ -53,6 +90,7 @@ async function verifyAndParsePaddleWebhook(
     throw error;
   }
   if (!await verifyPaddleWebhookSignature(rawBody, signatureHeader, webhookSecret)) {
+    await recordRejectedPaddleWebhook(c, route, "BILLING_WEBHOOK_SIGNATURE_INVALID", 401, rawBody);
     throw new AppError(
       "BILLING_WEBHOOK_SIGNATURE_INVALID",
       "Paddle webhook signature verification failed.",

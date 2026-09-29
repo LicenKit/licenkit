@@ -352,6 +352,11 @@ export interface InboundEvent {
   externalAdjustmentId?: string | null; lastError?: ErrorSnapshot | null; lastErrorCode?: string | null; lastErrorDetail?: unknown;
   receivedAt: IsoDateTime; processedAt?: IsoDateTime | null;
 }
+export interface WebhookRejection {
+  id: Identifier; billingProviderId: Identifier; provider: "paddle"; environment: BillingEnvironment;
+  requestId: string; errorCode: string; httpStatus: number; webhookSecretVersion: number;
+  payloadHash: string | null; receivedAt: IsoDateTime; status: "rejected";
+}
 export interface SystemIssue {
   id: Identifier;
   category: "billing" | "webhook" | "email";
@@ -480,6 +485,7 @@ export interface AdminStats {
   expiringSoon: number;
   pendingInboundEvents: number;
   pendingDeliveries: number;
+  pendingSystemIssues: number;
 }
 export type TrialStatus = "active" | "expired" | "revoked";
 export interface TrialClaim {
@@ -666,6 +672,10 @@ export const api = {
         list: (params?: { status?: string; limit?: number; offset?: number }) => request<ListResponse<InboundEvent>>(`/admin/billing/events${queryString(params ?? {})}`, { scope: "admin" }),
         get: (id: string) => request<InboundEvent>(`/admin/billing/events/${encodeURIComponent(id)}`, { scope: "admin" }),
         replay: (id: string) => request<InboundEvent>(`/admin/billing/events/${encodeURIComponent(id)}/replay`, { method: "POST", scope: "admin" }),
+        rejections: {
+          list: (params: { requestId?: string; limit?: number; offset?: number } = {}) =>
+            request<ListResponse<WebhookRejection>>(`/admin/billing/events/rejections${queryString(params)}`, { scope: "admin" }),
+        },
       },
     },
     system: {

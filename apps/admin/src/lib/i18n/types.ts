@@ -237,7 +237,7 @@ export interface OverviewDictionary {
   metricOffers: string;
   metricOffersSub: (count: number) => string;
   metricTodos: string;
-  metricTodosSub: (events: number, deliveries: number) => string;
+  metricTodosSub: (count: number) => string;
   pricingEyebrow: string;
   pricingTitle: string;
   pricingDesc: string;
@@ -251,6 +251,7 @@ export interface OverviewDictionary {
   todosEyebrow: string;
   todosTitle: string;
   todosDesc: string;
+  openIssues: string;
   healthyTitle: string;
   healthyDesc: string;
   recentIssuesEyebrow: string;
@@ -860,6 +861,16 @@ export interface OperationsDictionary {
   eventsEyebrow: string;
   eventsTitle: string;
   eventsDesc: string;
+  rejectionSearchPlaceholder: string;
+  rejectionSearchButton: string;
+  rejectionSearchClear: string;
+  rejectedRequestLabel: string;
+  statusRejected: string;
+  legacySimulationNote: string;
+  rejectionDetailNote: string;
+  rejectionRequestIdLabel: string;
+  rejectionSecretVersionLabel: string;
+  rejectionHttpStatusLabel: string;
   totalEventsCount: (count: number) => string;
   eventsEmptyTitle: string;
   eventsEmptyDesc: string;

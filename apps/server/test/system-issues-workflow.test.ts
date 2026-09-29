@@ -4,6 +4,7 @@ import type { AppContext } from "../src/types";
 import { sha256Hex } from "../src/infra/crypto";
 import { errorHandler } from "../src/middleware/error";
 import { adminSystemIssuesRouter } from "../src/routes/admin/system-issues.routes";
+import { adminStatsRouter } from "../src/routes/admin/stats.routes";
 import { prepareSystemIssueUpsert } from "../src/services/operations/system-issues";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
@@ -42,6 +43,7 @@ describe("System Issue manual handling workflow", () => {
       await next();
     });
     app.route("/system", adminSystemIssuesRouter);
+    app.route("/stats", adminStatsRouter);
   });
 
   function mutationInit(): RequestInit {
@@ -87,6 +89,8 @@ describe("System Issue manual handling workflow", () => {
       error: { detail: "first", provider_request_id: "req_provider" },
     });
     expect(JSON.stringify(listBody)).not.toMatch(/"[a-z]+[A-Z][A-Za-z]*":/);
+    const pendingStats = await app.request(`${ORIGIN}/stats`, {}, testEnv.env);
+    expect((await pendingStats.json() as any).data.pending_system_issues).toBe(1);
 
     const processedResponse = await app.request(
       `${ORIGIN}/system/issues/${issue.id}/process`,
@@ -99,6 +103,8 @@ describe("System Issue manual handling workflow", () => {
       data: { id: issue.id, status: "processed", processed_at: expect.any(String) },
     });
     expect(JSON.stringify(processedBody)).not.toMatch(/"[a-z]+[A-Z][A-Za-z]*":/);
+    const processedStats = await app.request(`${ORIGIN}/stats`, {}, testEnv.env);
+    expect((await processedStats.json() as any).data.pending_system_issues).toBe(0);
     expect(testEnv.sqliteDb.prepare(
       `SELECT status, occurrence_count, processed_by_user_id,
               processed_at, error_detail_json

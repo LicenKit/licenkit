@@ -21,7 +21,9 @@ adminStatsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), a
          (SELECT COUNT(*) FROM inbound_events
             WHERE instance_id = ?1 AND status IN ('pending', 'processing', 'needs_attention')) AS pending_inbound_events,
          (SELECT COUNT(*) FROM email_deliveries
-            WHERE instance_id = ?1 AND status IN ('pending', 'processing', 'retry_scheduled', 'waiting_configuration', 'failed')) AS pending_deliveries`
+            WHERE instance_id = ?1 AND status IN ('pending', 'processing', 'retry_scheduled', 'waiting_configuration', 'failed')) AS pending_deliveries,
+         (SELECT COUNT(*) FROM system_issues
+            WHERE instance_id = ?1 AND status = 'pending') AS pending_system_issues`
     )
     .bind(instanceId, now.toISOString(), in30Days)
     .all<{
@@ -31,6 +33,7 @@ adminStatsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), a
       expiring_soon: number;
       pending_inbound_events: number;
       pending_deliveries: number;
+      pending_system_issues: number;
     }>();
   const row = result.results[0];
 
@@ -43,6 +46,7 @@ adminStatsRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]), a
       expiring_soon: Number(row?.expiring_soon || 0),
       pending_inbound_events: Number(row?.pending_inbound_events || 0),
       pending_deliveries: Number(row?.pending_deliveries || 0),
+      pending_system_issues: Number(row?.pending_system_issues || 0),
     },
   });
 });

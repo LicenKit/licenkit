@@ -57,6 +57,13 @@
       "when": 1790658425248,
       "tag": "0007_remove_device_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1790669967198,
+      "tag": "0008_webhook_rejections",
+      "breakpoints": true
     }
   ]
 }

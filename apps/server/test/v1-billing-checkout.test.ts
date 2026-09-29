@@ -16,6 +16,7 @@ import { clearExpiredInboundEventPayloads } from "../src/services/runtime/retent
 import { errorHandler } from "../src/middleware/error";
 import { adminEmailDeliveriesRouter } from "../src/routes/admin/email.routes";
 import { adminBillingRouter } from "../src/routes/admin/billing.routes";
+import { adminStatsRouter } from "../src/routes/admin/stats.routes";
 import { adminCustomersRouter } from "../src/routes/customer-admin.routes";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
@@ -52,6 +53,19 @@ function billingAdminApp() {
     await next();
   });
   admin.route("/", adminBillingRouter);
+  return admin;
+}
+
+function statsAdminApp() {
+  const admin = new Hono<AppContext>();
+  admin.onError(errorHandler);
+  admin.use("*", async (c, next) => {
+    c.set("requestId", "req_billing_stats");
+    c.set("instanceId", instanceId);
+    c.set("instanceRole", "owner");
+    await next();
+  });
+  admin.route("/", adminStatsRouter);
   return admin;
 }
 
@@ -369,6 +383,71 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       now: processingNow,
     });
   }
+
+  it("shows each rejected signature by request ID without creating a trusted inbound event", async () => {
+    const payload = eventPayload("evt_rejected_request", "transaction.completed", {
+      id: "txn_rejected_request",
+    });
+    const first = await postEvent(payload, "wrong_webhook_secret");
+    const second = await postEvent(payload, "wrong_webhook_secret");
+    expect(first.response.status).toBe(401);
+    expect(second.response.status).toBe(401);
+    expect(first.body.error.code).toBe("BILLING_WEBHOOK_SIGNATURE_INVALID");
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM inbound_events").get())
+      .toEqual({ count: 0 });
+    const rejected = testEnv.sqliteDb.prepare(
+      "SELECT request_id, error_code, http_status, payload_hash FROM webhook_rejections ORDER BY received_at, id",
+    ).all() as Array<{ request_id: string; error_code: string; http_status: number; payload_hash: string }>;
+    expect(rejected).toHaveLength(2);
+    expect(rejected.map((row) => row.request_id)).toContain(first.body.error.request_id);
+    expect(rejected.map((row) => row.request_id)).toContain(second.body.error.request_id);
+    expect(rejected[0]).toMatchObject({ error_code: "BILLING_WEBHOOK_SIGNATURE_INVALID", http_status: 401 });
+    expect(rejected[0].payload_hash).toBe(rejected[1].payload_hash);
+
+    const response = await billingAdminApp().request(
+      `/events/rejections?request_id=${encodeURIComponent(first.body.error.request_id)}`,
+      {}, testEnv.env,
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(body.data.items).toHaveLength(1);
+    expect(body.data.items[0]).toMatchObject({
+      request_id: first.body.error.request_id,
+      status: "rejected",
+      error_code: "BILLING_WEBHOOK_SIGNATURE_INVALID",
+      environment: "sandbox",
+    });
+  });
+
+  it("keeps inbound diagnosis separate from actionable system issues", async () => {
+    for (const [id, externalEventId] of [
+      ["ine_platform_todo", "evt_platform_todo"],
+      ["ine_legacy_simulator", "ntfsimevt_legacy_simulator"],
+    ]) {
+      testEnv.sqliteDb.prepare(
+        `INSERT INTO inbound_events (
+           id, instance_id, billing_provider_id, external_event_id, external_event_type,
+           payload_hash, payload_expires_at, status, received_at, updated_at
+         ) VALUES (?, ?, ?, ?, 'transaction.completed', 'hash', ?, 'needs_attention', ?, ?)`,
+      ).run(id, instanceId, providerId, externalEventId, nowIso, nowIso, nowIso);
+    }
+    const statsResponse = await statsAdminApp().request("/", {}, testEnv.env);
+    expect(statsResponse.status).toBe(200);
+    expect(await statsResponse.json()).toMatchObject({
+      data: { pending_inbound_events: 2, pending_system_issues: 0 },
+    });
+
+    const visibleResponse = await billingAdminApp().request(
+      "/events?status=needs_attention", {}, testEnv.env,
+    );
+    expect(visibleResponse.status).toBe(200);
+    const visible = await visibleResponse.json() as any;
+    expect(visible.data.items.map((item: any) => item.external_event_id).sort()).toEqual([
+      "evt_platform_todo", "ntfsimevt_legacy_simulator",
+    ]);
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM inbound_events").get())
+      .toEqual({ count: 2 });
+  });
 
   it("exposes only the standard Paddle environment webhook route", async () => {
     const legacyResponse = await app.request(

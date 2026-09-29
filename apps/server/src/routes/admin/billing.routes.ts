@@ -538,6 +538,35 @@ adminBillingRouter.post("/offers/:offerId/archive", requireRole(["owner", "admin
 adminBillingRouter.get("/customers", requireRole(["owner", "admin", "member", "viewer"]), async (c) => listBillingRows(c, "billing_customers", "updated_at"));
 adminBillingRouter.get("/subscriptions", requireRole(["owner", "admin", "member", "viewer"]), async (c) => listBillingRows(c, "billing_subscriptions", "updated_at"));
 adminBillingRouter.get("/events", requireRole(["owner", "admin", "member", "viewer"]), async (c) => listBillingRows(c, "inbound_events", "received_at"));
+adminBillingRouter.get("/events/rejections", requireRole(["owner", "admin", "member", "viewer"]), async (c) => {
+  const requestedLimit = Number(c.req.query("limit") ?? 50);
+  const requestedOffset = Number(c.req.query("offset") ?? 0);
+  const requestId = c.req.query("request_id")?.trim();
+  if (!Number.isInteger(requestedLimit) || !Number.isInteger(requestedOffset)
+    || requestedLimit < 1 || requestedOffset < 0 || (requestId !== undefined && requestId.length > 128)) {
+    throw new AppError("VALIDATION_ERROR", "Invalid rejection list query.", 400);
+  }
+  const limit = Math.min(100, requestedLimit);
+  const query = `SELECT rejection.id, rejection.billing_provider_id, rejection.request_id,
+                        rejection.error_code, rejection.http_status,
+                        rejection.webhook_secret_version, rejection.payload_hash,
+                        rejection.received_at, provider.provider, provider.environment
+                 FROM webhook_rejections AS rejection
+                 JOIN billing_providers AS provider
+                   ON provider.instance_id = rejection.instance_id
+                  AND provider.id = rejection.billing_provider_id
+                 WHERE rejection.instance_id = ?1${requestId ? " AND rejection.request_id = ?2" : ""}
+                 ORDER BY rejection.received_at DESC, rejection.id DESC
+                 LIMIT ?${requestId ? 3 : 2} OFFSET ?${requestId ? 4 : 3}`;
+  const result = await c.env.DB.prepare(query)
+    .bind(instanceId(c), ...(requestId ? [requestId] : []), limit, requestedOffset)
+    .all<Record<string, unknown>>();
+  c.header("Cache-Control", "no-store");
+  return c.json({ success: true, data: {
+    items: result.results.map((row) => ({ ...row, status: "rejected" })),
+    pagination: { limit, offset: requestedOffset },
+  } });
+});
 adminBillingRouter.get("/adjustments", requireRole(["owner", "admin", "member", "viewer"]), async (c) => listBillingRows(c, "billing_adjustments", "updated_at"));
 
 adminBillingRouter.get("/customers/:billingCustomerId", requireRole(["owner", "admin", "member", "viewer"]), async (c) => detailBillingRow(c, "billing_customers", c.req.param("billingCustomerId")));

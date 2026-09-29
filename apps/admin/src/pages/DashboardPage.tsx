@@ -233,7 +233,7 @@ export function DashboardPage({
             onOpenIssues={() => setSection("operations")}
           />
           <ErrorBoundary key={section} fallbackTitle={t.topbar.viewLoadFailed(current.label)}>
-            {section === "overview" ? <OverviewView /> : null}
+            {section === "overview" ? <OverviewView onOpenIssues={() => setSection("operations")} /> : null}
             {section === "products" ? <ProductsView canWrite={canWrite} instance={instance} /> : null}
             {section === "license-plans" ? <LicensePlansView canWrite={canWrite} /> : null}
             {section === "licenses" ? (

@@ -1091,6 +1091,37 @@ export const inboundEvents = sqliteTable(
   ],
 );
 
+/** Unverified requests are retained for diagnosis and never enter fulfillment. */
+export const webhookRejections = sqliteTable(
+  "webhook_rejections",
+  {
+    id: text("id").primaryKey(),
+    instanceId: text("instance_id")
+      .notNull()
+      .references(() => instances.id, restrictReference),
+    billingProviderId: text("billing_provider_id").notNull(),
+    requestId: text("request_id").notNull(),
+    errorCode: text("error_code").notNull(),
+    httpStatus: integer("http_status").notNull(),
+    webhookSecretVersion: integer("webhook_secret_version").notNull(),
+    payloadHash: text("payload_hash"),
+    receivedAt: text("received_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "fk_webhook_rejections_provider",
+      columns: [table.instanceId, table.billingProviderId],
+      foreignColumns: [billingProviders.instanceId, billingProviders.id],
+    }).onDelete("restrict"),
+    index("idx_webhook_rejections_recent").on(
+      table.instanceId,
+      sql`${table.receivedAt} desc`,
+    ),
+    index("idx_webhook_rejections_request").on(table.instanceId, table.requestId),
+    check("ck_webhook_rejections_http_status", sql`${table.httpStatus} between 400 and 499`),
+  ],
+);
+
 export const emailIntegrations = sqliteTable(
   "email_integrations",
   {
