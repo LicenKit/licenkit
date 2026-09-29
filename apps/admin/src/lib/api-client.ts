@@ -481,6 +481,17 @@ export interface AdminStats {
   pendingInboundEvents: number;
   pendingDeliveries: number;
 }
+export type TrialStatus = "active" | "expired" | "revoked";
+export interface TrialClaim {
+  id: Identifier;
+  productId: Identifier;
+  productName: string;
+  status: TrialStatus;
+  claimedAt: IsoDateTime;
+  expiresAt: IsoDateTime;
+  lastValidatedAt: IsoDateTime | null;
+  revokedAt: IsoDateTime | null;
+}
 
 export const api = {
   setup: {
@@ -505,6 +516,10 @@ export const api = {
     },
     stats: {
       get: () => request<AdminStats>("/admin/stats", { scope: "admin" }),
+    },
+    trials: {
+      list: (params: { productId?: string; status?: TrialStatus; page?: number; limit?: number } = {}) =>
+        request<ListResponse<TrialClaim>>(`/admin/trials${queryString(params)}`, { scope: "admin" }),
     },
     instance: {
       get: () => request<Instance>("/admin/instance", { scope: "admin" }),

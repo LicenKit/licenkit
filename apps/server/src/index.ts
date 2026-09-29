@@ -30,6 +30,7 @@ import { adminLicensesRouter } from "./routes/admin/licenses.routes";
 import { adminBillingRouter } from "./routes/admin/billing.routes";
 import { adminCustomersRouter } from "./routes/customer-admin.routes";
 import { adminStatsRouter } from "./routes/admin/stats.routes";
+import { adminTrialsRouter } from "./routes/admin/trials.routes";
 import { adminAuditRouter } from "./routes/admin/audit.routes";
 import { adminSystemIssuesRouter } from "./routes/admin/system-issues.routes";
 import {
@@ -101,6 +102,7 @@ admin.route("/licenses", adminLicensesRouter);
 admin.route("/billing", adminBillingRouter);
 admin.route("/customers", adminCustomersRouter);
 admin.route("/stats", adminStatsRouter);
+admin.route("/trials", adminTrialsRouter);
 admin.route("/audit-logs", adminAuditRouter);
 admin.route("/system", adminSystemIssuesRouter);
 admin.route("/email-template-contracts", adminEmailTemplateContractsRouter);

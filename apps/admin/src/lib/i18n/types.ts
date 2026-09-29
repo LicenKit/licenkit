@@ -99,6 +99,8 @@ export interface NavDictionary {
   itemLicensePlansDesc: string;
   itemLicenses: string;
   itemLicensesDesc: string;
+  itemTrials: string;
+  itemTrialsDesc: string;
   itemCustomers: string;
   itemCustomersDesc: string;
   itemBilling: string;
@@ -480,6 +482,26 @@ export interface LicensesDictionary {
   extendModeCustom: string;
   modalRevokeActivationTitle: string;
   modalRevokeActivationDesc: (id: string) => string;
+}
+
+export interface TrialsDictionary {
+  eyebrow: string;
+  title: string;
+  description: string;
+  filterAllProducts: string;
+  filterAllStatuses: string;
+  filterActive: string;
+  filterExpired: string;
+  filterRevoked: string;
+  count: (count: number) => string;
+  tableColTrial: string;
+  tableColProduct: string;
+  tableColStatus: string;
+  tableColClaimedAt: string;
+  tableColExpiresAt: string;
+  tableColLastValidatedAt: string;
+  emptyTitle: string;
+  emptyDesc: string;
 }
 
 export interface CustomersDictionary {
@@ -925,6 +947,7 @@ export interface LocaleDictionary {
   products: ProductsDictionary;
   licensePlans: LicensePlansDictionary;
   licenses: LicensesDictionary;
+  trials: TrialsDictionary;
   customers: CustomersDictionary;
   billing: BillingDictionary;
   email: EmailDictionary;

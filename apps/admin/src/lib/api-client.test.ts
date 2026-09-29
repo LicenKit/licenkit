@@ -102,6 +102,26 @@ describe("Admin API JSON boundary", () => {
     });
   });
 
+  it("试用列表使用服务端筛选分页并保留状态与产品信息", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      data: {
+        items: [{
+          id: "trl_test", product_id: "prd_test", product_name: "Desktop App", status: "active",
+          claimed_at: "2026-09-01T00:00:00.000Z", expires_at: "2026-10-01T00:00:00.000Z",
+          last_validated_at: null, revoked_at: null,
+        }],
+        pagination: { page: 2, limit: 20, total: 21, total_pages: 2 },
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.admin.trials.list({ productId: "prd_test", status: "active", page: 2, limit: 20 });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/admin/trials?product_id=prd_test&status=active&page=2&limit=20");
+    expect(result.items[0]).toMatchObject({ productId: "prd_test", productName: "Desktop App", status: "active" });
+    expect(result.pagination).toMatchObject({ total: 21, totalPages: 2 });
+  });
+
   it("错误 envelope 不读取 requestId 兼容别名", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       success: false,

@@ -11,6 +11,7 @@ import { app as serverApp } from "../src/index";
 import { adminAuditRouter } from "../src/routes/admin/audit.routes";
 import { adminProductsRouter } from "../src/routes/admin/products.routes";
 import { adminStatsRouter } from "../src/routes/admin/stats.routes";
+import { adminTrialsRouter } from "../src/routes/admin/trials.routes";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const now = "2026-09-19T12:00:00.000Z";
@@ -68,6 +69,7 @@ const OWNER_ADMIN_MEMBER_ROUTE_KEYS = [
 ] as const;
 
 const OWNER_ADMIN_ROUTE_KEYS = [
+  "GET /api/v1/admin/trials",
   "GET /api/v1/admin/products/:productId/releases",
   "GET /api/v1/admin/products/:productId/releases/:releaseId",
   "GET /api/v1/admin/products/:productId/trials",
@@ -189,6 +191,22 @@ function productsApp(role: InstanceRole) {
   });
   app.use("*", requireDeclaredAdminPermission);
   app.route("/", adminProductsRouter);
+  return app;
+}
+
+function trialsApp(role: InstanceRole) {
+  const app = new Hono<AppContext>();
+  app.onError(errorHandler);
+  app.use("*", async (c, next) => {
+    c.set("requestId", "req_trials_test");
+    c.set("instanceId", "ins_authz");
+    c.set("instanceRole", role);
+    c.set("userId", "usr_other");
+    c.set("userEmail", "usr_other@example.test");
+    await next();
+  });
+  app.use("*", requireDeclaredAdminPermission);
+  app.route("/", adminTrialsRouter);
   return app;
 }
 
@@ -357,6 +375,49 @@ describe("V1 admin authorization and audit visibility", () => {
       pending_deliveries: 0,
     });
     expectNoCamelCaseKeys(body);
+  });
+
+  it("filters device trials by status and product with tenant-safe pagination", async () => {
+    const db = testEnv.sqliteDb;
+    db.prepare(
+      `INSERT INTO products (id, instance_id, name, trial_enabled, trial_features_json, status, created_at, updated_at)
+       VALUES ('prod_second', 'ins_authz', 'Second Product', 0, '[]', 'active', ?, ?)`,
+    ).run(now, now);
+    const insert = db.prepare(
+      `INSERT INTO trial_claims (
+         id, instance_id, product_id, fingerprint_hash, features_json,
+         claimed_at, expires_at, last_validated_at, revoked_at, revoke_reason, updated_at
+       ) VALUES (?, ?, ?, ?, '[]', ?, ?, NULL, ?, ?, ?)`,
+    );
+    const past = "2020-01-01T00:00:00.000Z";
+    const earlier = "2019-01-01T00:00:00.000Z";
+    const future = "2099-01-01T00:00:00.000Z";
+    insert.run("trl_active_a", "ins_authz", "prod_authz", "hash_active_a", past, future, null, null, past);
+    insert.run("trl_active_b", "ins_authz", "prod_second", "hash_active_b", past, future, null, null, past);
+    insert.run("trl_expired", "ins_authz", "prod_authz", "hash_expired", earlier, past, null, null, past);
+    insert.run("trl_revoked", "ins_authz", "prod_authz", "hash_revoked", earlier, past, past, "abuse", past);
+    insert.run("trl_foreign", "ins_foreign", "prod_foreign", "hash_foreign", past, future, null, null, past);
+
+    const app = trialsApp("owner");
+    const active = await app.request("http://test/?status=active&limit=1&page=2", {}, testEnv.env);
+    expect(active.status).toBe(200);
+    const activeBody = await active.json() as any;
+    expect(activeBody.data.pagination).toEqual({ page: 2, limit: 1, total: 2, total_pages: 2 });
+    expect(activeBody.data.items).toHaveLength(1);
+    expect(["trl_active_a", "trl_active_b"]).toContain(activeBody.data.items[0].id);
+    expectNoCamelCaseKeys(activeBody);
+
+    const product = await app.request("http://test/?status=active&product_id=prod_authz", {}, testEnv.env);
+    expect((await product.json() as any).data.items.map((item: any) => item.id)).toEqual(["trl_active_a"]);
+    const expired = await app.request("http://test/?status=expired", {}, testEnv.env);
+    expect((await expired.json() as any).data.items.map((item: any) => item.id)).toEqual(["trl_expired"]);
+    const revoked = await app.request("http://test/?status=revoked", {}, testEnv.env);
+    expect((await revoked.json() as any).data.items.map((item: any) => item.id)).toEqual(["trl_revoked"]);
+    const all = await app.request("http://test/", {}, testEnv.env);
+    expect((await all.json() as any).data.pagination.total).toBe(4);
+
+    expect((await trialsApp("viewer").request("http://test/", {}, testEnv.env)).status).toBe(403);
+    expect((await app.request("http://test/?status=unknown", {}, testEnv.env)).status).toBe(400);
   });
 
   it.each([

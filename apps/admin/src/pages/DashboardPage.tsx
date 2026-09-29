@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 import {
   Activity,
   Boxes,
@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleDollarSign,
   ContactRound,
+  FlaskConical,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -26,6 +27,7 @@ import { OverviewView } from "./admin/OverviewView";
 import { ProductsView } from "./admin/ProductsView";
 import { LicensePlansView } from "./admin/LicensePlansView";
 import { LicensesView } from "./admin/LicensesView";
+import { TrialsView } from "./admin/TrialsView";
 import { CustomersView } from "./admin/CustomersView";
 import { BillingView } from "./admin/BillingView";
 import { OperationsView } from "./admin/OperationsView";
@@ -40,6 +42,7 @@ type Section =
   | "products"
   | "license-plans"
   | "licenses"
+  | "trials"
   | "customers"
   | "billing"
   | "email-hub"
@@ -70,6 +73,11 @@ export function DashboardPage({
   const [collapsed, setCollapsed] = useState(false);
   const [issueRevision, setIssueRevision] = useState(0);
   const { user, instance, membership } = session;
+  const canWrite = membership.role === "owner" || membership.role === "admin";
+
+  useEffect(() => {
+    if (!canWrite && section === "trials") setSection("overview");
+  }, [canWrite, section]);
 
   const nav = useMemo<Array<{ label: string; items: NavItem[] }>>(
     () => [
@@ -90,6 +98,7 @@ export function DashboardPage({
         label: t.nav.groupOperations,
         items: [
           { id: "licenses", label: t.nav.itemLicenses, description: t.nav.itemLicensesDesc, icon: KeyRound },
+          ...(canWrite ? [{ id: "trials" as const, label: t.nav.itemTrials, description: t.nav.itemTrialsDesc, icon: FlaskConical }] : []),
           { id: "customers", label: t.nav.itemCustomers, description: t.nav.itemCustomersDesc, icon: UsersRound },
         ],
       },
@@ -115,12 +124,11 @@ export function DashboardPage({
         ],
       },
     ],
-    [t]
+    [t, canWrite]
   );
 
-  const current = nav.flatMap((group) => group.items).find((item) => item.id === section)!;
+  const current = nav.flatMap((group) => group.items).find((item) => item.id === section) ?? nav[0]!.items[0]!;
   const CurrentIcon = current.icon;
-  const canWrite = membership.role === "owner" || membership.role === "admin";
 
   return (
     <div className={collapsed ? "admin-shell sidebar-collapsed" : "admin-shell"}>
@@ -231,6 +239,7 @@ export function DashboardPage({
             {section === "licenses" ? (
               <LicensesView canManage={canWrite} canSupport={membership.role !== "viewer"} />
             ) : null}
+            {section === "trials" && canWrite ? <TrialsView /> : null}
             {section === "customers" ? <CustomersView canManage={canWrite} /> : null}
             {section === "billing" ? <BillingView canManage={canWrite} instance={instance} /> : null}
             {section === "email-hub" ? <EmailHubView canManage={canWrite} /> : null}
