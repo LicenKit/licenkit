@@ -50,6 +50,13 @@
       "when": 1790640000000,
       "tag": "0006_license_billing_environment",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1790658425248,
+      "tag": "0007_remove_device_tokens",
+      "breakpoints": true
     }
   ]
 }

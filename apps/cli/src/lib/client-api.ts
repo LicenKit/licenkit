@@ -111,7 +111,6 @@ export interface CredentialUpdate {
 
 export interface ActivationResponse {
   activation_id: string;
-  machine_token: string;
   credential_mode: CredentialMode;
   signed_license_token: string | null;
   signing_key_id: string | null;
@@ -414,7 +413,6 @@ function parseActivationResponse(value: unknown): ActivationResponse {
   }
   return {
     activation_id: contractString(response.activation_id, "activation_id"),
-    machine_token: contractString(response.machine_token, "machine_token"),
     ...credential,
     license_expires_at: licenseExpiresAt,
     terms,
@@ -586,7 +584,6 @@ export interface ClientContext {
 
 export interface ActivateParams extends ClientContext {
   licenseKey: string;
-  machineToken: string;
   name?: string;
 }
 
@@ -596,7 +593,6 @@ export async function apiActivate(params: ActivateParams): Promise<ActivationRes
     body: JSON.stringify({
       product_id: params.productId,
       license_key: params.licenseKey,
-      machine_token: params.machineToken,
       fingerprint: params.fingerprint,
       device_platform: params.devicePlatform,
       name: params.name,
@@ -608,8 +604,8 @@ export async function apiActivate(params: ActivateParams): Promise<ActivationRes
 }
 
 export type ValidateCredential =
-  | { kind: "license"; activation_id: string; machine_token: string }
-  | { kind: "trial"; trial_id: string; trial_token: string }
+  | { kind: "license"; activation_id: string }
+  | { kind: "trial"; trial_id: string }
   | { kind: "none" };
 
 export interface ValidateParams extends Omit<ClientContext, "devicePlatform"> {
@@ -634,7 +630,6 @@ export interface DeactivateParams {
   serverUrl: string;
   productId: string;
   activationId: string;
-  machineToken: string;
   fingerprint: string;
 }
 
@@ -650,7 +645,6 @@ export async function apiDeactivate(params: DeactivateParams): Promise<Deactivat
     body: JSON.stringify({
       product_id: params.productId,
       activation_id: params.activationId,
-      machine_token: params.machineToken,
       fingerprint: params.fingerprint,
     }),
   }, (value) => {

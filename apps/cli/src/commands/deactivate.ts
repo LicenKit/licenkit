@@ -17,7 +17,6 @@ export async function deactivateCommand(): Promise<void> {
       serverUrl: stored.serverUrl,
       productId: stored.productId,
       activationId: stored.activationId,
-      machineToken: stored.machineToken,
       fingerprint,
     });
     if (response.status !== "deactivated" || response.activation_id !== stored.activationId) {

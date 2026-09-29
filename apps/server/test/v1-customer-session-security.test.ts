@@ -147,15 +147,14 @@ describe("V1 Customer Session security boundaries", () => {
     ] as const) {
       testEnv.sqliteDb.prepare(
         `INSERT INTO activations (
-           id, instance_id, license_id, fingerprint_hash, machine_token_hash,
+           id, instance_id, license_id, fingerprint_hash,
            name, platform, status, activated_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'macos', 'active', ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, 'macos', 'active', ?, ?)`,
       ).run(
         activationId,
         INSTANCE_A,
         licenseId,
         `fingerprint-${suffix}`,
-        `machine-token-${suffix}`,
         `Customer ${suffix.toUpperCase()} device`,
         nowIso,
         nowIso,

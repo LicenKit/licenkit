@@ -996,9 +996,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     const { licenseId } = await issueOneTimeLicense("txn_refund1");
     testEnv.sqliteDb.prepare(
       `INSERT INTO activations (
-         id, instance_id, license_id, fingerprint_hash, machine_token_hash,
+         id, instance_id, license_id, fingerprint_hash,
          status, activated_at, updated_at
-       ) VALUES ('act_refund', ?, ?, 'fp_refund', 'mt_refund', 'active', ?, ?)`,
+       ) VALUES ('act_refund', ?, ?, 'fp_refund', 'active', ?, ?)`,
     ).run(instanceId, licenseId, nowIso, nowIso);
     const adjustment = await postEvent(eventPayload("evt_adj_refund", "adjustment.updated", {
       id: "adj_refund1",

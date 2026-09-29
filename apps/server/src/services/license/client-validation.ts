@@ -10,12 +10,10 @@ export type ClientCredential =
   | {
     kind: "license";
     activationId: string;
-    machineToken: string;
   }
   | {
     kind: "trial";
     trialId: string;
-    trialToken: string;
   }
   | {
     kind: "none";
@@ -247,7 +245,6 @@ async function validateLicenseCredential(input: {
       instanceId: input.instanceId,
       productId: input.productId,
       activationId: input.credential.activationId,
-      machineToken: input.credential.machineToken,
       fingerprint: input.fingerprint,
       releaseVersion: input.releaseVersion,
       releasePlatform: input.releasePlatform,
@@ -305,7 +302,6 @@ async function validateTrialCredential(input: {
       instanceId: input.instanceId,
       productId: input.productId,
       trialId: input.credential.trialId,
-      trialToken: input.credential.trialToken,
       fingerprint: input.fingerprint,
       now: input.now,
     });

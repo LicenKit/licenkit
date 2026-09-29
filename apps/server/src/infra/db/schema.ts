@@ -601,7 +601,6 @@ export const activations = sqliteTable(
       .references(() => instances.id, restrictReference),
     licenseId: text("license_id").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    machineTokenHash: text("machine_token_hash").notNull(),
     name: text("name"),
     platform: text("platform"),
     firstIp: text("first_ip"),
@@ -621,7 +620,6 @@ export const activations = sqliteTable(
       foreignColumns: [licenses.instanceId, licenses.id],
     }).onDelete("restrict"),
     index("idx_activations_license_status").on(table.instanceId, table.licenseId, table.status),
-    index("idx_activations_token_hash").on(table.instanceId, table.machineTokenHash),
     uniqueIndex("uq_activations_active_fingerprint")
       .on(table.instanceId, table.licenseId, table.fingerprintHash)
       .where(sql`${table.status} = 'active'`),
@@ -638,7 +636,6 @@ export const trialClaims = sqliteTable(
       .references(() => instances.id, restrictReference),
     productId: text("product_id").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    trialTokenHash: text("trial_token_hash").notNull(),
     featuresJson: text("features_json").notNull().default("[]"),
     claimedAt: text("claimed_at").notNull(),
     expiresAt: text("expires_at").notNull(),
@@ -649,7 +646,6 @@ export const trialClaims = sqliteTable(
   },
   (table) => [
     unique("uq_trial_claims_instance_id").on(table.instanceId, table.id),
-    unique("uq_trial_claims_token_hash").on(table.instanceId, table.trialTokenHash),
     unique("uq_trial_claims_device").on(table.instanceId, table.productId, table.fingerprintHash),
     foreignKey({
       name: "fk_trial_claims_product",

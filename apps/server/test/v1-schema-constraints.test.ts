@@ -178,6 +178,7 @@ describe("User and Instance database schema", () => {
         "0004_client_validation_policy.sql",
         "0005_single_paddle_webhook.sql",
         "0006_license_billing_environment.sql",
+        "0007_remove_device_tokens.sql",
       ]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);

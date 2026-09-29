@@ -1,18 +1,11 @@
 import pc from "picocolors";
 import os from "node:os";
-import { randomBytes } from "node:crypto";
 import { getMachineFingerprint } from "../lib/machine";
 import { apiActivate, ClientContractError, effectiveValidationIntervalSeconds } from "../lib/client-api";
 import { parseTrustedSigningKeys, verifyActivationResponse } from "../lib/credentials";
 import { SignedTokenError } from "../lib/crypto";
 import { describeClientError } from "../lib/errors";
-import {
-  clearActivationVerification,
-  loadActivationVerification,
-  loadStoredLicense,
-  saveActivationVerification,
-  saveStoredLicense,
-} from "../lib/storage";
+import { saveStoredLicense } from "../lib/storage";
 
 export interface ActivateOptions {
   server?: string;
@@ -53,36 +46,10 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     const diagnosticPlatform = devicePlatform();
     const trustedSigningKeys = parseTrustedSigningKeys(options.signingKey);
     const normalizedLicenseKey = licenseKey.trim();
-    const verification = loadActivationVerification();
-    const reusableVerification = verification &&
-      verification.serverUrl === serverUrl &&
-      verification.productId === productId &&
-      verification.fingerprint.toLowerCase() === fingerprint.toLowerCase()
-        ? verification
-        : null;
-    const completed = loadStoredLicense();
-    const reusableCompletedToken = completed &&
-      completed.serverUrl === serverUrl &&
-      completed.productId === productId;
-    const machineToken = reusableVerification
-      ? reusableVerification.machineToken
-      : reusableCompletedToken
-        ? completed.machineToken
-        : `mtk_${randomBytes(32).toString("base64url")}`;
-    if (reusableVerification === null) {
-      saveActivationVerification({
-        serverUrl,
-        productId,
-        fingerprint,
-        machineToken,
-        createdAt: new Date().toISOString(),
-      });
-    }
     const response = await apiActivate({
       serverUrl,
       productId,
       licenseKey: normalizedLicenseKey,
-      machineToken,
       fingerprint,
       devicePlatform: diagnosticPlatform,
       releaseVersion,
@@ -90,9 +57,6 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       releaseArch,
       name: options.name || os.hostname(),
     });
-    if (response.machine_token !== machineToken) {
-      throw new ClientContractError("Activation response returned a different machine token");
-    }
     try {
       await verifyActivationResponse(response, trustedSigningKeys, {
         productId,
@@ -125,7 +89,6 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       releaseArch,
       devicePlatform: diagnosticPlatform,
       activationId: response.activation_id,
-      machineToken: response.machine_token,
       credentialMode: response.credential_mode,
       signedLicenseToken: response.signed_license_token || undefined,
       signingKeyId: response.signing_key_id || undefined,
@@ -141,7 +104,6 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
       licenseExpiresAt: response.license_expires_at,
       terms: response.terms,
     });
-    clearActivationVerification();
 
     console.log(pc.bold(pc.green("✔ License activated")));
     console.log(`  ${pc.gray("Activation ID:")} ${response.activation_id}`);

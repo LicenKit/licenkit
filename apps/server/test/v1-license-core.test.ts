@@ -346,7 +346,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_opaque_device_verification_secret_0001",
       fingerprint: "sha256:opaque-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -359,7 +358,7 @@ describe("V1 License core contract", () => {
     ]);
     expect(concurrentRepeat.activation_id).toBe(activated.activation_id);
     expect(activated.credential_mode).toBe("opaque");
-    expect(activated.machine_token).toBe("mtk_opaque_device_verification_secret_0001");
+    expect(activated).not.toHaveProperty("machine_token");
     expect(activated.signed_license_token).toBeNull();
     const reissued = await activateLicense({
       db: testEnv.d1,
@@ -367,7 +366,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: activated.machine_token,
       fingerprint: "sha256:opaque-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -381,12 +379,11 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_other_device_cannot_reissue_00000001",
       fingerprint: "sha256:opaque-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
       releaseArch: "universal",
-    })).rejects.toMatchObject({ code: "ACTIVATION_CREDENTIALS_INVALID", status: 401 });
+    })).resolves.toMatchObject({ activation_id: activated.activation_id });
     expect((await testEnv.d1.prepare(
       `SELECT COUNT(*) AS count FROM activations WHERE instance_id = ?1 AND license_id = ?2`
     ).bind(instanceId, issued.license.id).get()).count).toBe(1);
@@ -396,7 +393,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       activationId: activated.activation_id,
-      machineToken: activated.machine_token,
       fingerprint: "sha256:opaque-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -410,7 +406,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       activationId: activated.activation_id,
-      machineToken: activated.machine_token,
       fingerprint: "sha256:opaque-device",
       releaseVersion: "9.9.9",
       releasePlatform: "macos",
@@ -446,7 +441,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_new_release_device_credential_secret",
       fingerprint: "sha256:new-release-device",
       releaseVersion: "2.0.0",
       releasePlatform: "macos",
@@ -463,7 +457,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_unregistered_release_credential_secret",
       fingerprint: "sha256:unregistered-release-device",
       releaseVersion: "9.9.9",
       releasePlatform: "macos",
@@ -491,7 +484,6 @@ describe("V1 License core contract", () => {
         instanceId,
         productId,
         licenseKey: issued.license.licenseKey,
-        machineToken: `mtk_${device}_credential_secret_000000000000`,
         fingerprint: `sha256:${device}`,
         releaseVersion: "1.0.0",
         releasePlatform: "macos",
@@ -544,7 +536,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_signed_device_credential_secret_0001",
       fingerprint: "sha256:signed-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -578,7 +569,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: activated.machine_token,
       fingerprint: "sha256:signed-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -677,7 +667,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_signed_atomic_credential_secret_0001",
       fingerprint: "sha256:signed-atomic-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -698,7 +687,7 @@ describe("V1 License core contract", () => {
     );
     const activated = await activateLicense(activationInput);
     const beforeFailure = await testEnv.d1.prepare(
-      `SELECT machine_token_hash, updated_at FROM activations
+      `SELECT updated_at FROM activations
        WHERE instance_id = ?1 AND license_id = ?2 AND id = ?3`
     ).bind(instanceId, issued.license.id, activated.activation_id).get();
 
@@ -712,7 +701,7 @@ describe("V1 License core contract", () => {
       now: new Date("2026-09-19T10:02:00.000Z"),
     })).rejects.toThrow("DELIVERY_ENVELOPE_INVALID_JSON");
     const afterFailure = await testEnv.d1.prepare(
-      `SELECT machine_token_hash, updated_at FROM activations
+      `SELECT updated_at FROM activations
        WHERE instance_id = ?1 AND license_id = ?2 AND id = ?3`
     ).bind(instanceId, issued.license.id, activated.activation_id).get();
     expect(afterFailure).toEqual(beforeFailure);
@@ -735,7 +724,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_rotate_device_credential_secret_0001",
       fingerprint: "sha256:rotate-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -756,7 +744,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       activationId: activated.activation_id,
-      machineToken: activated.machine_token,
       fingerprint: "sha256:rotate-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -776,7 +763,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       activationId: activated.activation_id,
-      machineToken: activated.machine_token,
       fingerprint: "sha256:rotate-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -828,41 +814,37 @@ describe("V1 License core contract", () => {
   });
 
   it("allows one online-only Trial Claim per product and device", async () => {
-    const trialToken = "ttk_trial_device_verification_secret_00000001";
     const attempts = await Promise.all([0, 1].map(() => claimTrial({
       db: testEnv.d1,
       instanceId,
       productId,
       fingerprint: "sha256:trial-device",
-      trialToken,
       now: new Date("2026-09-19T10:00:00.000Z"),
     })));
     const [first, repeated] = attempts;
     expect(first.trial_id).toBe(repeated.trial_id);
-    expect(first.trial_token).toBe(trialToken);
+    expect(first).not.toHaveProperty("trial_token");
     await expect(claimTrial({
       db: testEnv.d1,
       instanceId,
       productId,
       fingerprint: "sha256:trial-device",
-      trialToken: "ttk_other_device_cannot_reissue_00000001",
-    })).rejects.toMatchObject({ code: "TRIAL_CREDENTIALS_INVALID", status: 401 });
-    await expect(claimTrial({
+    })).resolves.toMatchObject({ trial_id: first.trial_id });
+    const otherDevice = await claimTrial({
       db: testEnv.d1,
       instanceId,
       productId,
       fingerprint: "sha256:other-trial-device",
-      trialToken,
-    })).rejects.toMatchObject({ code: "TRIAL_CREDENTIALS_INVALID", status: 401 });
+    });
+    expect(otherDevice.trial_id).not.toBe(first.trial_id);
     expect((await testEnv.d1.prepare(
       `SELECT COUNT(*) AS count FROM trial_claims WHERE instance_id = ?1 AND product_id = ?2`
-    ).bind(instanceId, productId).get()).count).toBe(1);
+    ).bind(instanceId, productId).get()).count).toBe(2);
     const validated = await validateTrial({
       db: testEnv.d1,
       instanceId,
       productId,
       trialId: first.trial_id,
-      trialToken: first.trial_token,
       fingerprint: "sha256:trial-device",
       now: new Date("2026-09-19T10:10:00.000Z"),
     });
@@ -880,7 +862,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       trialId: first.trial_id,
-      trialToken: first.trial_token,
       fingerprint: "sha256:trial-device",
     })).rejects.toMatchObject({ code: "TRIAL_REVOKED" });
   });
@@ -949,7 +930,6 @@ describe("V1 License core contract", () => {
         release_platform: "macos",
         release_arch: "universal",
         activation_id: "act_legacy",
-        machine_token: "mtk_legacy_request_token",
       }),
     }, testEnv.env);
     expect(legacyRequest.status).toBe(400);
@@ -997,7 +977,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint,
-      trialToken: "ttk_claimed_device_credential_secret_0001",
     });
     const app = clientApp();
     const unavailable = await app.request("https://license.example.test/api/v1/client/validate", {
@@ -1030,17 +1009,15 @@ describe("V1 License core contract", () => {
       body: JSON.stringify({
         product_id: productId,
         fingerprint,
-        trial_token: "ttk_untrusted_device_credential_secret_0001",
         release_version: "1.0.0",
         release_platform: "macos",
       release_arch: "universal",
       }),
     }, testEnv.env);
     const duplicateBody = await duplicate.json() as any;
-    expect(duplicate.status).toBe(401);
-    expect(duplicateBody.error.code).toBe("TRIAL_CREDENTIALS_INVALID");
-    expect(duplicateBody.error).not.toHaveProperty("details");
-    expect(JSON.stringify(duplicateBody)).not.toContain("trl_");
+    expect(duplicate.status).toBe(201);
+    expect(duplicateBody.data.trial_id).toBeDefined();
+    expect(duplicateBody.data).not.toHaveProperty("trial_token");
 
     const removedRoute = await app.request("https://license.example.test/api/v1/client/trials/validate", {
       method: "POST",
@@ -1068,7 +1045,6 @@ describe("V1 License core contract", () => {
       body: JSON.stringify({
         product_id: productId,
         license_key: issued.license.licenseKey,
-        machine_token: "mtk_operation_license_credential_secret_0001",
         fingerprint: "sha256:operation-license-device",
         release_version: "1.0.0",
         release_platform: "macos",
@@ -1099,7 +1075,6 @@ describe("V1 License core contract", () => {
       body: JSON.stringify({
         product_id: productId,
         fingerprint: "sha256:operation-trial-device",
-        trial_token: "ttk_operation_trial_credential_secret_000001",
         release_version: "1.0.0",
         release_platform: "macos",
       release_arch: "universal",
@@ -1128,7 +1103,6 @@ describe("V1 License core contract", () => {
       body: JSON.stringify({
         product_id: productId,
         activation_id: activatedBody.data.activation_id,
-        machine_token: activatedBody.data.machine_token,
         fingerprint: "sha256:operation-license-device",
       }),
     }, testEnv.env);
@@ -1146,27 +1120,26 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       fingerprint,
-      trialToken: "ttk_trial_state_credential_secret_000001",
     });
     const app = clientApp();
-    const validate = (trialToken: string) => app.request(
+    const validate = (requestFingerprint = fingerprint) => app.request(
       "https://license.example.test/api/v1/client/validate",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           product_id: productId,
-          fingerprint,
+          fingerprint: requestFingerprint,
           release_version: "1.0.0",
           release_platform: "macos",
       release_arch: "universal",
-          credential: { kind: "trial", trial_id: claimed.trial_id, trial_token: trialToken },
+          credential: { kind: "trial", trial_id: claimed.trial_id },
         }),
       },
       testEnv.env,
     );
 
-    const active = await validate(claimed.trial_token);
+    const active = await validate();
     expect((await active.json() as any).data.state).toMatchObject({
       kind: "trial",
       status: "active",
@@ -1183,7 +1156,7 @@ describe("V1 License core contract", () => {
       productId,
       claimed.trial_id,
     );
-    const expired = await validate(claimed.trial_token);
+    const expired = await validate();
     expect(expired.status).toBe(200);
     expect((await expired.json() as any).data.state).toMatchObject({
       kind: "trial",
@@ -1204,10 +1177,10 @@ describe("V1 License core contract", () => {
       productId,
       claimed.trial_id,
     );
-    const unauthenticated = await validate("ttk_" + "0".repeat(64));
+    const unauthenticated = await validate("sha256:other-trial-state-device");
     expect(unauthenticated.status).toBe(401);
     expect((await unauthenticated.json() as any).error.code).toBe("TRIAL_CREDENTIALS_INVALID");
-    const revoked = await validate(claimed.trial_token);
+    const revoked = await validate();
     expect(revoked.status).toBe(200);
     expect((await revoked.json() as any).data.state).toMatchObject({
       kind: "trial",
@@ -1240,35 +1213,33 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_license_state_credential_secret_0001",
       fingerprint,
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
       releaseArch: "universal",
     });
     const app = clientApp();
-    const validate = (machineToken: string, releaseVersion = "1.0.0") => app.request(
+    const validate = (releaseVersion = "1.0.0", requestFingerprint = fingerprint) => app.request(
       "https://license.example.test/api/v1/client/validate",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           product_id: productId,
-          fingerprint,
+          fingerprint: requestFingerprint,
           release_version: releaseVersion,
           release_platform: "macos",
           release_arch: "universal",
           credential: {
             kind: "license",
             activation_id: activated.activation_id,
-            machine_token: machineToken,
           },
         }),
       },
       testEnv.env,
     );
 
-    const active = await validate(activated.machine_token);
+    const active = await validate();
     const activeBody = await active.json() as any;
     expect(active.status).toBe(200);
     expect(activeBody.data.state).toMatchObject({ kind: "license", status: "active" });
@@ -1280,7 +1251,7 @@ describe("V1 License core contract", () => {
     });
     expect(activeBody.data).not.toHaveProperty("machine_token");
 
-    const unregisteredRelease = await validate(activated.machine_token, "9.9.9");
+    const unregisteredRelease = await validate("9.9.9");
     expect((await unregisteredRelease.json() as any).data.state).toMatchObject({
       kind: "license",
       status: "active",
@@ -1293,10 +1264,10 @@ describe("V1 License core contract", () => {
       instanceId,
       issued.license.id,
     );
-    const wrongToken = await validate("mtk_" + "0".repeat(64));
-    expect(wrongToken.status).toBe(401);
-    expect((await wrongToken.json() as any).error.code).toBe("ACTIVATION_CREDENTIALS_INVALID");
-    const suspended = await validate(activated.machine_token);
+    const wrongFingerprint = await validate("1.0.0", "sha256:other-license-state-device");
+    expect(wrongFingerprint.status).toBe(401);
+    expect((await wrongFingerprint.json() as any).error.code).toBe("ACTIVATION_CREDENTIALS_INVALID");
+    const suspended = await validate();
     expect(suspended.status).toBe(200);
     expect((await suspended.json() as any).data.state).toMatchObject({
       kind: "license",
@@ -1316,7 +1287,7 @@ describe("V1 License core contract", () => {
       instanceId,
       issued.license.id,
     );
-    expect((await (await validate(activated.machine_token)).json() as any).data.state).toMatchObject({
+    expect((await (await validate()).json() as any).data.state).toMatchObject({
       kind: "license",
       status: "revoked",
       code: "LICENSE_REVOKED",
@@ -1337,7 +1308,7 @@ describe("V1 License core contract", () => {
       instanceId,
       issued.license.id,
     );
-    expect((await (await validate(activated.machine_token)).json() as any).data.state).toMatchObject({
+    expect((await (await validate()).json() as any).data.state).toMatchObject({
       kind: "license",
       status: "expired",
       code: "LICENSE_EXPIRED",
@@ -1369,7 +1340,7 @@ describe("V1 License core contract", () => {
       "c".repeat(64),
       "2026-10-01T00:00:00.000Z",
     );
-    expect((await (await validate(activated.machine_token, "2.0.0")).json() as any).data.state).toMatchObject({
+    expect((await (await validate("2.0.0")).json() as any).data.state).toMatchObject({
       kind: "release_not_eligible",
       status: "update_required",
       code: "UPDATE_ENTITLEMENT_REQUIRED",
@@ -1395,7 +1366,7 @@ describe("V1 License core contract", () => {
       instanceId,
       activated.activation_id,
     );
-    const deactivated = await validate(activated.machine_token);
+    const deactivated = await validate();
     expect(deactivated.status).toBe(200);
     expect((await deactivated.json() as any).data.state).toEqual({
       kind: "license",
@@ -1412,7 +1383,7 @@ describe("V1 License core contract", () => {
       instanceId,
       activated.activation_id,
     );
-    expect((await (await validate(activated.machine_token)).json() as any).data.state).toEqual({
+    expect((await (await validate()).json() as any).data.state).toEqual({
       kind: "license",
       status: "activation_revoked",
       code: "ACTIVATION_REVOKED",
@@ -1476,7 +1447,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_short_grace_credential_secret_0001",
       fingerprint: "sha256:short-ttl-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",
@@ -1592,7 +1562,6 @@ describe("V1 License core contract", () => {
       instanceId,
       productId,
       licenseKey: issued.license.licenseKey,
-      machineToken: "mtk_billing_grace_credential_secret_0001",
       fingerprint: "sha256:grace-device",
       releaseVersion: "1.0.0",
       releasePlatform: "macos",

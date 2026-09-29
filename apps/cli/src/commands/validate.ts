@@ -26,7 +26,6 @@ export async function validateCommand(): Promise<void> {
       credential: {
         kind: "license",
         activation_id: stored.activationId,
-        machine_token: stored.machineToken,
       },
     });
     const effectiveInterval = effectiveValidationIntervalSeconds(

@@ -71,8 +71,8 @@ export async function verifyActivationResponse(
   context: ClaimsContext
 ): Promise<SignedLicenseClaims | undefined> {
   if (!response || typeof response !== "object") throw new ClientContractError("Server returned an invalid credential response");
-  if (!response.activation_id || !response.machine_token) {
-    throw new ClientContractError("Credential response is missing activation_id or machine_token");
+  if (!response.activation_id) {
+    throw new ClientContractError("Credential response is missing activation_id");
   }
   assertTerms(response.terms);
   if (response.state.kind !== "license" || response.state.status !== "active") {

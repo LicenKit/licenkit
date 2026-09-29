@@ -20,7 +20,6 @@ const BillingEnvironmentField = {
 const ActivateSchema = z.object({
   product_id: z.string().min(1),
   license_key: z.string().min(16).max(200),
-  machine_token: z.string().min(32).max(512),
   fingerprint: z.string().trim().min(8).max(512),
   device_platform: z.string().trim().min(1).max(100).optional(),
   name: z.string().trim().min(1).max(200).optional(),
@@ -37,7 +36,6 @@ clientRouter.post("/activate", async (c) => {
     instanceId,
     productId: input.product_id,
     licenseKey: input.license_key,
-    machineToken: input.machine_token,
     fingerprint: input.fingerprint,
     devicePlatform: input.device_platform,
     name: input.name,
@@ -58,12 +56,10 @@ const CredentialSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("license"),
     activation_id: z.string().min(1),
-    machine_token: z.string().min(16),
   }).strict(),
   z.object({
     kind: z.literal("trial"),
     trial_id: z.string().min(1),
-    trial_token: z.string().min(16),
   }).strict(),
   z.object({
     kind: z.literal("none"),
@@ -85,13 +81,11 @@ clientRouter.post("/validate", async (c) => {
     ? {
       kind: "license" as const,
       activationId: input.credential.activation_id,
-      machineToken: input.credential.machine_token,
     }
     : input.credential.kind === "trial"
       ? {
         kind: "trial" as const,
         trialId: input.credential.trial_id,
-        trialToken: input.credential.trial_token,
       }
       : { kind: "none" as const };
   const data = await validateClient({
@@ -116,7 +110,6 @@ clientRouter.post("/validate", async (c) => {
 const TrialClaimSchema = z.object({
   product_id: z.string().min(1),
   fingerprint: z.string().trim().min(8).max(512),
-  trial_token: z.string().min(32).max(512),
   device_platform: z.string().trim().min(1).max(100).optional(),
   ...ReleaseFields,
 }).strict();
@@ -129,7 +122,6 @@ clientRouter.post("/trials/claim", async (c) => {
     instanceId,
     productId: input.product_id,
     fingerprint: input.fingerprint,
-    trialToken: input.trial_token,
   });
   c.header("Cache-Control", "no-store");
   return c.json({
@@ -141,7 +133,6 @@ clientRouter.post("/trials/claim", async (c) => {
 const DeactivateSchema = z.object({
   product_id: z.string().min(1),
   activation_id: z.string().min(1),
-  machine_token: z.string().min(16),
   fingerprint: z.string().trim().min(8).max(512),
 }).strict();
 
@@ -153,7 +144,6 @@ clientRouter.post("/deactivate", async (c) => {
     instanceId,
     productId: input.product_id,
     activationId: input.activation_id,
-    machineToken: input.machine_token,
     fingerprint: input.fingerprint,
   });
   return c.json({

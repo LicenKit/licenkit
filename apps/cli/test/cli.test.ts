@@ -93,7 +93,6 @@ function opaqueActivationData(): ActivationResponse {
   const state = activeState();
   return {
     activation_id: "act_1",
-    machine_token: "mtk_secret_value_123",
     credential_mode: "opaque",
     signed_license_token: null,
     signing_key_id: null,
@@ -137,7 +136,6 @@ describe("unified Client API contract", () => {
       credential: {
         kind: "license",
         activation_id: "act_1",
-        machine_token: "mtk_secret_value_123",
       },
     });
 
@@ -150,7 +148,6 @@ describe("unified Client API contract", () => {
       credential: {
         kind: "license",
         activation_id: "act_1",
-        machine_token: "mtk_secret_value_123",
       },
     });
     expect(result.state).toMatchObject({ kind: "license", status: "active" });
@@ -187,7 +184,7 @@ describe("unified Client API contract", () => {
     };
     await apiValidate({
       ...context,
-      credential: { kind: "trial", trial_id: "trl_1", trial_token: "ttk_secret_value_123" },
+      credential: { kind: "trial", trial_id: "trl_1" },
     });
     await apiValidate({ ...context, credential: { kind: "none" } });
 
@@ -196,7 +193,7 @@ describe("unified Client API contract", () => {
       "https://license.example.com/api/v1/client/validate",
     ]);
     expect(calls.map((call) => call.body.credential)).toEqual([
-      { kind: "trial", trial_id: "trl_1", trial_token: "ttk_secret_value_123" },
+      { kind: "trial", trial_id: "trl_1" },
       { kind: "none" },
     ]);
   });
@@ -243,7 +240,6 @@ describe("unified Client API contract", () => {
       credential: {
         kind: "license" as const,
         activation_id: "act_1",
-        machine_token: "mtk_secret_value_123",
       },
     };
 
@@ -316,7 +312,7 @@ describe("unified Client API contract", () => {
         releaseVersion: "2.4.0",
         releasePlatform: "macos",
         releaseArch: "universal",
-        credential: { kind: "license", activation_id: "act_1", machine_token: "mtk_secret_value_123" },
+        credential: { kind: "license", activation_id: "act_1" },
       })).rejects.toMatchObject({
         name: "ClientContractError",
         status: 200,
@@ -396,7 +392,6 @@ describe("unified Client API contract", () => {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
       licenseKey: "LK-SECRET-VALUE-123",
-      machineToken: "mtk_secret_value_123",
       fingerprint: "device-fingerprint",
       devicePlatform: "macos-arm64",
       releaseVersion: "2.4.0",
@@ -411,7 +406,6 @@ describe("unified Client API contract", () => {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
       activationId: "act_1",
-      machineToken: "mtk_secret_value_123",
       fingerprint: "device-fingerprint",
     })).resolves.toMatchObject({ status: "deactivated", meta: { request_id: "req_deactivate" } });
   });
@@ -430,7 +424,6 @@ describe("signed credential verification", () => {
     };
     const response: ActivationResponse = {
       activation_id: "act_1",
-      machine_token: "mtk_secret_value_123",
       credential_mode: "signed",
       signed_license_token: signed.token,
       signing_key_id: "key_v1",
@@ -564,7 +557,6 @@ describe("local credential state and periodic verification", () => {
       releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
-      machineToken: "mtk_secret_value_123",
       credentialMode: "opaque",
       activatedAt: validatedAt,
       lastValidatedAt: validatedAt,
@@ -586,7 +578,6 @@ describe("local credential state and periodic verification", () => {
       releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
-      machineToken: "mtk_secret_value_123",
       credentialMode: "opaque",
       activatedAt: "2026-09-23T10:00:00Z",
       lastValidatedAt: "2026-09-23T10:00:00Z",
@@ -607,7 +598,6 @@ describe("local credential state and periodic verification", () => {
       releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
-      machineToken: "mtk_secret_value_123",
       credentialMode: "signed",
       signedLicenseToken: signed.token,
       signingKeyId: "key_v1",
@@ -657,7 +647,6 @@ describe("local credential state and periodic verification", () => {
       releaseArch: "universal",
       devicePlatform: "macos-arm64",
       activationId: "act_1",
-      machineToken: "mtk_secret_value_123",
       credentialMode: "signed",
       signedLicenseToken: signed.token,
       signingKeyId: "key_v1",

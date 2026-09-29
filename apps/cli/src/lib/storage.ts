@@ -18,7 +18,6 @@ export interface StoredLicenseData {
   releaseArch: string;
   devicePlatform: string;
   activationId: string;
-  machineToken: string;
   credentialMode: CredentialMode;
   signedLicenseToken?: string;
   signingKeyId?: string;
@@ -33,14 +32,6 @@ export interface StoredLicenseData {
   terms: LicenseTerms;
 }
 
-export interface ActivationVerificationData {
-  serverUrl: string;
-  productId: string;
-  fingerprint: string;
-  machineToken: string;
-  createdAt: string;
-}
-
 export function getConfigDirectory(): string {
   if (process.env.LICENKIT_CONFIG_DIR) return path.resolve(process.env.LICENKIT_CONFIG_DIR);
   return path.join(os.homedir(), ".licenkit");
@@ -48,10 +39,6 @@ export function getConfigDirectory(): string {
 
 export function getLicenseFilePath(): string {
   return path.join(getConfigDirectory(), "license.json");
-}
-
-export function getActivationVerificationFilePath(): string {
-  return path.join(getConfigDirectory(), "activation-verification.json");
 }
 
 function normalizeStoredDate(value: string | number | null | undefined): string | null {
@@ -72,7 +59,6 @@ function normalizeStoredLicenseData(value: unknown): StoredLicenseData | null {
     typeof candidate.releaseArch === "string" &&
     typeof candidate.devicePlatform === "string" &&
     typeof candidate.activationId === "string" &&
-    typeof candidate.machineToken === "string" &&
     (candidate.credentialMode === "opaque" || candidate.credentialMode === "signed") &&
     typeof candidate.lastValidatedAt === "string" &&
     Number.isFinite(Date.parse(candidate.lastValidatedAt)) &&
@@ -136,46 +122,6 @@ export function saveStoredLicense(data: StoredLicenseData): void {
   fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 });
   fs.renameSync(tempPath, filePath);
   fs.chmodSync(filePath, 0o600);
-}
-
-function normalizeActivationVerification(value: unknown): ActivationVerificationData | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Partial<ActivationVerificationData>;
-  if (
-    typeof candidate.serverUrl !== "string" ||
-    typeof candidate.productId !== "string" ||
-    typeof candidate.fingerprint !== "string" ||
-    typeof candidate.machineToken !== "string" ||
-    typeof candidate.createdAt !== "string" ||
-    !Number.isFinite(Date.parse(candidate.createdAt))
-  ) return null;
-  return candidate as ActivationVerificationData;
-}
-
-export function loadActivationVerification(): ActivationVerificationData | null {
-  const filePath = getActivationVerificationFilePath();
-  if (!fs.existsSync(filePath)) return null;
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
-  const normalized = normalizeActivationVerification(parsed);
-  if (!normalized) throw new Error(`Activation verification file is invalid: ${filePath}`);
-  return normalized;
-}
-
-export function saveActivationVerification(data: ActivationVerificationData): void {
-  const configDir = getConfigDirectory();
-  fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  const filePath = getActivationVerificationFilePath();
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 });
-  fs.renameSync(tempPath, filePath);
-  fs.chmodSync(filePath, 0o600);
-}
-
-export function clearActivationVerification(): boolean {
-  const filePath = getActivationVerificationFilePath();
-  if (!fs.existsSync(filePath)) return false;
-  fs.unlinkSync(filePath);
-  return true;
 }
 
 export function clearStoredLicense(): boolean {

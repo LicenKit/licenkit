@@ -1,7 +1,7 @@
 import { ulid } from "ulid";
 import { AppError, NotFoundError } from "../../middleware/error";
 import { decryptEnvelopeV1 } from "../../infra/delivery/crypto";
-import { hashLicenseKey, sha256Hex, timingSafeEqual } from "../../infra/crypto";
+import { hashLicenseKey, timingSafeEqual } from "../../infra/crypto";
 import { hashDeviceFingerprint } from "../../domain/license/credentials";
 import {
   createSignedLicenseToken,
@@ -49,7 +49,6 @@ interface ActivationRow {
   id: string;
   license_id: string;
   fingerprint_hash: string;
-  machine_token_hash: string;
   status: "active" | "deactivated" | "revoked";
 }
 
@@ -167,7 +166,6 @@ async function createCredentialResponse(input: {
   env: { STORAGE_ENCRYPTION_KEY?: string };
   license: LicenseRow;
   activationId: string;
-  machineToken: string;
   fingerprint: string;
   build: BuildIdentity;
   now: Date;
@@ -186,7 +184,6 @@ async function createCredentialResponse(input: {
     : input.license.updates_until;
   const base = {
     activation_id: input.activationId,
-    machine_token: input.machineToken,
     billing_environment: input.license.billing_environment,
     credential_mode: input.license.credential_mode,
     signed_license_token: null as string | null,
@@ -247,7 +244,6 @@ export async function activateLicense(input: {
   instanceId: string;
   productId: string;
   licenseKey: string;
-  machineToken: string;
   fingerprint: string;
   devicePlatform?: string | null;
   name?: string | null;
@@ -288,10 +284,8 @@ export async function activateLicense(input: {
   });
 
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
-  const machineToken = input.machineToken;
-  const machineTokenHash = await sha256Hex(machineToken);
   let activation = await firstD1<ActivationRow>(input.db.prepare(
-    `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
+    `SELECT id, license_id, fingerprint_hash, status
      FROM activations
      WHERE instance_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
      LIMIT 1`
@@ -299,19 +293,11 @@ export async function activateLicense(input: {
 
   let credentialResponse: Awaited<ReturnType<typeof createCredentialResponse>>;
   if (activation) {
-    if (!timingSafeEqual(machineTokenHash, activation.machine_token_hash)) {
-      throw new AppError(
-        "ACTIVATION_CREDENTIALS_INVALID",
-        "The existing Activation cannot be reissued with these credentials.",
-        401,
-      );
-    }
     credentialResponse = await createCredentialResponse({
       db: input.db,
       env: input.env,
       license,
       activationId: activation.id,
-      machineToken,
       fingerprint: input.fingerprint,
       build,
       now,
@@ -321,11 +307,10 @@ export async function activateLicense(input: {
        SET name = COALESCE(?1, name),
            platform = COALESCE(?2, platform), last_validated_at = ?3, updated_at = ?3
        WHERE instance_id = ?4 AND license_id = ?5 AND id = ?6 AND status = 'active'
-         AND machine_token_hash = ?7
          AND EXISTS (
            SELECT 1 FROM licenses l
-           WHERE l.instance_id = ?4 AND l.id = ?5 AND l.product_id = ?8
-             AND l.updated_at = ?9
+           WHERE l.instance_id = ?4 AND l.id = ?5 AND l.product_id = ?7
+             AND l.updated_at = ?8
              AND l.is_checkout_verification = 0 AND l.status = 'active'
              AND (
                l.expires_at IS NULL
@@ -340,7 +325,6 @@ export async function activateLicense(input: {
       input.instanceId,
       license.id,
       activation.id,
-      machineTokenHash,
       input.productId,
       license.updated_at,
     ).run();
@@ -366,7 +350,6 @@ export async function activateLicense(input: {
       env: input.env,
       license,
       activationId,
-      machineToken,
       fingerprint: input.fingerprint,
       build,
       now,
@@ -374,26 +357,25 @@ export async function activateLicense(input: {
     try {
       const inserted = await input.db.prepare(
         `INSERT INTO activations (
-           id, instance_id, license_id, fingerprint_hash, machine_token_hash,
+           id, instance_id, license_id, fingerprint_hash,
            name, platform, first_ip, status, activated_at, last_validated_at,
            deactivated_at, revoked_at, revoke_reason, updated_at
          )
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?9, NULL, NULL, NULL, ?9
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, ?8, NULL, NULL, NULL, ?8
          FROM licenses l
-         WHERE l.instance_id = ?2 AND l.id = ?3 AND l.product_id = ?10
-           AND l.updated_at = ?11
+         WHERE l.instance_id = ?2 AND l.id = ?3 AND l.product_id = ?9
+           AND l.updated_at = ?10
            AND l.is_checkout_verification = 0 AND l.status = 'active'
            AND (
              l.expires_at IS NULL
              OR datetime(l.expires_at, '+' || CASE WHEN l.renewal_mode = 'billing'
-                  THEN l.payment_grace_seconds ELSE 0 END || ' seconds') > datetime(?9)
+                  THEN l.payment_grace_seconds ELSE 0 END || ' seconds') > datetime(?8)
            )`
       ).bind(
         activationId,
         input.instanceId,
         license.id,
         fingerprintHash,
-        machineTokenHash,
         input.name ?? null,
         input.devicePlatform ?? null,
         input.firstIp ?? null,
@@ -420,34 +402,23 @@ export async function activateLicense(input: {
         id: activationId,
         license_id: license.id,
         fingerprint_hash: fingerprintHash,
-        machine_token_hash: machineTokenHash,
         status: "active",
       };
     } catch (error) {
       const raw = String(error);
       const reachedActivationLimit = raw.includes("LICENSE_ACTIVATION_LIMIT_REACHED");
       activation = await firstD1<ActivationRow>(input.db.prepare(
-        `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
+        `SELECT id, license_id, fingerprint_hash, status
          FROM activations
          WHERE instance_id = ?1 AND license_id = ?2 AND fingerprint_hash = ?3 AND status = 'active'
          LIMIT 1`
       ).bind(input.instanceId, license.id, fingerprintHash));
       if (activation) {
-        if (!timingSafeEqual(machineTokenHash, activation.machine_token_hash)) {
-          throw new AppError(
-            "ACTIVATION_CREDENTIALS_INVALID",
-            "The existing Activation cannot be reissued with these credentials.",
-            401,
-            undefined,
-            { database_error: raw },
-          );
-        }
         credentialResponse = await createCredentialResponse({
           db: input.db,
           env: input.env,
           license,
           activationId: activation.id,
-          machineToken,
           fingerprint: input.fingerprint,
           build,
           now,
@@ -455,11 +426,10 @@ export async function activateLicense(input: {
         const refreshed = await input.db.prepare(
           `UPDATE activations SET last_validated_at = ?1, updated_at = ?1
            WHERE instance_id = ?2 AND license_id = ?3 AND id = ?4 AND status = 'active'
-             AND machine_token_hash = ?5
              AND EXISTS (
                SELECT 1 FROM licenses l
-               WHERE l.instance_id = ?2 AND l.id = ?3 AND l.product_id = ?6
-                 AND l.updated_at = ?7
+               WHERE l.instance_id = ?2 AND l.id = ?3 AND l.product_id = ?5
+                 AND l.updated_at = ?6
                  AND l.is_checkout_verification = 0 AND l.status = 'active'
                  AND (
                    l.expires_at IS NULL
@@ -472,7 +442,6 @@ export async function activateLicense(input: {
           input.instanceId,
           license.id,
           activation.id,
-          machineTokenHash,
           input.productId,
           license.updated_at,
         ).run();
@@ -538,7 +507,6 @@ export async function validateActivation(input: {
   instanceId: string;
   productId: string;
   activationId: string;
-  machineToken: string;
   fingerprint: string;
   releaseVersion: string;
   releasePlatform: string;
@@ -549,7 +517,7 @@ export async function validateActivation(input: {
   const now = input.now ?? new Date();
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
   const activation = await firstD1<any>(input.db.prepare(
-    `SELECT a.id, a.license_id, a.fingerprint_hash, a.machine_token_hash, a.status,
+    `SELECT a.id, a.license_id, a.fingerprint_hash, a.status,
             l.instance_id, l.product_id, l.license_model, l.renewal_mode,
             l.credential_mode, l.offline_grace_seconds,
             p.validation_interval_seconds, l.payment_grace_seconds,
@@ -563,11 +531,7 @@ export async function validateActivation(input: {
      LIMIT 1`
   ).bind(input.instanceId, input.productId, input.activationId));
   if (!activation) throw new NotFoundError("Activation not found");
-  const providedTokenHash = await sha256Hex(input.machineToken);
-  if (
-    !timingSafeEqual(providedTokenHash, activation.machine_token_hash) ||
-    !timingSafeEqual(fingerprintHash, activation.fingerprint_hash)
-  ) {
+  if (!timingSafeEqual(fingerprintHash, activation.fingerprint_hash)) {
     throw new AppError("ACTIVATION_CREDENTIALS_INVALID", "The Activation credentials are invalid.", 401);
   }
   if (activation.status === "revoked") {
@@ -619,7 +583,6 @@ export async function validateActivation(input: {
     env: input.env,
     license,
     activationId: input.activationId,
-    machineToken: input.machineToken,
     fingerprint: input.fingerprint,
     build,
     now,
@@ -648,7 +611,7 @@ export async function validateActivation(input: {
   ).run();
   if ((refreshed.meta?.changes ?? 0) !== 1) {
     const currentActivation = await firstD1<ActivationRow>(input.db.prepare(
-      `SELECT id, license_id, fingerprint_hash, machine_token_hash, status
+      `SELECT id, license_id, fingerprint_hash, status
        FROM activations WHERE instance_id = ?1 AND license_id = ?2 AND id = ?3 LIMIT 1`
     ).bind(input.instanceId, license.id, input.activationId));
     if (!currentActivation) throw new NotFoundError("Activation not found");
@@ -697,21 +660,19 @@ export async function deactivateActivation(input: {
   instanceId: string;
   productId: string;
   activationId: string;
-  machineToken: string;
   fingerprint: string;
   now?: Date;
 }) {
   const fingerprintHash = await hashDeviceFingerprint(input.fingerprint);
-  const tokenHash = await sha256Hex(input.machineToken);
   const activation = await firstD1<ActivationRow>(input.db.prepare(
-    `SELECT a.id, a.license_id, a.fingerprint_hash, a.machine_token_hash, a.status
+    `SELECT a.id, a.license_id, a.fingerprint_hash, a.status
      FROM activations a
      JOIN licenses l ON l.instance_id = a.instance_id AND l.id = a.license_id
      WHERE a.instance_id = ?1 AND l.product_id = ?2 AND a.id = ?3
      LIMIT 1`
   ).bind(input.instanceId, input.productId, input.activationId));
   if (!activation) throw new NotFoundError("Activation not found");
-  if (!timingSafeEqual(tokenHash, activation.machine_token_hash) || !timingSafeEqual(fingerprintHash, activation.fingerprint_hash)) {
+  if (!timingSafeEqual(fingerprintHash, activation.fingerprint_hash)) {
     throw new AppError("ACTIVATION_CREDENTIALS_INVALID", "The Activation credentials are invalid.", 401);
   }
   if (activation.status === "revoked") throw new AppError("ACTIVATION_REVOKED", "The Activation is revoked.", 403);
