@@ -6,7 +6,7 @@ import {
   UserRound,
   UserRoundCheck,
 } from "lucide-react";
-import { api, type Customer, type License } from "../../lib/api-client";
+import { api, type Customer, type CustomerLicenseSummary } from "../../lib/api-client";
 import {
   Badge,
   Button,
@@ -30,7 +30,7 @@ import { useI18n } from "../../lib/i18n";
 export function CustomersView({ canManage }: { canManage: boolean }) {
   const { t, formatDate } = useI18n();
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [licenses, setLicenses] = useState<License[]>([]);
+  const [licenses, setLicenses] = useState<CustomerLicenseSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [licensesLoading, setLicensesLoading] = useState(false);
@@ -91,17 +91,19 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
   }
 
   useEffect(() => {
+    let cancelled = false;
     if (!selected) {
       setLicenses([]);
       return;
     }
     setForm({ name: selected.name || "", email: selected.email });
+    setLicenses([]);
     setLicensesLoading(true);
-    api.admin.licenses
-      .list({ customerId: selected.id, limit: 100 })
-      .then((result) => setLicenses(result.items))
-      .catch(setError)
-      .finally(() => setLicensesLoading(false));
+    api.admin.customers.get(selected.id)
+      .then((result) => { if (!cancelled) setLicenses(result.licenses); })
+      .catch((caught) => { if (!cancelled) setError(caught); })
+      .finally(() => { if (!cancelled) setLicensesLoading(false); });
+    return () => { cancelled = true; };
   }, [selectedId, selected?.updatedAt]);
 
   async function save(event: FormEvent) {
@@ -234,6 +236,8 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                           <div>
                             <strong>{customer.name || customer.email}</strong>
                             <small className="mono">{customer.id}</small>
+                            {customer.hasSandboxLicense ? <Badge tone="warning">Sandbox</Badge> : null}
+                            {customer.hasLiveLicense ? <Badge>Live</Badge> : null}
                           </div>
                         </div>
                       </td>
@@ -365,6 +369,7 @@ export function CustomersView({ canManage }: { canManage: boolean }) {
                           <td>
                             <strong>{license.productName || license.productId}</strong>
                             <small className="mono">{license.id}</small>
+                            <Badge tone={license.billingEnvironment === "sandbox" ? "warning" : "neutral"}>{license.billingEnvironment === "sandbox" ? "Sandbox" : "Live"}</Badge>
                           </td>
                           <td>
                             <span>{license.licenseModel === "perpetual" ? t.licensePlans.modelPerpetual : license.licenseModel === "fixed_term" ? t.licensePlans.modelFixedTerm : t.licensePlans.modelSubscription}</span>

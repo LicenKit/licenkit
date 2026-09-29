@@ -7,8 +7,9 @@ import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 const NOW = new Date("2026-09-20T10:00:00.000Z");
 const INSTANCE_ID = "acc_billing_email_readiness";
 const INTEGRATION_ID = "emi_billing_email_readiness";
-const LICENSE_ISSUED = EMAIL_NOTIFICATION_CONTRACTS.find((contract) => contract.notificationType === "customer.license_issued")!;
-const OTHER_CONTRACTS = EMAIL_NOTIFICATION_CONTRACTS.filter((contract) => contract.notificationType !== "customer.license_issued");
+const LICENSE_ISSUED = EMAIL_NOTIFICATION_CONTRACTS.find((contract) => contract.notificationType === "customer.sandbox_license_issued")!;
+const LIVE_LICENSE_ISSUED = EMAIL_NOTIFICATION_CONTRACTS.find((contract) => contract.notificationType === "customer.license_issued")!;
+const OTHER_CONTRACTS = EMAIL_NOTIFICATION_CONTRACTS.filter((contract) => !["customer.license_issued", "customer.sandbox_license_issued"].includes(contract.notificationType));
 
 const OFFER_ROW: BillingOfferReadinessRow = {
   id: "off_billing_email_readiness",
@@ -61,7 +62,7 @@ describe("Billing Email Delivery Readiness", () => {
            id, instance_id, email_integration_id, notification_type,
            contract_version, provider_template_ref, status, created_at, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-      ).run(`etb_readiness_${index}`, INSTANCE_ID, INTEGRATION_ID, contract.notificationType, contract.version, `template-${index}`, NOW.toISOString(), NOW.toISOString());
+      ).run(`etb_${contract.notificationType}`, INSTANCE_ID, INTEGRATION_ID, contract.notificationType, contract.version, `template-${index}`, NOW.toISOString(), NOW.toISOString());
     }
   }
 
@@ -95,6 +96,15 @@ describe("Billing Email Delivery Readiness", () => {
     expect(check(result, "email_template_bindings").status).toBe("ready");
   });
 
+  it("does not send Sandbox purchases through the Live license email template", async () => {
+    await seedIntegration();
+    seedBindings([LIVE_LICENSE_ISSUED]);
+    expect(check(await evaluate(), "email_template_bindings")).toMatchObject({
+      status: "not_ready",
+      details: { requiredCount: 1, activeCount: 0 },
+    });
+  });
+
   it("allows each environment to activate before its first real purchase test", async () => {
     await seedIntegration();
     seedBindings([LICENSE_ISSUED]);
@@ -103,6 +113,7 @@ describe("Billing Email Delivery Readiness", () => {
     expect(sandbox.checks.map((item) => item.key)).not.toContain("sandbox_end_to_end_verification");
     expect(sandbox.checks.map((item) => item.key)).not.toContain("webhook_event_contract");
 
+    seedBindings([LIVE_LICENSE_ISSUED]);
     const live = await evaluateBillingOfferReadiness(testEnv.d1, {
       ...OFFER_ROW,
       provider_environment: "live",

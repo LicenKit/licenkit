@@ -1,4 +1,5 @@
 import { ulid } from "ulid";
+import { licenseEmailNotificationType } from "../../domain/email/contracts";
 import { generateLicenseKey, hashLicenseKey, sha256Hex } from "../../infra/crypto";
 import { BillingProcessingError, PaddleHttpError } from "../../infra/billing/errors";
 import {
@@ -695,7 +696,7 @@ async function fulfillInitialPurchase(input: {
     env: input.env,
     instanceId: input.event.instance_id,
     customerId: customer.customerId,
-    notificationType: "customer.license_issued",
+    notificationType: licenseEmailNotificationType("customer.license_issued", offer.provider_environment),
     contractVersion: 1,
     recipientEmail: customer.email,
     variables: {

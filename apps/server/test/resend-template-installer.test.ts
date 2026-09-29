@@ -15,8 +15,11 @@ const ALIAS = "licenkit-emiabc123-customer-license-issued-v1";
 const NAME = "LicenKit customer.license_issued v1";
 const FULL_LENGTH_INTEGRATION_ALIASES = [
   "licenkit-abcdefghijkl-customer-license-issued-v1",
+  "licenkit-abcdefghijkl-customer-sandbox-18dac3z-v1",
   "licenkit-abcdefghijkl-customer-license-0n3kdo1-v1",
+  "licenkit-abcdefghijkl-customer-sandbox-1ulxi7h-v1",
   "licenkit-abcdefghijkl-customer-license-1tw59x0-v1",
+  "licenkit-abcdefghijkl-customer-sandbox-0eok4ts-v1",
   "licenkit-abcdefghijkl-customer-portal-a-1cflha2-v1",
   "licenkit-abcdefghijkl-instance-member-invited-v1",
 ];
@@ -144,7 +147,7 @@ describe("Resend default template installer", () => {
 
   it("reuses a shortened deterministic alias after a partial installation", async () => {
     const contract = getEmailNotificationContract("customer.license_recovered", 1);
-    const alias = FULL_LENGTH_INTEGRATION_ALIASES[1];
+    const alias = FULL_LENGTH_INTEGRATION_ALIASES[2];
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       object: "template",
       id: TEMPLATE_ID,

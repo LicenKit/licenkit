@@ -466,7 +466,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                 </div>
                 <div className="button-row">
                   <StatusBadge status={detail.status} />
-                  {detail.isCheckoutVerification ? <Badge tone="warning">Sandbox</Badge> : null}
+                  {detail.billingEnvironment === "sandbox" ? <Badge tone="warning">Sandbox</Badge> : null}
                 </div>
               </div>
               <div className="metric-grid compact">

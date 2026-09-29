@@ -279,7 +279,13 @@ export interface Activation {
   id: Identifier; licenseId?: Identifier; name?: string | null; platform?: string | null; status: "active" | "deactivated" | "revoked";
   activatedAt?: IsoDateTime; lastValidatedAt?: IsoDateTime | null; deactivatedAt?: IsoDateTime | null; revokedAt?: IsoDateTime | null;
 }
-export interface Customer { id: Identifier; email: string; name?: string | null; status: "active" | "disabled"; createdAt?: IsoDateTime; updatedAt?: IsoDateTime }
+export interface Customer { id: Identifier; email: string; name?: string | null; status: "active" | "disabled"; hasSandboxLicense?: boolean; hasLiveLicense?: boolean; createdAt?: IsoDateTime; updatedAt?: IsoDateTime }
+export interface CustomerLicenseSummary {
+  id: Identifier; productId: Identifier; productName: string; billingEnvironment: BillingEnvironment;
+  status: License["status"]; licenseModel: LicenseModel; renewalMode: RenewalMode;
+  expiresAt: IsoDateTime | null; updatesUntil: IsoDateTime | null; createdAt: IsoDateTime;
+}
+export interface CustomerDetail { customer: Customer; licenses: CustomerLicenseSummary[] }
 export interface ErrorSnapshot { code?: string | null; message?: string | null; details?: unknown; provider?: string | null; externalEventId?: string | null; httpStatus?: number | null; requestId?: string | null }
 export type ReadinessState = "ready" | "not_ready" | "stale";
 export interface ReadinessCheck { key: string; label?: string; status: ReadinessState; checkedAt?: IsoDateTime | null; lastSucceededAt?: IsoDateTime | null; error?: ErrorSnapshot | null; action?: string | null }
@@ -552,7 +558,7 @@ export const api = {
       archive: (id: string) => request<LicensePlan>(`/admin/license-plans/${encodeURIComponent(id)}/archive`, { method: "POST", scope: "admin" }),
     },
     licenses: {
-      list: (params: { page?: number; limit?: number; productId?: string; customerId?: string; status?: string; query?: string } = {}) => request<ListResponse<License>>(`/admin/licenses${queryString(params)}`, { scope: "admin" }),
+      list: (params: { page?: number; limit?: number; productId?: string; customerEmail?: string; status?: string; query?: string } = {}) => request<ListResponse<License>>(`/admin/licenses${queryString(params)}`, { scope: "admin" }),
       get: (id: string) => request<License>(`/admin/licenses/${encodeURIComponent(id)}`, { scope: "admin" }),
       issue: (body: { licensePlanId: string; customerEmail: string; expiresAt?: string | null; delivery: { sendNotification: true } }) => request<IssuedLicenseResponse>("/admin/licenses", { method: "POST", body, scope: "admin" }),
       suspend: (id: string, reason: string) => request<License>(`/admin/licenses/${encodeURIComponent(id)}/suspend`, { method: "POST", body: { reason }, scope: "admin" }),
@@ -567,7 +573,7 @@ export const api = {
     },
     customers: {
       list: (params: { page?: number; limit?: number; query?: string; status?: string } = {}) => request<ListResponse<Customer>>(`/admin/customers${queryString(params)}`, { scope: "admin" }),
-      get: (id: string) => request<Customer>(`/admin/customers/${encodeURIComponent(id)}`, { scope: "admin" }),
+      get: (id: string) => request<CustomerDetail>(`/admin/customers/${encodeURIComponent(id)}`, { scope: "admin" }),
       update: (id: string, body: { email?: string; name?: string }) => request<Customer>(`/admin/customers/${encodeURIComponent(id)}`, { method: "PATCH", body, scope: "admin" }),
       disable: (id: string) => request<Customer>(`/admin/customers/${encodeURIComponent(id)}/disable`, { method: "POST", scope: "admin" }),
       enable: (id: string) => request<Customer>(`/admin/customers/${encodeURIComponent(id)}/enable`, { method: "POST", scope: "admin" }),

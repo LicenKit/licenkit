@@ -8,7 +8,7 @@ import { encryptBillingProviderSecret, encryptInboundPayload } from "../src/infr
 import { processBillingInboundEvent, processDueBillingInboundEvents } from "../src/services/billing/fulfillment";
 import { activateLicense, validateActivation } from "../src/services/license/activation";
 import { listSystemIssues } from "../src/services/operations/system-issues";
-import { reconcileBillingCustomer } from "../src/services/billing/customer-sync";
+import { reconcileBillingCustomer, syncTrustedBillingCustomer } from "../src/services/billing/customer-sync";
 import { createCustomerPortalSession } from "../src/services/billing/customer-portal";
 import { evaluateBillingOfferReadiness, getBillingOfferReadinessRow } from "../src/services/billing/readiness";
 import { getPaddleWebhookRequirements } from "../src/services/billing/webhook-requirements";
@@ -16,6 +16,7 @@ import { clearExpiredInboundEventPayloads } from "../src/services/runtime/retent
 import { errorHandler } from "../src/middleware/error";
 import { adminEmailDeliveriesRouter } from "../src/routes/admin/email.routes";
 import { adminBillingRouter } from "../src/routes/admin/billing.routes";
+import { adminCustomersRouter } from "../src/routes/customer-admin.routes";
 import { createTestEnv, type TestEnvContext } from "./helpers/mock-d1";
 
 const instanceId = "acc_billing_v1";
@@ -51,6 +52,21 @@ function billingAdminApp() {
     await next();
   });
   admin.route("/", adminBillingRouter);
+  return admin;
+}
+
+function customerAdminApp() {
+  const admin = new Hono<AppContext>();
+  admin.onError(errorHandler);
+  admin.use("*", async (c, next) => {
+    c.set("requestId", "req_customer_admin_detail");
+    c.set("instanceId", instanceId);
+    c.set("userId", "usr_billing_owner");
+    c.set("instanceRole", "owner");
+    c.set("userEmail", "owner@example.test");
+    await next();
+  });
+  admin.route("/", adminCustomersRouter);
   return admin;
 }
 
@@ -438,6 +454,20 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
       new Date(Date.now() + 86_400_000).toISOString(), nowIso, nowIso,
     );
 
+    const eventList = await billingAdminApp().request("http://test/events", {}, testEnv.env);
+    expect(eventList.status).toBe(200);
+    expect((await eventList.json() as any).data.items[0]).toMatchObject({
+      event_type: "transaction.completed",
+      provider: "paddle",
+      environment: "sandbox",
+      external_event_id: externalEventId,
+    });
+    const eventDetail = await billingAdminApp().request(`http://test/events/${eventId}`, {}, testEnv.env);
+    expect((await eventDetail.json() as any).data).toMatchObject({
+      event_type: "transaction.completed",
+      environment: "sandbox",
+    });
+
     const providers = await billingAdminApp().request("http://test/providers", {}, testEnv.env);
     expect((await providers.json() as any).data.items[0].webhook_verified_at).toBeNull();
     expect(await processEvent(eventId)).toEqual({ processed: true, status: "processed" });
@@ -568,6 +598,36 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).run(instanceId, providerId, externalCustomerId, email, nowIso, nowIso, nowIso);
   }
 
+  it("links Sandbox and Live billing customers with the same email to one customer", async () => {
+    seedLinkedCustomer();
+    const liveProviderId = "bpr_live_same_email";
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO billing_providers (
+         id, instance_id, provider, environment, client_side_token,
+         webhook_secret_ciphertext, status, created_at, updated_at
+       ) VALUES (?, ?, 'paddle', 'live', 'live_same_email_token', 'encrypted', 'active', ?, ?)`,
+    ).run(liveProviderId, instanceId, nowIso, nowIso);
+    const liveMapping = await syncTrustedBillingCustomer({
+      db: testEnv.d1,
+      instanceId,
+      billingProviderId: liveProviderId,
+      snapshot: {
+        externalCustomerId: "ctm_live_same_email",
+        email: " Buyer@Example.Test ",
+        name: "Buyer",
+        status: "active",
+        externalUpdatedAt: nowIso,
+        externalEventId: "evt_live_same_email",
+      },
+      source: "webhook",
+    });
+    expect(liveMapping.customer_id).toBe("cus_buyer");
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM customers WHERE instance_id = ?").get(instanceId))
+      .toEqual({ count: 1 });
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM billing_customers WHERE customer_id = 'cus_buyer'").get())
+      .toEqual({ count: 2 });
+  });
+
   async function issueOneTimeLicense(transactionId = "txn_purchase1"): Promise<{ eventId: string; licenseId: string }> {
     const payload = eventPayload(`evt_${transactionId}`, "transaction.completed", {
       id: transactionId,
@@ -613,6 +673,16 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(testEnv.sqliteDb.prepare(
       "SELECT billing_environment, source_billing_provider_id FROM licenses WHERE id = ?",
     ).get(licenseId)).toEqual({ billing_environment: "sandbox", source_billing_provider_id: providerId });
+    const customerList = await customerAdminApp().request("http://test/", {}, testEnv.env);
+    expect(customerList.status).toBe(200);
+    expect((await customerList.json() as any).data.items[0]).toMatchObject({
+      id: "cus_buyer", has_sandbox_license: true, has_live_license: false,
+    });
+    const customerDetail = await customerAdminApp().request("http://test/cus_buyer", {}, testEnv.env);
+    expect(customerDetail.status).toBe(200);
+    expect((await customerDetail.json() as any).data.licenses).toEqual([
+      expect.objectContaining({ id: licenseId, billing_environment: "sandbox", product_name: "One Time" }),
+    ]);
     expect(deliveries).toHaveLength(1);
     const licenseKey = deliveries[0].template.variables.license_key as string;
     const activation = {
@@ -681,8 +751,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
          id, instance_id, email_integration_id, notification_type,
          contract_version, provider_template_ref,
          status, created_at, updated_at
-       ) VALUES ('etb_billing_fulfillment', ?, ?, 'customer.license_issued',
-         1, 'license-issued-v1', 'active', ?, ?)`,
+       ) VALUES ('etb_billing_fulfillment', ?, ?, 'customer.sandbox_license_issued',
+         1, 'sandbox-license-issued-v1', 'active', ?, ?)`,
     ).run(instanceId, integrationId, nowIso, nowIso);
   }
 
@@ -982,7 +1052,7 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(providerBodies[0]).toMatchObject({
       to: "buyer@example.test",
       template: {
-        id: "license-issued-v1",
+        id: "sandbox-license-issued-v1",
         variables: {
           instance_name: "Billing V1",
           product_id: "prd_00000000000000000000000001",
@@ -1003,10 +1073,10 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(testEnv.sqliteDb.prepare(
       `SELECT status, notification_type, provider_message_id
        FROM email_deliveries
-       WHERE instance_id = ? AND notification_type = 'customer.license_issued'`,
+       WHERE instance_id = ? AND notification_type = 'customer.sandbox_license_issued'`,
     ).get(instanceId)).toEqual({
       status: "accepted",
-      notification_type: "customer.license_issued",
+      notification_type: "customer.sandbox_license_issued",
       provider_message_id: "email_billing_license_issued",
     });
   });

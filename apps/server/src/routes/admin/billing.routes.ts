@@ -731,20 +731,32 @@ async function listBillingRows(c: any, table: string, orderColumn: string): Prom
   const limit = Math.min(100, Math.max(1, requestedLimit));
   const offset = Math.max(0, requestedOffset);
   const allowed = new Set(["billing_customers", "billing_subscriptions", "inbound_events", "billing_adjustments"]);
+  if (!allowed.has(table)) throw new Error("Unsupported billing table");
+  const isEvent = table === "inbound_events";
+  const source = isEvent
+    ? `inbound_events AS event JOIN billing_providers AS provider
+         ON provider.instance_id = event.instance_id AND provider.id = event.billing_provider_id`
+    : table;
+  const columns = isEvent
+    ? "event.*, event.external_event_type AS event_type, provider.provider, provider.environment"
+    : "*";
+  const instanceColumn = isEvent ? "event.instance_id" : "instance_id";
+  const statusColumn = isEvent ? "event.status" : "status";
+  const orderedColumn = isEvent ? `event.${orderColumn}` : orderColumn;
   const statuses: string[] = typeof status === "string" ? status.split(",").map((s: string) => s.trim()).filter(Boolean) : [];
   let result;
   if (statuses.length === 1) {
     result = await (c.env.DB as D1Database).prepare(
-      `SELECT * FROM ${table} WHERE instance_id = ?1 AND status = ?2 ORDER BY ${orderColumn} DESC LIMIT ?3 OFFSET ?4`,
+      `SELECT ${columns} FROM ${source} WHERE ${instanceColumn} = ?1 AND ${statusColumn} = ?2 ORDER BY ${orderedColumn} DESC LIMIT ?3 OFFSET ?4`,
     ).bind(instanceId(c), statuses[0], limit, offset).all<Record<string, unknown>>();
   } else if (statuses.length > 1) {
     const placeholders = statuses.map((_: string, i: number) => `?${i + 2}`).join(", ");
     result = await (c.env.DB as D1Database).prepare(
-      `SELECT * FROM ${table} WHERE instance_id = ?1 AND status IN (${placeholders}) ORDER BY ${orderColumn} DESC LIMIT ?${statuses.length + 2} OFFSET ?${statuses.length + 3}`,
+      `SELECT ${columns} FROM ${source} WHERE ${instanceColumn} = ?1 AND ${statusColumn} IN (${placeholders}) ORDER BY ${orderedColumn} DESC LIMIT ?${statuses.length + 2} OFFSET ?${statuses.length + 3}`,
     ).bind(instanceId(c), ...statuses, limit, offset).all<Record<string, unknown>>();
   } else {
     result = await (c.env.DB as D1Database).prepare(
-      `SELECT * FROM ${table} WHERE instance_id = ?1 ORDER BY ${orderColumn} DESC LIMIT ?2 OFFSET ?3`,
+      `SELECT ${columns} FROM ${source} WHERE ${instanceColumn} = ?1 ORDER BY ${orderedColumn} DESC LIMIT ?2 OFFSET ?3`,
     ).bind(instanceId(c), limit, offset).all<Record<string, unknown>>();
   }
   const items = result.results.map((row: Record<string, unknown>) => {
@@ -758,7 +770,17 @@ async function listBillingRows(c: any, table: string, orderColumn: string): Prom
 async function detailBillingRow(c: any, table: string, id: string, hidden: string[] = []): Promise<Response> {
   const allowed = new Set(["billing_customers", "billing_subscriptions", "inbound_events", "billing_adjustments"]);
   if (!allowed.has(table)) throw new Error("Unsupported billing table");
-  const row = await (c.env.DB as D1Database).prepare(`SELECT * FROM ${table} WHERE instance_id = ?1 AND id = ?2 LIMIT 1`)
+  const isEvent = table === "inbound_events";
+  const source = isEvent
+    ? `inbound_events AS event JOIN billing_providers AS provider
+         ON provider.instance_id = event.instance_id AND provider.id = event.billing_provider_id`
+    : table;
+  const columns = isEvent
+    ? "event.*, event.external_event_type AS event_type, provider.provider, provider.environment"
+    : "*";
+  const instanceColumn = isEvent ? "event.instance_id" : "instance_id";
+  const idColumn = isEvent ? "event.id" : "id";
+  const row = await (c.env.DB as D1Database).prepare(`SELECT ${columns} FROM ${source} WHERE ${instanceColumn} = ?1 AND ${idColumn} = ?2 LIMIT 1`)
     .bind(instanceId(c), id).first<Record<string, unknown>>();
   if (!row) throw new NotFoundError("Billing resource not found.");
   const data = { ...row };

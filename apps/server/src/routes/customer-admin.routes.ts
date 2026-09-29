@@ -56,8 +56,17 @@ adminCustomersRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]
 
   const itemsResult = await c.env.DB
     .prepare(
-      `SELECT id, email, name, status, created_at, updated_at
-       FROM customers
+      `SELECT customer.id, customer.email, customer.name, customer.status,
+              customer.created_at, customer.updated_at,
+              EXISTS(SELECT 1 FROM licenses AS license
+                     WHERE license.instance_id = customer.instance_id
+                       AND license.customer_id = customer.id
+                       AND license.billing_environment = 'sandbox') AS has_sandbox_license,
+              EXISTS(SELECT 1 FROM licenses AS license
+                     WHERE license.instance_id = customer.instance_id
+                       AND license.customer_id = customer.id
+                       AND license.billing_environment = 'live') AS has_live_license
+       FROM customers AS customer
        WHERE ${whereClause}
        ORDER BY created_at DESC
        LIMIT ?${bindIndex++} OFFSET ?${bindIndex++}`
@@ -68,7 +77,11 @@ adminCustomersRouter.get("/", requireRole(["owner", "admin", "member", "viewer"]
   return c.json({
     success: true,
     data: {
-      items: itemsResult.results,
+      items: itemsResult.results.map((row: any) => ({
+        ...row,
+        has_sandbox_license: Boolean(row.has_sandbox_license),
+        has_live_license: Boolean(row.has_live_license),
+      })),
       pagination: {
         page,
         limit,
@@ -92,8 +105,15 @@ adminCustomersRouter.get("/:customerId", requireRole(["owner", "admin", "member"
   if (!customer.results[0]) throw new NotFoundError("Customer not found");
   const licenses = await c.env.DB
     .prepare(
-      `SELECT id, product_id, billing_environment, status, license_model, renewal_mode, expires_at, updates_until, created_at
-       FROM licenses WHERE instance_id = ?1 AND customer_id = ?2 ORDER BY created_at DESC`
+      `SELECT license.id, license.product_id, product.name AS product_name,
+              license.billing_environment, license.status, license.license_model,
+              license.renewal_mode, license.expires_at, license.updates_until,
+              license.created_at
+       FROM licenses AS license
+       JOIN products AS product
+         ON product.instance_id = license.instance_id AND product.id = license.product_id
+       WHERE license.instance_id = ?1 AND license.customer_id = ?2
+       ORDER BY license.created_at DESC`
     )
     .bind(instanceId, customerId)
     .all();

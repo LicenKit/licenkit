@@ -4,6 +4,7 @@ import { AppError, NotFoundError } from "../../middleware/error";
 import { prepareEmailNotificationDelivery } from "../delivery/outbox";
 import { prepareLicenseAudit, type LicenseActor } from "./audit";
 import { firstD1 } from "./d1";
+import { licenseEmailNotificationType } from "../../domain/email/contracts";
 
 interface RotationLicenseRow {
   id: string;
@@ -13,6 +14,7 @@ interface RotationLicenseRow {
   product_name: string;
   customer_email: string;
   license_model: string;
+  billing_environment: "sandbox" | "live";
   expires_at: string | null;
   updates_until: string | null;
   key_version: number;
@@ -41,7 +43,8 @@ export async function prepareLicenseKeyRotation(input: {
     : [input.instanceId, input.licenseId];
   const license = await firstD1<RotationLicenseRow>(input.db.prepare(
     `SELECT l.id, l.instance_id, l.customer_id, l.product_id, p.name AS product_name,
-            c.email AS customer_email, l.license_model, l.expires_at, l.updates_until,
+            c.email AS customer_email, l.license_model, l.billing_environment,
+            l.expires_at, l.updates_until,
             l.key_version, l.is_checkout_verification
      FROM licenses l
      JOIN customers c ON c.instance_id = l.instance_id AND c.id = l.customer_id
@@ -71,7 +74,7 @@ export async function prepareLicenseKeyRotation(input: {
     env: input.env,
     instanceId: input.instanceId,
     customerId: license.customer_id,
-    notificationType: eventType,
+    notificationType: licenseEmailNotificationType(eventType, license.billing_environment),
     contractVersion: 1,
     recipientEmail: license.customer_email,
     variables: {

@@ -56,7 +56,7 @@ export function OperationsView({ canManage, onIssuesChanged }: { canManage: bool
     setError(null);
     try {
       const replayed = await api.admin.billing.events.replay(replayConfirmTarget.id);
-      setSelectedEvent(replayed);
+      setSelectedEvent(await api.admin.billing.events.get(replayed.id));
       setReplayConfirmTarget(null);
       await load();
     } catch (caught) {

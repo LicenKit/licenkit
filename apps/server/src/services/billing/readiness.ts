@@ -3,7 +3,7 @@ import type {
   ReadinessCheck,
 } from "../../infra/billing/types";
 import { assertPaddleClientToken } from "../../infra/billing/paddle";
-import { EMAIL_NOTIFICATION_CONTRACTS } from "../../domain/email/contracts";
+import { EMAIL_NOTIFICATION_CONTRACTS, licenseEmailNotificationType } from "../../domain/email/contracts";
 import { decryptEnvelopeV1, type DeliveryCryptoEnv } from "../../infra/delivery/crypto";
 import { getEmailProviderAdapter } from "../../infra/email/provider";
 
@@ -66,21 +66,20 @@ interface EmailDeliveryReadinessRow {
   active_binding_count: number;
 }
 
-const LICENSE_ISSUED_EMAIL_CONTRACT = EMAIL_NOTIFICATION_CONTRACTS.find(
-  (contract) => contract.notificationType === "customer.license_issued",
-);
-if (!LICENSE_ISSUED_EMAIL_CONTRACT) {
-  throw new Error("The customer.license_issued Email contract must be registered.");
+function offerEmailContracts(environment: "sandbox" | "live") {
+  const notificationType = licenseEmailNotificationType("customer.license_issued", environment);
+  const contract = EMAIL_NOTIFICATION_CONTRACTS.find(
+    (item) => item.notificationType === notificationType && item.version === 1,
+  );
+  if (!contract) throw new Error("The purchase Email contract must be registered.");
+  return [{ notificationType: contract.notificationType, contractVersion: contract.version }];
 }
-const OFFER_ACTIVATION_EMAIL_CONTRACTS = Object.freeze([{
-  notificationType: LICENSE_ISSUED_EMAIL_CONTRACT.notificationType,
-  contractVersion: LICENSE_ISSUED_EMAIL_CONTRACT.version,
-}]);
 
 async function emailDeliveryReadiness(
   db: D1Database,
   env: DeliveryCryptoEnv,
   instanceId: string,
+  environment: "sandbox" | "live",
 ): Promise<{
   integrationReady: boolean;
   credentialReady: boolean;
@@ -89,10 +88,11 @@ async function emailDeliveryReadiness(
   credentialErrorCode?: string;
   activeBindingCount: number;
 }> {
-  const contractPredicate = (alias: string) => OFFER_ACTIVATION_EMAIL_CONTRACTS
+  const requiredContracts = offerEmailContracts(environment);
+  const contractPredicate = (alias: string) => requiredContracts
     .map((_, index) => `(${alias}.notification_type = ?${index * 2 + 2} AND ${alias}.contract_version = ?${index * 2 + 3})`)
     .join(" OR ");
-  const bindings = OFFER_ACTIVATION_EMAIL_CONTRACTS.flatMap((contract) => [
+  const bindings = requiredContracts.flatMap((contract) => [
     contract.notificationType,
     contract.contractVersion,
   ]);
@@ -139,7 +139,7 @@ async function emailDeliveryReadiness(
       : "EMAIL_PROVIDER_CREDENTIAL_UNAVAILABLE";
   }
 
-  const requiredCount = OFFER_ACTIVATION_EMAIL_CONTRACTS.length;
+  const requiredCount = requiredContracts.length;
   return {
     integrationReady: true,
     credentialReady,
@@ -194,7 +194,7 @@ export async function evaluateBillingOfferReadiness(
     "CHECKOUT_PROVIDER_UNAVAILABLE",
   ));
 
-  const email = await emailDeliveryReadiness(db, options.env, row.instance_id);
+  const email = await emailDeliveryReadiness(db, options.env, row.instance_id, row.provider_environment);
   checks.push(check(
     "email_integration",
     email.integrationReady,
@@ -212,7 +212,7 @@ export async function evaluateBillingOfferReadiness(
     email.bindingsReady,
     "CHECKOUT_NOTIFICATION_UNAVAILABLE",
     {
-      requiredCount: OFFER_ACTIVATION_EMAIL_CONTRACTS.length,
+      requiredCount: offerEmailContracts(row.provider_environment).length,
       activeCount: email.activeBindingCount,
     },
   ));

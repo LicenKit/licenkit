@@ -250,6 +250,17 @@ export const EMAIL_NOTIFICATION_CONTRACTS = Object.freeze([
     ],
   }),
   contract({
+    notificationType: "customer.sandbox_license_issued",
+    version: 1,
+    name: "Sandbox 授权码签发",
+    description: "Sandbox 购买履约后发送明确标记的测试授权码。",
+    variables: [
+      ...COMMON_EMAIL_VARIABLES,
+      ...LICENSE_IDENTITY_VARIABLES,
+      ...OPTIONAL_LICENSE_TERM_VARIABLES,
+    ],
+  }),
+  contract({
     notificationType: "customer.license_recovered",
     version: 1,
     name: "授权码找回",
@@ -262,10 +273,34 @@ export const EMAIL_NOTIFICATION_CONTRACTS = Object.freeze([
     ],
   }),
   contract({
+    notificationType: "customer.sandbox_license_recovered",
+    version: 1,
+    name: "Sandbox 授权码找回",
+    description: "找回 Sandbox 授权码时发送明确标记的测试授权码。",
+    variables: [
+      ...COMMON_EMAIL_VARIABLES,
+      ...LICENSE_IDENTITY_VARIABLES,
+      KEY_VERSION_VARIABLE,
+      ...OPTIONAL_LICENSE_TERM_VARIABLES,
+    ],
+  }),
+  contract({
     notificationType: "customer.license_security_reset",
     version: 1,
     name: "授权安全重置",
     description: "安全重置 License 后发送新授权码，并说明旧授权与现有 Activation 已失效。",
+    variables: [
+      ...COMMON_EMAIL_VARIABLES,
+      ...LICENSE_IDENTITY_VARIABLES,
+      KEY_VERSION_VARIABLE,
+      ...OPTIONAL_LICENSE_TERM_VARIABLES,
+    ],
+  }),
+  contract({
+    notificationType: "customer.sandbox_license_security_reset",
+    version: 1,
+    name: "Sandbox 授权安全重置",
+    description: "安全重置 Sandbox 授权后发送明确标记的新授权码。",
     variables: [
       ...COMMON_EMAIL_VARIABLES,
       ...LICENSE_IDENTITY_VARIABLES,
@@ -288,6 +323,15 @@ export const EMAIL_NOTIFICATION_CONTRACTS = Object.freeze([
     variables: [...COMMON_EMAIL_VARIABLES, ...INSTANCE_INVITATION_VARIABLES],
   }),
 ] satisfies readonly EmailNotificationContract[]);
+
+export function licenseEmailNotificationType(
+  notificationType: "customer.license_issued" | "customer.license_recovered" | "customer.license_security_reset",
+  environment: "sandbox" | "live",
+): string {
+  return environment === "sandbox"
+    ? notificationType.replace("customer.license_", "customer.sandbox_license_")
+    : notificationType;
+}
 
 function contractKey(notificationType: string, version: number): string {
   return `${notificationType}@${version}`;
