@@ -89,23 +89,23 @@ CREATE TRIGGER trg_license_plans_payment_grace_snapshot
 BEFORE INSERT ON license_plans
 WHEN NEW.license_model = 'subscription'
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM products
     WHERE instance_id = NEW.instance_id
       AND id = NEW.product_id
       AND payment_grace_seconds = NEW.payment_grace_seconds
-  ) THEN RAISE(ABORT, 'LICENSE_PLAN_PAYMENT_GRACE_MISMATCH') END;
+  ) THEN RAISE(ABORT, 'LICENSE_PLAN_PAYMENT_GRACE_MISMATCH') END);
 END;--> statement-breakpoint
 CREATE TRIGGER trg_licenses_payment_environment_on_insert
 BEFORE INSERT ON licenses
 WHEN NEW.source = 'payment'
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM billing_providers AS provider
     WHERE provider.instance_id = NEW.instance_id
       AND provider.id = NEW.source_billing_provider_id
       AND provider.environment = NEW.billing_environment
-  ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END;
+  ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END);
 END;--> statement-breakpoint
 CREATE TRIGGER trg_licenses_billing_environment_immutable
 BEFORE UPDATE OF billing_environment ON licenses
@@ -117,12 +117,12 @@ CREATE TRIGGER trg_licenses_payment_provider_environment_on_update
 BEFORE UPDATE OF source, source_billing_provider_id ON licenses
 WHEN NEW.source = 'payment'
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM billing_providers AS provider
     WHERE provider.instance_id = NEW.instance_id
       AND provider.id = NEW.source_billing_provider_id
       AND provider.environment = NEW.billing_environment
-  ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END;
+  ) THEN RAISE(ABORT, 'payment_license_environment_mismatch') END);
 END;--> statement-breakpoint
 CREATE TABLE `__migration_fk_guard` (
   `ok` integer NOT NULL CONSTRAINT `ck_migration_fk_guard` CHECK (`ok` = 1)
