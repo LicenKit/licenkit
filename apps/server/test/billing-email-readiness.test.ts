@@ -19,7 +19,6 @@ const OFFER_ROW: BillingOfferReadinessRow = {
   purchase_type: "one_time",
   offer_status: "draft",
   product_status: "active",
-  billing_environment: "sandbox",
   license_model: "perpetual",
   credential_mode: "opaque",
   plan_status: "active",
@@ -106,7 +105,6 @@ describe("Billing Email Delivery Readiness", () => {
 
     const live = await evaluateBillingOfferReadiness(testEnv.d1, {
       ...OFFER_ROW,
-      billing_environment: "live",
       provider_environment: "live",
       client_side_token: "live_billing_email_readiness",
     }, { env: testEnv.env, activation: true, now: NOW });

@@ -73,6 +73,101 @@ function insertDelivery(
 }
 
 describe("User and Instance database schema", () => {
+  it("backfills existing payment License environments and permits both Offers on one Product", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    for (const file of [
+      "0000_v1_initial.sql", "0001_webhook_verification_evidence.sql",
+      "0002_paddle_simulator_verification.sql", "0003_split_release_platform_arch.sql",
+      "0004_client_validation_policy.sql", "0005_single_paddle_webhook.sql",
+    ]) applyMigrationFile(db, file);
+    seedOwner(db);
+    db.prepare(`INSERT INTO products
+      (id, instance_id, name, billing_environment, status, created_at, updated_at)
+      VALUES ('prd_env', 'ins_a', 'App', 'live', 'active', ?, ?)`).run(now, now);
+    db.prepare(`INSERT INTO license_plans
+      (id, instance_id, product_id, name, license_model, credential_mode,
+       payment_grace_seconds, features_json, status, created_at, updated_at)
+      VALUES ('pln_env', 'ins_a', 'prd_env', 'Plan', 'perpetual', 'opaque',
+       0, '[]', 'active', ?, ?)`).run(now, now);
+    db.prepare(`INSERT INTO products
+      (id, instance_id, name, billing_environment, status, created_at, updated_at)
+      VALUES ('prd_old_sandbox', 'ins_a', 'Old Test App', 'sandbox', 'active', ?, ?)`).run(now, now);
+    db.prepare(`INSERT INTO license_plans
+      (id, instance_id, product_id, name, license_model, credential_mode,
+       payment_grace_seconds, features_json, status, created_at, updated_at)
+      VALUES ('pln_old_sandbox', 'ins_a', 'prd_old_sandbox', 'Plan', 'perpetual', 'opaque',
+       0, '[]', 'active', ?, ?)`).run(now, now);
+    db.prepare(`INSERT INTO customers
+      (id, instance_id, email, status, created_at, updated_at)
+      VALUES ('cus_env', 'ins_a', 'buyer@example.test', 'active', ?, ?)`).run(now, now);
+    for (const [id, environment, token] of [
+      ["bpr_live", "live", "live_env_token"], ["bpr_sandbox", "sandbox", "test_env_token"],
+    ]) {
+      db.prepare(`INSERT INTO billing_providers
+        (id, instance_id, provider, environment, client_side_token,
+         webhook_secret_ciphertext, status, created_at, updated_at)
+        VALUES (?, 'ins_a', 'paddle', ?, ?, 'ciphertext', 'active', ?, ?)`)
+        .run(id, environment, token, now, now);
+    }
+    const insertLicense = db.prepare(`INSERT INTO licenses
+      (id, instance_id, customer_id, product_id, plan_id, plan_revision,
+       license_model, renewal_mode, credential_mode, offline_grace_seconds,
+       payment_grace_seconds, max_activations, features_json, key_hash,
+       source, source_billing_provider_id, source_external_transaction_id,
+       is_checkout_verification, status, status_reason, created_at, updated_at)
+      VALUES (?, 'ins_a', 'cus_env', 'prd_env', 'pln_env', 1,
+       'perpetual', 'none', 'opaque', 2592000, 0, 1, '[]', ?,
+       'payment', ?, ?, ?, ?, ?, ?, ?)`);
+    insertLicense.run("lic_live", "live_hash", "bpr_live", "txn_live", 0, "active", null, now, now);
+    insertLicense.run("lic_sandbox_verification", "sandbox_hash", "bpr_sandbox", "txn_sandbox", 1,
+      "suspended", "checkout_verification", now, now);
+    db.prepare(`INSERT INTO licenses
+      (id, instance_id, customer_id, product_id, plan_id, plan_revision,
+       license_model, renewal_mode, credential_mode, offline_grace_seconds,
+       payment_grace_seconds, max_activations, features_json, key_hash,
+       source, status, created_at, updated_at)
+      VALUES ('lic_old_sandbox_manual', 'ins_a', 'cus_env', 'prd_old_sandbox', 'pln_old_sandbox', 1,
+       'perpetual', 'none', 'opaque', 2592000, 0, 1, '[]', 'old_sandbox_manual_hash',
+       'manual', 'active', ?, ?)`).run(now, now);
+
+    db.transaction(() => applyMigrationFile(db, "0006_license_billing_environment.sql"))();
+    expect(db.prepare(`SELECT id, billing_environment FROM licenses ORDER BY id`).all()).toEqual([
+      { id: "lic_live", billing_environment: "live" },
+      { id: "lic_old_sandbox_manual", billing_environment: "sandbox" },
+      { id: "lic_sandbox_verification", billing_environment: "sandbox" },
+    ]);
+    expect(columns(db, "products")).not.toContain("billing_environment");
+    expect(() => db.prepare(
+      "UPDATE licenses SET billing_environment = 'sandbox' WHERE id = 'lic_live'",
+    ).run()).toThrow(/license_billing_environment_immutable/);
+    expect(() => db.prepare(
+      "UPDATE licenses SET source_billing_provider_id = 'bpr_sandbox' WHERE id = 'lic_live'",
+    ).run()).toThrow(/payment_license_environment_mismatch/);
+    expect(() => db.prepare(`INSERT INTO licenses
+      (id, instance_id, customer_id, product_id, plan_id, plan_revision,
+       license_model, renewal_mode, credential_mode, offline_grace_seconds,
+       payment_grace_seconds, max_activations, features_json, key_hash,
+       source, billing_environment, source_billing_provider_id,
+       source_external_transaction_id, status, created_at, updated_at)
+      VALUES ('lic_mismatched', 'ins_a', 'cus_env', 'prd_env', 'pln_env', 1,
+       'perpetual', 'none', 'opaque', 2592000, 0, 1, '[]', 'mismatched_hash',
+       'payment', 'live', 'bpr_sandbox', 'txn_mismatched', 'active', ?, ?)`)
+      .run(now, now)).toThrow(/payment_license_environment_mismatch/);
+    for (const [id, providerId, priceId] of [
+      ["off_live", "bpr_live", "pri_live"], ["off_sandbox", "bpr_sandbox", "pri_sandbox"],
+    ]) {
+      db.prepare(`INSERT INTO billing_offers
+        (id, instance_id, billing_provider_id, external_price_id, product_id,
+         license_plan_id, purchase_type, status, created_at, updated_at)
+        VALUES (?, 'ins_a', ?, ?, 'prd_env', 'pln_env', 'one_time', 'active', ?, ?)`)
+        .run(id, providerId, priceId, now, now);
+    }
+    expect(db.prepare("SELECT COUNT(*) AS count FROM billing_offers WHERE product_id = 'prd_env' AND status = 'active'").get())
+      .toEqual({ count: 2 });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
   it("contains the initial schema and forward webhook verification migration", () => {
     expect(fs.readdirSync(drizzleDir).filter((file) => file.endsWith(".sql")).sort())
       .toEqual([
@@ -82,6 +177,7 @@ describe("User and Instance database schema", () => {
         "0003_split_release_platform_arch.sql",
         "0004_client_validation_policy.sql",
         "0005_single_paddle_webhook.sql",
+        "0006_license_billing_environment.sql",
       ]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);
@@ -345,7 +441,7 @@ describe("User and Instance database schema", () => {
       "id", "name", "site_url", "admin_api_url", "status", "created_at", "updated_at",
     ]);
     expect(columns(db, "products")).toEqual([
-      "id", "instance_id", "name", "description", "billing_environment",
+      "id", "instance_id", "name", "description",
       "payment_grace_seconds", "validation_interval_seconds", "trial_enabled", "trial_duration_seconds",
       "trial_features_json", "status", "created_at", "updated_at",
     ]);
@@ -467,8 +563,8 @@ describe("User and Instance database schema", () => {
     seedOwner(db);
     db.prepare(
       `INSERT INTO products
-         (id, instance_id, name, billing_environment, status, created_at, updated_at)
-       VALUES ('prd_a', 'ins_a', 'App', 'sandbox', 'active', ?, ?)`,
+         (id, instance_id, name, status, created_at, updated_at)
+       VALUES ('prd_a', 'ins_a', 'App', 'active', ?, ?)`,
     ).run(now, now);
     expect(db.prepare("SELECT payment_grace_seconds FROM products WHERE id = 'prd_a'").get())
       .toEqual({ payment_grace_seconds: 0 });
@@ -499,8 +595,8 @@ describe("User and Instance database schema", () => {
     seedOwner(db);
     db.prepare(
       `INSERT INTO products
-         (id, instance_id, name, billing_environment, status, created_at, updated_at)
-       VALUES ('prd_signed', 'ins_a', 'Signed App', 'sandbox', 'active', ?, ?)`,
+         (id, instance_id, name, status, created_at, updated_at)
+       VALUES ('prd_signed', 'ins_a', 'Signed App', 'active', ?, ?)`,
     ).run(now, now);
     const insertPlan = db.prepare(
       `INSERT INTO license_plans (
@@ -536,6 +632,8 @@ describe("User and Instance database schema", () => {
       "trg_billing_offers_lock_verified_mapping",
       "trg_checkout_verifications_require_draft_sandbox",
       "trg_licenses_manual_issue_invariant",
+      "trg_licenses_billing_environment_immutable",
+      "trg_licenses_payment_provider_environment_on_update",
       "trg_instance_memberships_last_owner_update",
       "trg_instance_memberships_last_owner_delete",
       "trg_instance_memberships_invitation_on_insert",
@@ -543,6 +641,6 @@ describe("User and Instance database schema", () => {
       "trg_instance_invitations_terminal_guard",
       "trg_customer_login_challenges_terminal_guard",
     ]));
-    expect(triggers).toHaveLength(24);
+    expect(triggers).toHaveLength(23);
   });
 });

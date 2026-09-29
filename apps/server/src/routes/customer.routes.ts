@@ -106,7 +106,7 @@ customerRouter.get("/me", async (c) => {
 customerRouter.get("/licenses", async (c) => {
   const result = await c.env.DB
     .prepare(
-      `SELECT l.id, l.product_id, p.name AS product_name, l.status,
+      `SELECT l.id, l.product_id, p.name AS product_name, l.billing_environment, l.status,
               l.status_reason, l.license_model, l.renewal_mode, l.credential_mode,
               l.max_activations, l.features_json, l.expires_at, l.updates_until,
               l.created_at, l.updated_at
@@ -128,7 +128,7 @@ customerRouter.get("/licenses", async (c) => {
 customerRouter.get("/licenses/:licenseId", async (c) => {
   const result = await c.env.DB
     .prepare(
-      `SELECT l.id, l.product_id, p.name AS product_name, l.status,
+      `SELECT l.id, l.product_id, p.name AS product_name, l.billing_environment, l.status,
               l.status_reason, l.license_model, l.renewal_mode, l.credential_mode,
               l.max_activations, l.features_json, l.expires_at, l.updates_until,
               l.created_at, l.updated_at

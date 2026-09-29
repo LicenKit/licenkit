@@ -236,6 +236,7 @@ async function validateLicenseCredential(input: {
   releaseVersion: string;
   releasePlatform: string;
   releaseArch: string;
+  billingEnvironment?: "sandbox" | "live";
   credential: Extract<ClientCredential, { kind: "license" }>;
   now: Date;
 }) {
@@ -251,12 +252,15 @@ async function validateLicenseCredential(input: {
       releaseVersion: input.releaseVersion,
       releasePlatform: input.releasePlatform,
       releaseArch: input.releaseArch,
+      billingEnvironment: input.billingEnvironment,
       now: input.now,
     });
     return {
       state: data.state,
+      billing_environment: data.billing_environment,
       credential_update: {
         credential_mode: data.credential_mode,
+        billing_environment: data.billing_environment,
         signed_license_token: data.signed_license_token,
         signing_key_id: data.signing_key_id,
       },
@@ -408,6 +412,7 @@ export async function validateClient(input: {
   releaseVersion: string;
   releasePlatform: string;
   releaseArch: string;
+  billingEnvironment?: "sandbox" | "live";
   credential: ClientCredential;
   now?: Date;
 }) {

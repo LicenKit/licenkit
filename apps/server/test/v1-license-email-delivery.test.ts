@@ -78,11 +78,11 @@ describe("License email business paths", () => {
     ).run(USER_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, name, description, billing_environment,
+         id, instance_id, name, description,
          trial_enabled, trial_duration_seconds, trial_features_json,
          status, created_at, updated_at
        ) VALUES (?, ?, 'License Email Product', NULL,
-         NULL, 0, NULL, '[]', 'active', ?, ?)`,
+         0, NULL, '[]', 'active', ?, ?)`,
     ).run(PRODUCT_ID, INSTANCE_ID, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (

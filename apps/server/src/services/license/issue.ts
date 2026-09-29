@@ -213,6 +213,7 @@ export async function issueManualLicense(input: {
       licenseModel: terms.licenseModel,
       renewalMode: terms.renewalMode,
       credentialMode: terms.credentialMode,
+      billingEnvironment: "live" as const,
       expiresAt: terms.expiresAt,
       updatesUntil: terms.updatesUntil,
       paymentGraceSeconds: terms.paymentGraceSeconds,

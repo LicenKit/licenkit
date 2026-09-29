@@ -243,7 +243,7 @@ export interface ProductSigningKey {
 }
 export interface Product {
   id: Identifier; name: string; description?: string | null; status: "active" | "archived";
-  billingEnvironment: BillingEnvironment | null; trial?: TrialConfiguration; signingKey?: ProductSigningKey | null;
+  trial?: TrialConfiguration; signingKey?: ProductSigningKey | null;
   validationIntervalSeconds: number;
   createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
 }
@@ -269,6 +269,7 @@ export interface License {
   licensePlanId?: Identifier; licensePlanName?: string; planRevision?: number;
   status: "active" | "suspended" | "revoked" | "expired"; statusReason?: string | null; licenseModel: LicenseModel;
   renewalMode: RenewalMode; credentialMode?: CredentialMode; expiresAt: IsoDateTime | null; updatesUntil: IsoDateTime | null;
+  billingEnvironment: BillingEnvironment;
   maxActivations?: number; activeActivations?: number; features?: string[]; offlineGraceSeconds?: number; paymentGraceSeconds?: number;
   isCheckoutVerification?: boolean; terms?: LicenseTerms;
   delivery?: DeliveryReference | null; createdAt?: IsoDateTime; updatedAt?: IsoDateTime;
@@ -524,11 +525,10 @@ export const api = {
     products: {
       list: () => request<ListResponse<Product>>("/admin/products", { scope: "admin" }),
       get: (id: string) => request<Product>(`/admin/products/${encodeURIComponent(id)}`, { scope: "admin" }),
-      create: (body: { name: string; description?: string | null; billingEnvironment: BillingEnvironment | null; validationIntervalSeconds: number; trial?: TrialConfiguration }) => request<Product>("/admin/products", { method: "POST", body, scope: "admin" }),
+      create: (body: { name: string; description?: string | null; validationIntervalSeconds: number; trial?: TrialConfiguration }) => request<Product>("/admin/products", { method: "POST", body, scope: "admin" }),
       update: (id: string, body: {
         name?: string;
         description?: string | null;
-        billingEnvironment?: BillingEnvironment | null;
         paymentGraceSeconds?: number;
         validationIntervalSeconds?: number;
         trial?: TrialConfiguration;

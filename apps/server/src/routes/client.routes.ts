@@ -13,6 +13,9 @@ const ReleaseFields = {
   release_platform: z.enum(["macos", "windows", "linux"]),
   release_arch: z.enum(["universal", "arm64", "x86_64"]),
 };
+const BillingEnvironmentField = {
+  billing_environment: z.enum(["sandbox", "live"]).optional().default("live"),
+};
 
 const ActivateSchema = z.object({
   product_id: z.string().min(1),
@@ -22,6 +25,7 @@ const ActivateSchema = z.object({
   device_platform: z.string().trim().min(1).max(100).optional(),
   name: z.string().trim().min(1).max(200).optional(),
   ...ReleaseFields,
+  ...BillingEnvironmentField,
 }).strict();
 
 clientRouter.post("/activate", async (c) => {
@@ -40,6 +44,7 @@ clientRouter.post("/activate", async (c) => {
     releaseVersion: input.release_version,
     releasePlatform: input.release_platform,
     releaseArch: input.release_arch,
+    billingEnvironment: input.billing_environment,
     firstIp: c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for")?.split(",")[0]?.trim(),
   });
   c.header("Cache-Control", "no-store");
@@ -69,6 +74,7 @@ const ValidateSchema = z.object({
   product_id: z.string().min(1),
   fingerprint: z.string().trim().min(8).max(512),
   ...ReleaseFields,
+  ...BillingEnvironmentField,
   credential: CredentialSchema,
 }).strict();
 
@@ -97,6 +103,7 @@ clientRouter.post("/validate", async (c) => {
     releaseVersion: input.release_version,
     releasePlatform: input.release_platform,
     releaseArch: input.release_arch,
+    billingEnvironment: input.billing_environment,
     credential,
   });
   c.header("Cache-Control", "no-store");

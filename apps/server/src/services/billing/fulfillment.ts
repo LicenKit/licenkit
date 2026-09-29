@@ -57,7 +57,6 @@ interface LicensePlanOfferRow {
   product_id: string;
   product_name: string;
   product_status: "active" | "archived";
-  billing_environment: "sandbox" | "live" | null;
   plan_id: string;
   plan_revision: number;
   license_model: "perpetual" | "fixed_term" | "subscription";
@@ -404,7 +403,7 @@ async function lookupOffer(
   const row = await db.prepare(
     `SELECT offer.id AS offer_id, offer.status AS offer_status, offer.external_price_id,
             offer.purchase_type, product.id AS product_id, product.name AS product_name,
-            product.status AS product_status, product.billing_environment,
+            product.status AS product_status,
             plan.id AS plan_id, plan.revision AS plan_revision, plan.license_model,
             plan.credential_mode, plan.default_term_seconds, plan.update_window_seconds,
             plan.offline_grace_seconds, plan.payment_grace_seconds,
@@ -429,7 +428,6 @@ async function lookupOffer(
 function assertOfferCanFulfill(
   offer: LicensePlanOfferRow,
   expectedPurchaseType: "one_time" | "subscription",
-  options: { checkoutVerification?: boolean } = {},
 ): void {
   if (offer.product_status !== "active" || offer.plan_status !== "active") {
     throw new BillingProcessingError(
@@ -437,20 +435,6 @@ function assertOfferCanFulfill(
       "The mapped Product or License Plan is archived.",
       "needs_attention",
       { offerId: offer.offer_id, productStatus: offer.product_status, planStatus: offer.plan_status },
-    );
-  }
-  if (!options.checkoutVerification && (
-    !offer.billing_environment || offer.billing_environment !== offer.provider_environment
-  )) {
-    throw new BillingProcessingError(
-      "BILLING_OFFER_ENVIRONMENT_MISMATCH",
-      "Billing Provider environment does not match the Product collection environment.",
-      "needs_attention",
-      {
-        offerId: offer.offer_id,
-        providerEnvironment: offer.provider_environment,
-        productEnvironment: offer.billing_environment,
-      },
     );
   }
   if (offer.purchase_type !== expectedPurchaseType) {
@@ -562,7 +546,7 @@ async function resolveOfferAndVerification(input: {
       { verificationId: verification.id, externalPriceId: input.priceId },
     );
   }
-  assertOfferCanFulfill(offer, input.purchaseType, { checkoutVerification: true });
+  assertOfferCanFulfill(offer, input.purchaseType);
   return { offer, verificationId: verification.id };
 }
 
@@ -731,12 +715,12 @@ async function fulfillInitialPurchase(input: {
        id, instance_id, customer_id, product_id, plan_id, plan_revision,
        license_model, renewal_mode, credential_mode, offline_grace_seconds,
        payment_grace_seconds, max_activations, features_json, key_hash,
-       key_version, source, source_billing_provider_id, source_external_transaction_id,
+       key_version, source, billing_environment, source_billing_provider_id, source_external_transaction_id,
        is_checkout_verification, status, status_reason, expires_at, updates_until,
        suspended_at, revoked_at, created_at, updated_at
      ) VALUES (
        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-       1, 'payment', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, NULL, ?23, ?23
+       1, 'payment', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, NULL, ?24, ?24
      )`,
   ).bind(
     licenseId,
@@ -753,6 +737,7 @@ async function fulfillInitialPurchase(input: {
     offer.max_activations,
     offer.features_json,
     keyHash,
+    offer.provider_environment,
     input.event.billing_provider_id,
     transactionId,
     isVerification ? 1 : 0,

@@ -92,7 +92,7 @@ adminCustomersRouter.get("/:customerId", requireRole(["owner", "admin", "member"
   if (!customer.results[0]) throw new NotFoundError("Customer not found");
   const licenses = await c.env.DB
     .prepare(
-      `SELECT id, product_id, status, license_model, renewal_mode, expires_at, updates_until, created_at
+      `SELECT id, product_id, billing_environment, status, license_model, renewal_mode, expires_at, updates_until, created_at
        FROM licenses WHERE instance_id = ?1 AND customer_id = ?2 ORDER BY created_at DESC`
     )
     .bind(instanceId, customerId)

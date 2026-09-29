@@ -281,8 +281,6 @@ export interface ProductsDictionary {
   swiftConfigLabel: string;
   copySwiftConfig: string;
   signingKeyMissing: string;
-  billingEnvLabel: string;
-  billingEnvNone: string;
   validationIntervalLabel: string;
   validationIntervalHours: (hours: number) => string;
   trialLabel: string;
@@ -317,12 +315,8 @@ export interface ProductsDictionary {
   fieldName: string;
   fieldDesc: string;
   fieldDescPlaceholder: string;
-  fieldBillingEnv: string;
   fieldValidationInterval: string;
   fieldValidationIntervalHint: string;
-  billingEnvOptionNone: string;
-  billingEnvOptionSandbox: string;
-  billingEnvOptionLive: string;
   fieldTrialCheck: string;
   fieldTrialCheckHint: string;
   fieldTrialDuration: string;

@@ -16,7 +16,6 @@ export interface BillingOfferReadinessRow {
   purchase_type: "one_time" | "subscription";
   offer_status: "draft" | "active" | "archived";
   product_status: "active" | "archived";
-  billing_environment: "sandbox" | "live" | null;
   license_model: "perpetual" | "fixed_term" | "subscription";
   credential_mode: "opaque" | "signed";
   plan_status: "active" | "archived";
@@ -40,7 +39,7 @@ export async function getBillingOfferReadinessRow(
     `SELECT
        offer.id, offer.instance_id, offer.external_price_id, offer.product_id,
        offer.license_plan_id, offer.purchase_type, offer.status AS offer_status,
-       product.status AS product_status, product.billing_environment,
+       product.status AS product_status,
        plan.license_model, plan.credential_mode, plan.status AS plan_status,
        provider.id AS provider_id, provider.status AS provider_status,
        provider.environment AS provider_environment,
@@ -176,14 +175,6 @@ export async function evaluateBillingOfferReadiness(
   checks.push(check("product", row.product_status === "active", "PRODUCT_UNAVAILABLE"));
   checks.push(check("license_plan", row.plan_status === "active", "CHECKOUT_CONFIGURATION_PENDING"));
   checks.push(check("provider", row.provider_status === "active", "CHECKOUT_PROVIDER_UNAVAILABLE"));
-  checks.push(check(
-    "environment_binding",
-    row.billing_environment !== null && row.billing_environment === row.provider_environment,
-    row.billing_environment === null
-      ? "PRODUCT_BILLING_ENVIRONMENT_NOT_CONFIGURED"
-      : "CHECKOUT_PROVIDER_UNAVAILABLE",
-    { productEnvironment: row.billing_environment, providerEnvironment: row.provider_environment },
-  ));
   const typeMatches = row.purchase_type === "subscription"
     ? row.license_model === "subscription"
     : row.license_model === "perpetual" || row.license_model === "fixed_term";

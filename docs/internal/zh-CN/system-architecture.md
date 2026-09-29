@@ -23,7 +23,7 @@ Deployment（运行环境）
 - Customer 与 User 是独立身份；
 - Deployment 级运行异常不进入 Instance 业务表。
 
-当前主线从空数据库建立新合同，不提供旧表、旧字段、旧 URL、旧环境变量、旧 CLI 选项或旧 Token Claim 的兼容层。
+初始迁移负责创建空数据库，后续编号迁移更新既有 D1。Product 支付环境列在 `0006` 中删除；旧客户端未传运行环境时按 `live` 处理，已有 Live License 保持可用。
 
 ## 2. 运行拓扑
 
@@ -260,7 +260,7 @@ System Issue 是聚合视图，不覆盖业务对象的原始错误。管理员�
 
 - `instances`：随机 ID、名称、Admin/API URL、Customer Site URL、只读状态；
 - Billing/Email 凭据：Admin 写入后加密存储；
-- Product：支付环境、宽限期、试用；
+- Product：宽限期、试用；支付环境由 Offer 的 Provider 决定并固化在 License；
 - Plan：授权条款快照。
 
 不建立通用 `instance_settings`，没有独立生命周期的字段直接属于其领域对象。

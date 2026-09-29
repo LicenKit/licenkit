@@ -399,7 +399,7 @@ export function LicensesView({ canManage, canSupport }: { canManage: boolean; ca
                     >
                       <td>
                         <strong>{license.id}</strong>
-                        {license.isCheckoutVerification ? (
+                        {license.billingEnvironment === "sandbox" ? (
                           <Badge tone="warning">Sandbox</Badge>
                         ) : null}
                       </td>

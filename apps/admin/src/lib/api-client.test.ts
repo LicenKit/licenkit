@@ -19,7 +19,6 @@ describe("Admin API JSON boundary", () => {
 
     await api.admin.products.create({
       name: "Desktop App",
-      billingEnvironment: "sandbox",
       validationIntervalSeconds: 3600,
       trial: { enabled: true, durationSeconds: 3600, features: ["sync"] },
     });
@@ -27,7 +26,6 @@ describe("Admin API JSON boundary", () => {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(init.body))).toEqual({
       name: "Desktop App",
-      billing_environment: "sandbox",
       validation_interval_seconds: 3600,
       trial: { enabled: true, duration_seconds: 3600, features: ["sync"] },
     });
@@ -74,7 +72,6 @@ describe("Admin API JSON boundary", () => {
     await api.admin.products.update("prd_test", {
       name: "Desktop Pro",
       description: "Updated",
-      billingEnvironment: "live",
       trial: { enabled: true, durationSeconds: 604_800, features: ["sync"] },
     });
 
@@ -82,7 +79,6 @@ describe("Admin API JSON boundary", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       name: "Desktop Pro",
       description: "Updated",
-      billing_environment: "live",
       trial: { enabled: true, duration_seconds: 604_800, features: ["sync"] },
     });
   });

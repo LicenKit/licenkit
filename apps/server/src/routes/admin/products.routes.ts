@@ -32,14 +32,12 @@ const ExternalTrialConfigSchema = z.object({
 const CreateProductSchema = z.object({
   name: z.string().trim().min(1).max(100),
   description: z.string().trim().max(4000).nullable().optional(),
-  billing_environment: z.enum(["sandbox", "live"]).nullable().optional(),
   payment_grace_seconds: z.number().int().nonnegative().default(0),
   validation_interval_seconds: z.number().int().min(3600).max(86400).default(3600),
   trial: ExternalTrialConfigSchema.optional(),
 }).strict().transform((value) => ({
   name: value.name,
   description: value.description,
-  billingEnvironment: value.billing_environment,
   paymentGraceSeconds: value.payment_grace_seconds,
   validationIntervalSeconds: value.validation_interval_seconds,
   trial: value.trial ? {
@@ -51,14 +49,12 @@ const CreateProductSchema = z.object({
 const UpdateProductSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   description: z.string().trim().max(4000).nullable().optional(),
-  billing_environment: z.enum(["sandbox", "live"]).nullable().optional(),
   payment_grace_seconds: z.number().int().nonnegative().optional(),
   validation_interval_seconds: z.number().int().min(3600).max(86400).optional(),
   trial: ExternalTrialConfigSchema.optional(),
 }).strict().transform((value) => ({
   name: value.name,
   description: value.description,
-  billingEnvironment: value.billing_environment,
   paymentGraceSeconds: value.payment_grace_seconds,
   validationIntervalSeconds: value.validation_interval_seconds,
   trial: value.trial ? {
@@ -96,7 +92,6 @@ function formatProduct(product: any, signingKey?: any | null) {
     instance_id: product.instanceId,
     name: product.name,
     description: product.description,
-    billing_environment: product.billingEnvironment,
     payment_grace_seconds: product.paymentGraceSeconds,
     validation_interval_seconds: product.validationIntervalSeconds,
     status: product.status,
@@ -205,7 +200,6 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
       instanceId,
       name: input.name,
       description: input.description ?? null,
-      billingEnvironment: input.billingEnvironment ?? null,
       paymentGraceSeconds: input.paymentGraceSeconds,
       validationIntervalSeconds: input.validationIntervalSeconds,
       trialEnabled: trial.enabled,
@@ -232,7 +226,7 @@ adminProductsRouter.post("/", requireRole(["owner", "admin"]), async (c) => {
 
   await recordAuditLog({
     c, action: "product.create", resourceType: "product", resourceId: productId,
-    details: { billingEnvironment: input.billingEnvironment ?? null },
+    details: {},
   });
   const created = await requireProduct(db, instanceId, productId);
   return c.json({
@@ -435,33 +429,12 @@ adminProductsRouter.patch("/:productId", requireRole(["owner", "admin"]), async 
   const db = getTenantDB(c);
   const instanceId = c.get("instanceId")!;
   const productId = c.req.param("productId");
-  const existing = await requireProduct(db, instanceId, productId);
-
-  if (input.billingEnvironment !== undefined && input.billingEnvironment !== existing.billingEnvironment) {
-    const lock = await db.select({
-      activeOfferCount: sql<number>`(
-        SELECT COUNT(*) FROM billing_offers
-        WHERE instance_id = ${instanceId} AND product_id = ${productId} AND status = 'active'
-      )`,
-      paymentLicenseCount: sql<number>`(
-        SELECT COUNT(*) FROM licenses
-        WHERE instance_id = ${instanceId} AND product_id = ${productId}
-          AND source = 'payment' AND is_checkout_verification = 0
-      )`,
-    }).from(products).where(and(eq(products.instanceId, instanceId), eq(products.id, productId))).get();
-    if ((lock?.activeOfferCount ?? 0) > 0 || (lock?.paymentLicenseCount ?? 0) > 0) {
-      throw new ConflictError(
-        "PRODUCT_BILLING_ENVIRONMENT_LOCKED",
-        "The Product billing environment is locked by active Offers or payment Licenses.",
-      );
-    }
-  }
+  await requireProduct(db, instanceId, productId);
 
   const trial = input.trial;
   await db.update(products).set({
     ...(input.name !== undefined ? { name: input.name } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
-    ...(input.billingEnvironment !== undefined ? { billingEnvironment: input.billingEnvironment } : {}),
     ...(input.paymentGraceSeconds !== undefined ? { paymentGraceSeconds: input.paymentGraceSeconds } : {}),
     ...(input.validationIntervalSeconds !== undefined
       ? { validationIntervalSeconds: input.validationIntervalSeconds }

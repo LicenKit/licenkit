@@ -6,6 +6,7 @@ import { computeHmacSha256, sha256Hex } from "../src/infra/crypto";
 import { encryptEnvelopeV1 } from "../src/infra/delivery/crypto";
 import { encryptBillingProviderSecret, encryptInboundPayload } from "../src/infra/billing/storage";
 import { processBillingInboundEvent, processDueBillingInboundEvents } from "../src/services/billing/fulfillment";
+import { activateLicense, validateActivation } from "../src/services/license/activation";
 import { listSystemIssues } from "../src/services/operations/system-issues";
 import { reconcileBillingCustomer } from "../src/services/billing/customer-sync";
 import { createCustomerPortalSession } from "../src/services/billing/customer-portal";
@@ -105,8 +106,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).run(providerId, instanceId, encryptedSecret, nowIso, nowIso);
     db.prepare(
       `INSERT INTO products (
-         id, instance_id, name, billing_environment, status, created_at, updated_at
-       ) VALUES ('prd_00000000000000000000000001', ?, 'One Time', 'sandbox', 'active', ?, ?)`,
+         id, instance_id, name, status, created_at, updated_at
+       ) VALUES ('prd_00000000000000000000000001', ?, 'One Time', 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     db.prepare(
       `INSERT INTO license_plans (
@@ -487,8 +488,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
 
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, name, billing_environment, status, created_at, updated_at
-       ) VALUES ('prd_sim_subscription', ?, 'Simulator Subscription', 'sandbox', 'active', ?, ?)`,
+         id, instance_id, name, status, created_at, updated_at
+       ) VALUES ('prd_sim_subscription', ?, 'Simulator Subscription', 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
@@ -582,6 +583,65 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).get(transactionId) as { id: string };
     return { eventId: posted.body.data.event_id, licenseId: license.id };
   }
+
+  it("keeps Live and Sandbox Offers active on one Product and binds a Sandbox purchase to Sandbox use", async () => {
+    const liveProviderId = "bpr_live_same_product";
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO billing_providers (
+         id, instance_id, provider, environment, client_side_token,
+         webhook_secret_ciphertext, status, created_at, updated_at
+       ) VALUES (?, ?, 'paddle', 'live', 'live_same_product_token', 'encrypted', 'active', ?, ?)`,
+    ).run(liveProviderId, instanceId, nowIso, nowIso);
+    testEnv.sqliteDb.prepare(
+      `INSERT INTO billing_offers (
+         id, instance_id, billing_provider_id, external_price_id, product_id,
+         license_plan_id, purchase_type, status, created_at, updated_at
+       ) VALUES ('off_live_same_product', ?, ?, 'pri_live_same_product',
+         'prd_00000000000000000000000001', 'pln_one', 'one_time', 'active', ?, ?)`,
+    ).run(instanceId, liveProviderId, nowIso, nowIso);
+
+    seedLinkedCustomer();
+    await configureLicenseIssuedEmail();
+    const deliveries: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      deliveries.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ id: "email_sandbox_purchase" }), {
+        status: 202, headers: { "content-type": "application/json" },
+      });
+    }));
+    const { licenseId } = await issueOneTimeLicense("txn_sandbox_same_product");
+    expect(testEnv.sqliteDb.prepare(
+      "SELECT billing_environment, source_billing_provider_id FROM licenses WHERE id = ?",
+    ).get(licenseId)).toEqual({ billing_environment: "sandbox", source_billing_provider_id: providerId });
+    expect(deliveries).toHaveLength(1);
+    const licenseKey = deliveries[0].template.variables.license_key as string;
+    const activation = {
+      db: testEnv.d1, env: testEnv.env, instanceId,
+      productId: "prd_00000000000000000000000001",
+      licenseKey, machineToken: "mtk_sandbox_same_product_secret_123456",
+      fingerprint: "sha256:sandbox-same-product", releaseVersion: "1.0.0",
+      releasePlatform: "macos", releaseArch: "arm64",
+    };
+    await expect(activateLicense({ ...activation, billingEnvironment: "live" }))
+      .rejects.toMatchObject({ code: "LICENSE_ENVIRONMENT_MISMATCH" });
+    const sandboxActivation = await activateLicense({ ...activation, billingEnvironment: "sandbox" });
+    expect(sandboxActivation.billing_environment).toBe("sandbox");
+    await expect(validateActivation({
+      db: testEnv.d1, env: testEnv.env, instanceId, productId: activation.productId,
+      activationId: sandboxActivation.activation_id, machineToken: activation.machineToken,
+      fingerprint: activation.fingerprint, releaseVersion: activation.releaseVersion,
+      releasePlatform: activation.releasePlatform, releaseArch: activation.releaseArch,
+      billingEnvironment: "live",
+    })).rejects.toMatchObject({ code: "LICENSE_ENVIRONMENT_MISMATCH" });
+    const validated = await validateActivation({
+      db: testEnv.d1, env: testEnv.env, instanceId, productId: activation.productId,
+      activationId: sandboxActivation.activation_id, machineToken: activation.machineToken,
+      fingerprint: activation.fingerprint, releaseVersion: activation.releaseVersion,
+      releasePlatform: activation.releasePlatform, releaseArch: activation.releaseArch,
+      billingEnvironment: "sandbox",
+    });
+    expect(validated.billing_environment).toBe("sandbox");
+  });
 
   async function configureProviderApiKey(apiKey = "pdl_sdbx_apikey_v1"): Promise<void> {
     const encrypted = await encryptBillingProviderSecret(
@@ -780,9 +840,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
   it("keeps an out-of-order subscription purchase pending, then fulfills once trusted dependencies arrive", async () => {
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, name, billing_environment, payment_grace_seconds,
+         id, instance_id, name, payment_grace_seconds,
          status, created_at, updated_at
-       ) VALUES ('prd_00000000000000000000000002', ?, 'Subscription', 'sandbox',
+       ) VALUES ('prd_00000000000000000000000002', ?, 'Subscription',
          86400, 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
@@ -978,8 +1038,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).run(liveProviderId, instanceId, encryptedSecret, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, name, billing_environment, status, created_at, updated_at
-       ) VALUES ('prd_live_readiness', ?, 'Live Readiness', 'live', 'active', ?, ?)`,
+         id, instance_id, name, status, created_at, updated_at
+       ) VALUES ('prd_live_readiness', ?, 'Live Readiness', 'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       `INSERT INTO license_plans (
@@ -1083,11 +1143,6 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     ).run(nowIso, nowIso);
     testEnv.sqliteDb.prepare(
       "UPDATE billing_offers SET status = 'draft' WHERE id = 'off_one'",
-    ).run();
-    // Verification intentionally remains valid when the public Product is
-    // bound to Live; the draft Offer itself is on a Sandbox Provider.
-    testEnv.sqliteDb.prepare(
-      "UPDATE products SET billing_environment = 'live' WHERE id = 'prd_00000000000000000000000001'",
     ).run();
     const token = "vfy_single_use_token";
     const verificationExpiresAt = new Date(Date.now() + 3_600_000).toISOString();
@@ -1368,9 +1423,9 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     seedLinkedCustomer("ctm_portal1", "portal@example.test");
     testEnv.sqliteDb.prepare(
       `INSERT INTO products (
-         id, instance_id, name, billing_environment, payment_grace_seconds,
+         id, instance_id, name, payment_grace_seconds,
          status, created_at, updated_at
-       ) VALUES ('prd_portal', ?, 'Portal Subscription', 'sandbox', 86400,
+       ) VALUES ('prd_portal', ?, 'Portal Subscription', 86400,
          'active', ?, ?)`,
     ).run(instanceId, nowIso, nowIso);
     testEnv.sqliteDb.prepare(
@@ -1385,13 +1440,13 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
          id, instance_id, customer_id, product_id, plan_id, plan_revision,
          license_model, renewal_mode, credential_mode, offline_grace_seconds,
          payment_grace_seconds, max_activations, features_json, key_hash,
-         key_version, source, source_billing_provider_id,
+         key_version, source, billing_environment, source_billing_provider_id,
          source_external_transaction_id, status, expires_at, created_at, updated_at
        ) VALUES (
          'lic_portal1', ?, 'cus_buyer', 'prd_portal', 'pln_portal', 1,
          'subscription', 'billing', 'opaque', 2592000,
          86400, 1, '[]', 'portal-key-hash',
-         1, 'payment', ?, 'txn_portal1', 'active',
+         1, 'payment', 'sandbox', ?, 'txn_portal1', 'active',
          '2026-10-19T08:00:00.000Z', ?, ?
        )`,
     ).run(instanceId, providerId, nowIso, nowIso);

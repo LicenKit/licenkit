@@ -5,6 +5,7 @@ export interface SignedLicenseClaims {
   act: string;
   ins: string;
   prd: string;
+  env: "sandbox" | "live";
   ver: string;
   plt: string;
   arc: string;

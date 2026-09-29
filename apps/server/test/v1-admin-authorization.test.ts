@@ -224,10 +224,10 @@ describe("V1 admin authorization and audit visibility", () => {
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (
-         id, instance_id, name, billing_environment, trial_enabled,
+         id, instance_id, name, trial_enabled,
          trial_features_json, status, created_at, updated_at
        ) VALUES ('prod_authz', 'ins_authz', 'Authorization Product',
-                 NULL, 0, '[]', 'active', ?, ?)`,
+                 0, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO instances (id, name, site_url, admin_api_url, status, created_at, updated_at)
@@ -235,10 +235,10 @@ describe("V1 admin authorization and audit visibility", () => {
     ).run(now, now);
     db.prepare(
       `INSERT INTO products (
-         id, instance_id, name, billing_environment, trial_enabled,
+         id, instance_id, name, trial_enabled,
          trial_features_json, status, created_at, updated_at
        ) VALUES ('prod_foreign', 'ins_foreign', 'Foreign Product',
-                 NULL, 0, '[]', 'active', ?, ?)`,
+                 0, '[]', 'active', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO product_releases (
@@ -405,7 +405,6 @@ describe("V1 admin authorization and audit visibility", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         name: "ID-only Product",
-        billing_environment: null,
       }),
     }, testEnv.env);
     expect(response.status).toBe(201);

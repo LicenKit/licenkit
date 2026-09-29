@@ -198,7 +198,6 @@ Product 可以配置一组 V1 无需支付方式的设备试用规则：
 ```json
 {
   "name": "Example App",
-  "billing_environment": "live",
   "payment_grace_seconds": 0,
   "validation_interval_seconds": 3600,
   "trial": {
@@ -211,7 +210,7 @@ Product 可以配置一组 V1 无需支付方式的设备试用规则：
 
 Product 由服务端生成的全局唯一 `id` 标识，创建请求不接受第二套人工标识。创建 Product 时 LicenKit 同时自动生成 Ed25519 密钥对：私钥加密后只保存在服务端，Admin 产品详情与 Product API 只返回 Key ID、算法、状态和公钥。管理员不上传、下载或查看私钥；应从 Admin 复制公钥并随 `signed` 模式 App 构建交付。
 
-`billing_environment` 可为 `sandbox|live|null`：`null` 表示普通支付事件不能签发正式 License；非空值是该 Product 唯一可签发正式支付 License 的环境。设置或切换环境时，服务端必须确认没有 active Offer，且不存在 `is_checkout_verification=0` 的支付 License；否则返回 `PRODUCT_BILLING_ENVIRONMENT_LOCKED`。验证 License 不锁定该字段，因为它永远不可激活。
+Product 不保存支付环境。同一 Product 和 License Plan 可以分别关联 Sandbox、Live Offer；每条 Offer 的支付环境由其 Billing Provider 决定。
 
 `payment_grace_seconds` 是非负整数，Product 创建默认 `0`。创建订阅 License Plan 时省略该字段会固化 Product 当时的值；非订阅 Plan 固定为 `0`。支付型订阅 License 再从 Plan 固化该值，Product 后续修改不追溯已有 Plan 或 License，Plan 后续修改也不追溯已签发 License。启用试用时 `duration_seconds` 必须显式提供正整数；V1 不使用隐式全局试用天数。修改 Product 的试用时长或功能只影响之后领取的 Trial Claim。
 
@@ -461,7 +460,7 @@ POST   /api/v1/admin/billing/offers/:offerId/archive
 }
 ```
 
-创建响应的 `status` 固定为 `draft`。Offer 只有在 Billing Provider 环境等于 Product `billing_environment` 时才允许激活。Sandbox 与 Live 各自独立上线；真实购买测试在上线后进行。
+创建响应的 `status` 固定为 `draft`。Offer 关联的 Billing Provider 决定支付环境；同一 Product 和 Plan 的 Sandbox 与 Live Offer 各自独立上线，真实购买测试在上线后进行。
 
 PATCH 只允许修改尚无历史 Checkout Verification 的 draft Offer。对历史已发起特殊核验的记录保留该约束，避免旧证据跟随到新权益；新流程不再创建 Checkout Verification。
 
@@ -481,7 +480,7 @@ PATCH 只允许修改尚无历史 Checkout Verification 的 draft Offer。对历
 
 管理控制台使用官方 Paddle.js 按该 Price 和数量 1 打开普通 Sandbox Checkout，不附加 `licenkit_checkout_verification`。付款事件按已激活 Offer 的普通履约路径处理，因而会产生普通 Sandbox License 与邮件；管理员应使用测试客户资料。该接口不允许 Live Offer，也不公开到无鉴权路由。
 
-`activate` 不接受调用方传入 `ready=true`；服务端实时检查 Product、Plan、Provider、环境绑定、Client-side Token、Webhook Secret、Email Integration 与凭证、`customer.license_issued@1` Template Binding、处理积压和 `signed` 模式密钥。模拟事件覆盖率和端到端购买是上线后的测试与诊断信息，不作为 Sandbox 或 Live 上线门禁。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和具体检查项，不改变 Offer 状态。上线后，Sandbox 可从管理后台发起普通购买测试；Live 由管理员自行进行真实购买验证。
+`activate` 不接受调用方传入 `ready=true`；服务端实时检查 Product、Plan、Provider、Client-side Token、Webhook Secret、Email Integration 与凭证、`customer.license_issued@1` Template Binding、处理积压和 `signed` 模式密钥。模拟事件覆盖率和端到端购买是上线后的测试与诊断信息，不作为 Sandbox 或 Live 上线门禁。任一必需项失败时返回 `BILLING_CHECKOUT_NOT_READY` 和具体检查项，不改变 Offer 状态。上线后，Sandbox 可从管理后台发起普通购买测试；Live 由管理员自行进行真实购买验证。
 
 PricePreview 不属于服务端 Offer 激活门禁，也不保存为 Readiness 证据。静态产品页可以直接显示源码中的价格，也可以自行调用 Paddle PricePreview；一次 Preview 成功不能证明未来页面、Origin 或 Paddle 状态仍然可用。服务端支付履约继续只信任已验签 Webhook，并精确校验 Offer、Price、数量、环境和 Customer 合同。
 
@@ -759,7 +758,8 @@ POST /api/v1/client/activate
   "name": "Alex's MacBook Pro",
   "release_version": "2.4.0",
   "release_platform": "macos",
-  "release_arch": "universal"
+  "release_arch": "universal",
+  "billing_environment": "live"
 }
 ```
 
@@ -772,6 +772,7 @@ POST /api/v1/client/activate
     "activation_id": "act_01...",
     "machine_token": "mtk_...",
     "credential_mode": "opaque",
+    "billing_environment": "live",
     "signed_license_token": null,
     "signing_key_id": null,
     "license_expires_at": null,
@@ -818,7 +819,7 @@ POST /api/v1/client/activate
 
 `state.expires_at` 与兼容字段 `license_expires_at` 都表示最终授权截止时间。对 `renewal_mode=billing` 的订阅，它已经包含该 License 固化的支付宽限期；调用方不得再次叠加 `payment_grace_seconds`。
 
-Signed License Token 不包含 `exp`，响应也不返回独立的 Signed Token 到期时间。Signed 与 Opaque 的业务规则相同：业务到期使用 `state.expires_at` 和签名内 `lexp`；在线复核调度使用 Product 的 `validation_interval_seconds`；离线强提示使用 License 快照的 `offline_grace_seconds`。不能把在线复核间隔或离线宽限期解释为本地停用时间。
+Signed License Token 不包含 `exp`，响应也不返回独立的 Signed Token 到期时间。Signed 与 Opaque 的业务规则相同：业务到期使用 `state.expires_at` 和签名内 `lexp`；在线复核调度使用 Product 的 `validation_interval_seconds`；离线强提示使用 License 快照的 `offline_grace_seconds`。签名内的 `env` 固化为 License 的 `sandbox` 或 `live`，SDK 本地校验它与 App 配置一致。不能把在线复核间隔或离线宽限期解释为本地停用时间。
 
 `machine_token` 必须由客户端在发请求前生成，并先作为验证中凭据持久化。相同 License、相同设备指纹和相同 Machine Token 的重复或并发请求返回既有 Activation 与当前授权信息，不创建第二份 Activation；相同指纹但无法提供原 Machine Token 的请求返回 `ACTIVATION_CREDENTIALS_INVALID`，避免其他设备仅凭注册码或指纹取得既有凭据。客户端不需要保存 Registration Key 明文或 Hash；它应使用本次 `activate()` 的 Registration Key 发请求，并在完整凭据与快照全部落盘后再清理验证中凭据。`validate` 不负责重新执行激活。
 
@@ -837,6 +838,7 @@ POST /api/v1/client/validate
   "release_version": "2.4.0",
   "release_platform": "macos",
   "release_arch": "universal",
+  "billing_environment": "live",
   "credential": {
     "kind": "license",
     "activation_id": "act_01...",
@@ -853,7 +855,7 @@ POST /api/v1/client/validate
 | `trial` | `trial_id`、`trial_token` | 校验已经领取的设备 Trial |
 | `none` | 无 | 查询此设备是否还能领取 Trial |
 
-验证响应固定包含 `state`、`validation` 和 `meta`。仅 License 校验可以额外包含 `credential_update`；`signed` 模式借此原子刷新 Signed License Token，`opaque` 模式返回空的签名字段。Trial 和 `none` 响应不得包含 `credential_update`。
+验证响应固定包含 `state`、`validation` 和 `meta`。有效 License 校验还返回 `billing_environment` 和 `credential_update`；`signed` 模式借此原子刷新 Signed License Token，`opaque` 模式返回空的签名字段。Trial 和 `none` 响应不得包含 `credential_update`。服务端在激活和 License 校验时比较请求的运行环境与 License 固化环境；旧版未传环境的客户端按 `live` 处理，不能借此激活 Sandbox License。
 
 ```json
 {
@@ -871,8 +873,10 @@ POST /api/v1/client/validate
         "updates_until": null
       }
     },
+    "billing_environment": "live",
     "credential_update": {
       "credential_mode": "signed",
+      "billing_environment": "live",
       "signed_license_token": "base64url.base64url.base64url",
       "signing_key_id": "key_01..."
     },
@@ -1015,7 +1019,7 @@ Customer 事件 upsert Billing Customer 镜像并尝试建立内部映射。购�
 
 只有 `link_status=linked` 才能创建新 License 和发码 Delivery。`email_mismatch`、无效/归档 provider Customer 或无法安全链接时进入 `needs_attention`。已有 Subscription 的续费根据 Subscription 直接更新原 License，不重新按邮箱链接。处理器不得读取 `custom_data.email`、Checkout 参数或调用方自报邮箱作为发码身份。
 
-普通首次购买还必须根据已验签 Transaction 行项目验证：恰好一个行项目、`quantity=1`、Price 命中当前 active Offer、Offer Provider 环境等于 Product `billing_environment`，并且 Offer、Product、Plan 和 `purchase_type` 一致。任何不满足项都以保留外部 Transaction、Price、数量、Provider 环境、Product 环境和事件 ID 的具体错误进入 `needs_attention`，不创建 Customer、License、Subscription 或 Delivery；不能选择第一项、忽略附加项目或按总金额猜测授权。
+普通首次购买还必须根据已验签 Transaction 行项目验证：恰好一个行项目、`quantity=1`、Price 命中当前 active Offer，并且 Offer、Product、Plan 和 `purchase_type` 一致。已验签 Webhook 所属 Provider 的环境固化到新 License；数据库约束要求支付 License 的环境与其 Provider 一致。任何不满足项都以保留外部 Transaction、Price、数量、Provider 环境和事件 ID 的具体错误进入 `needs_attention`，不创建 Customer、License、Subscription 或 Delivery；不能选择第一项、忽略附加项目或按总金额猜测授权。
 
 历史兼容例外：旧版已发起的首次验证 Transaction 若带有 `custom_data.licenkit_checkout_verification`，并通过哈希等值查询命中同 Instance、草稿 Offer 的 `pending` Checkout Verification，且令牌未过期、Provider 为 Sandbox、Price 和数量完全匹配，服务端仍会原子消费该令牌，并创建 `is_checkout_verification=1`、`suspended + checkout_verification` 的 License 和发码 Delivery。新版管理界面不再生成此令牌；测试购买走已激活 Offer 的普通购买。旧令牌错误、过期、重复、Offer 不匹配或来自 Live Provider 时进入 `needs_attention`，不得回退到普通付款。其他 `custom_data` 不参与 Customer、Product、Plan 或授权身份判断。
 

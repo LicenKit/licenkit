@@ -1,12 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Archive, Box, CalendarPlus, FlaskConical, KeyRound, PackagePlus, Pencil, Plus, RefreshCw } from "lucide-react";
-import { api, type BillingEnvironment, type Instance, type Product, type ProductRelease, type ReleaseArch, type ReleasePlatform } from "../../lib/api-client";
+import { api, type Instance, type Product, type ProductRelease, type ReleaseArch, type ReleasePlatform } from "../../lib/api-client";
 import { Badge, Button, Card, ConfirmModal, CopyValue, EmptyState, ErrorPanel, Field, Input, LoadingState, Modal, Notice, PageHeader, Select, StatusBadge, Textarea } from "../../components/ui";
 import { useI18n } from "../../lib/i18n";
 import { daysToSeconds, secondsToDays } from "../../lib/duration";
 
-const emptyProduct = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", validationIntervalHours: "1", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
-const emptyProductEdit = { name: "", description: "", billingEnvironment: "" as BillingEnvironment | "", validationIntervalHours: "1", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
+const emptyProduct = { name: "", description: "", validationIntervalHours: "1", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
+const emptyProductEdit = { name: "", description: "", validationIntervalHours: "1", trialEnabled: false, trialDurationDays: "", trialFeatures: "" };
 const emptyRelease = {
   version: "",
   platform: "macos" as ReleasePlatform,
@@ -62,7 +62,6 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
     try {
       const created = await api.admin.products.create({
         name: productForm.name.trim(), description: productForm.description.trim() || null,
-        billingEnvironment: productForm.billingEnvironment || null,
         validationIntervalSeconds: Number(productForm.validationIntervalHours) * 3600,
         trial: { enabled: productForm.trialEnabled, durationSeconds: productForm.trialEnabled ? daysToSeconds(productForm.trialDurationDays) : undefined, features: productForm.trialFeatures.split(",").map((item) => item.trim()).filter(Boolean) },
       });
@@ -76,7 +75,6 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
       setEditProductForm({
         name: selected.name,
         description: selected.description ?? "",
-        billingEnvironment: selected.billingEnvironment ?? "",
         validationIntervalHours: String(selected.validationIntervalSeconds / 3600),
         trialEnabled: selected.trial?.enabled ?? false,
         trialDurationDays: selected.trial?.enabled && selected.trial.durationSeconds !== undefined
@@ -98,7 +96,6 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
       await api.admin.products.update(selected.id, {
         name: editProductForm.name.trim(),
         description: editProductForm.description.trim() || null,
-        billingEnvironment: editProductForm.billingEnvironment || null,
         validationIntervalSeconds: Number(editProductForm.validationIntervalHours) * 3600,
         trial: {
           enabled: editProductForm.trialEnabled,
@@ -189,7 +186,6 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
                 </div>
                 <div className="metric-grid compact">
                   <div><span>{t.products.productIdLabel}</span><strong><code>{selected.id}</code></strong></div>
-                  <div><span>{t.products.billingEnvLabel}</span><strong>{selected.billingEnvironment || t.products.billingEnvNone}</strong></div>
                   <div><span>{t.products.validationIntervalLabel}</span><strong>{t.products.validationIntervalHours(selected.validationIntervalSeconds / 3600)}</strong></div>
                   <div><span>{t.products.trialLabel}</span><strong>{selected.trial?.enabled ? (selected.trial.durationSeconds ? t.products.trialDays(Math.round(selected.trial.durationSeconds / 86400)) : t.products.trialEnabled) : t.products.trialDisabled}</strong></div>
                   <div><span>{t.products.releaseRecordsLabel}</span><strong>{t.products.releasesCount(releases.length)}</strong></div>
@@ -291,13 +287,6 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
         <form className="form-stack" onSubmit={createProduct}>
           <Field label={t.products.fieldName}><Input value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} required /></Field>
           <Field label={t.products.fieldDesc}><Textarea value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} rows={3} placeholder={t.products.fieldDescPlaceholder} /></Field>
-          <Field label={t.products.fieldBillingEnv}>
-            <Select value={productForm.billingEnvironment} onChange={(event) => setProductForm({ ...productForm, billingEnvironment: event.target.value as BillingEnvironment | "" })}>
-              <option value="">{t.products.billingEnvOptionNone}</option>
-              <option value="sandbox">{t.products.billingEnvOptionSandbox}</option>
-              <option value="live">{t.products.billingEnvOptionLive}</option>
-            </Select>
-          </Field>
           <Field label={t.products.fieldValidationInterval} hint={t.products.fieldValidationIntervalHint}>
             <Input type="number" min="1" max="24" step="1" value={productForm.validationIntervalHours} onChange={(event) => setProductForm({ ...productForm, validationIntervalHours: event.target.value })} required />
           </Field>
@@ -326,13 +315,6 @@ export function ProductsView({ canWrite, instance }: { canWrite: boolean; instan
         <form className="form-stack" onSubmit={updateProduct}>
           <Field label={t.products.fieldName}><Input value={editProductForm.name} onChange={(event) => setEditProductForm({ ...editProductForm, name: event.target.value })} required /></Field>
           <Field label={t.products.fieldDesc}><Textarea value={editProductForm.description} onChange={(event) => setEditProductForm({ ...editProductForm, description: event.target.value })} rows={3} placeholder={t.products.fieldDescPlaceholder} /></Field>
-          <Field label={t.products.fieldBillingEnv}>
-            <Select value={editProductForm.billingEnvironment} onChange={(event) => setEditProductForm({ ...editProductForm, billingEnvironment: event.target.value as BillingEnvironment | "" })}>
-              <option value="">{t.products.billingEnvOptionNone}</option>
-              <option value="sandbox">{t.products.billingEnvOptionSandbox}</option>
-              <option value="live">{t.products.billingEnvOptionLive}</option>
-            </Select>
-          </Field>
           <Field label={t.products.fieldValidationInterval} hint={t.products.fieldValidationIntervalHint}>
             <Input type="number" min="1" max="24" step="1" value={editProductForm.validationIntervalHours} onChange={(event) => setEditProductForm({ ...editProductForm, validationIntervalHours: event.target.value })} required />
           </Field>

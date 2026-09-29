@@ -62,7 +62,7 @@ Sandbox 与 Live 必须分别设置 Paddle Default Payment Link。Live 产品页
 2. 数量恰好为 1；
 3. `billing_provider_id + external_price_id` 命中当前 active Offer；
 4. Offer、Product、License Plan 和购买类型一致；
-5. Offer Provider 环境等于 Product `billing_environment`；
+5. Offer 关联的 Billing Provider 环境决定该次购买签发的 License 环境；
 6. 外部 Transaction 尚未履约。
 
 任一条件不满足时，Inbound Event 保留外部 Event、Transaction、Price、数量和原始错误，进入 `needs_attention`，不猜测授权方案，也不发 License。

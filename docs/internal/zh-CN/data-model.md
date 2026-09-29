@@ -1,6 +1,6 @@
 # V1 数据模型
 
-本文描述当前初始 Schema 的职责和不变量。字段、索引和 Trigger 的可执行来源是 `apps/server/drizzle/0000_v1_initial.sql` 与 `apps/server/src/infra/db/schema.ts`；`docs/internal/schema.sql` 是同步的审阅副本。
+本文描述当前 Schema 的职责和不变量。字段、索引和 Trigger 的可执行来源是 `apps/server/drizzle/` 下按编号执行的迁移与 `apps/server/src/infra/db/schema.ts`；`docs/internal/schema.sql` 仅镜像 `0000_v1_initial.sql`，用于审阅初始结构。
 
 ## 1. 设计目标
 
@@ -9,7 +9,7 @@
 3. Setup、邀请接受、Magic Link 消费、支付履约等跨表操作由 D1 原子批次和数据库约束共同保证。
 4. 敏感明文只在必须的短生命周期内存在；数据库保存 Hash 或加密载荷。
 5. 初始 migration 只建空 Schema，不创建占位 User、Instance 或完成标记。
-6. 当前主线不迁移旧数据库，也不保留旧字段、路径、Claim 或环境变量别名。
+6. 后续变更通过编号增量迁移更新既有 D1；已移除的 Product 支付环境字段不保留在当前表结构中。
 
 ## 2. 关系总览
 
@@ -134,7 +134,6 @@ Customer Session 保存 `instance_id + customer_id`、Session/CSRF Token Hash、
 
 Product 使用服务端生成的 `id` 唯一标识，不维护第二套人工标识，包含：
 
-- `billing_environment`；
 - `payment_grace_seconds`，非负且默认 `0`；
 - 设备试用开关、时长和功能数组；
 - `active/archived` 状态。
@@ -165,6 +164,7 @@ License 通过复合外键同时约束 Customer、Product、Plan 和可选 Billi
 
 - Registration Key 只保存 `key_hash`；
 - 支付来源以 `instance_id + provider + external_transaction_id` 幂等；
+- `billing_environment` 对支付 License 从关联 Provider 固化；迁移前的手动/API License 按原 Product 环境回填，原值为空时按 `live` 回填；创建后不可修改；
 - 买断与固定期限 `renewal_mode='none'`；
 - 手动订阅仅允许手动/API 来源；支付订阅仅允许支付来源；
 - 只有支付型订阅可以保存非零宽限期；
@@ -194,11 +194,11 @@ Activation 使用复合外键归属同一 Instance 的 License。Machine Token �
 
 ### 5.3 `billing_offers`
 
-把外部 Price 精确映射到同一 Instance 的 Product、Plan 和 `one_time/subscription` 购买类型。一个 Provider Price 在 Instance 内只能有一个 Mapping。
+把外部 Price 精确映射到同一 Instance 的 Provider、Product、Plan 和 `one_time/subscription` 购买类型。一个 Provider Price 在 Instance 内只能有一个 Mapping。同一 Product 与 Plan 可同时拥有 Sandbox 和 Live Offer，环境由各自 Provider 决定。
 
 ### 5.4 `billing_checkout_verifications`
 
-只用于管理员 Sandbox 闭环验证。验证身份不可变，并与 draft Sandbox Mapping 和一次验证 License 关联；它不是生产履约捷径。
+仅保存旧版管理员 Sandbox Checkout Verification 的历史数据。验证身份不可变，关联草稿 Sandbox Offer 与一次验证 License；新版普通测试购买不创建此记录。
 
 ### 5.5 `billing_subscriptions`
 

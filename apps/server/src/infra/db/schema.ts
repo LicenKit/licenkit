@@ -119,7 +119,6 @@ export const products = sqliteTable(
       .references(() => instances.id, restrictReference),
     name: text("name").notNull(),
     description: text("description"),
-    billingEnvironment: text("billing_environment"),
     paymentGraceSeconds: integer("payment_grace_seconds").notNull().default(0),
     validationIntervalSeconds: integer("validation_interval_seconds").notNull().default(3600),
     trialEnabled: integer("trial_enabled", { mode: "boolean" }).notNull().default(false),
@@ -132,10 +131,6 @@ export const products = sqliteTable(
   (table) => [
     unique("uq_products_instance_id").on(table.instanceId, table.id),
     index("idx_products_instance_status").on(table.instanceId, table.status),
-    check(
-      "ck_products_billing_environment",
-      sql`${table.billingEnvironment} in ('sandbox', 'live')`,
-    ),
     check("ck_products_payment_grace", sql`${table.paymentGraceSeconds} >= 0`),
     check(
       "ck_products_validation_interval",
@@ -473,6 +468,7 @@ export const licenses = sqliteTable(
     keyVersion: integer("key_version").notNull().default(1),
     keyRotatedAt: text("key_rotated_at"),
     source: text("source").notNull().default("manual"),
+    billingEnvironment: text("billing_environment").notNull().default("live"),
     sourceBillingProviderId: text("source_billing_provider_id"),
     sourceExternalTransactionId: text("source_external_transaction_id"),
     isCheckoutVerification: integer("is_checkout_verification", { mode: "boolean" })
@@ -542,6 +538,7 @@ export const licenses = sqliteTable(
     ),
     check("ck_licenses_key_version", sql`${table.keyVersion} >= 1`),
     check("ck_licenses_source", sql`${table.source} in ('manual', 'api', 'payment')`),
+    check("ck_licenses_billing_environment", sql`${table.billingEnvironment} in ('sandbox', 'live')`),
     check("ck_licenses_verification", sql`${table.isCheckoutVerification} in (0, 1)`),
     check("ck_licenses_status", sql`${table.status} in ('active', 'suspended', 'revoked')`),
     check(

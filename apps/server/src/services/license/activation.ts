@@ -37,6 +37,7 @@ interface LicenseRow {
   max_activations: number;
   features_json: string;
   is_checkout_verification: number;
+  billing_environment: "sandbox" | "live";
   status: "active" | "suspended" | "revoked";
   status_reason: string | null;
   expires_at: string | null;
@@ -151,6 +152,16 @@ function assertLicenseUsable(license: LicenseRow, now: Date) {
   }
 }
 
+function assertLicenseEnvironment(license: LicenseRow, environment: "sandbox" | "live") {
+  if (license.billing_environment !== environment) {
+    throw new AppError("LICENSE_ENVIRONMENT_MISMATCH", "The License cannot be used in this App environment.", 403, {
+      license_id: license.id,
+      license_environment: license.billing_environment,
+      app_environment: environment,
+    });
+  }
+}
+
 async function createCredentialResponse(input: {
   db: D1Database;
   env: { STORAGE_ENCRYPTION_KEY?: string };
@@ -176,6 +187,7 @@ async function createCredentialResponse(input: {
   const base = {
     activation_id: input.activationId,
     machine_token: input.machineToken,
+    billing_environment: input.license.billing_environment,
     credential_mode: input.license.credential_mode,
     signed_license_token: null as string | null,
     signing_key_id: null as string | null,
@@ -214,6 +226,7 @@ async function createCredentialResponse(input: {
       act: input.activationId,
       ins: input.license.instance_id,
       prd: input.license.product_id,
+      env: input.license.billing_environment,
       ver: input.build.version,
       plt: input.build.platform,
       arc: input.build.arch,
@@ -241,6 +254,7 @@ export async function activateLicense(input: {
   releaseVersion: string;
   releasePlatform: string;
   releaseArch: string;
+  billingEnvironment?: "sandbox" | "live";
   firstIp?: string | null;
   now?: Date;
 }) {
@@ -250,7 +264,7 @@ export async function activateLicense(input: {
     `SELECT l.id, l.instance_id, l.product_id, l.license_model, l.renewal_mode,
             l.credential_mode, l.offline_grace_seconds,
             p.validation_interval_seconds, l.payment_grace_seconds,
-            l.max_activations, l.features_json, l.is_checkout_verification, l.status,
+            l.max_activations, l.features_json, l.is_checkout_verification, l.billing_environment, l.status,
             l.status_reason, l.expires_at, l.updates_until, l.updated_at
      FROM licenses l
      JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
@@ -258,6 +272,7 @@ export async function activateLicense(input: {
      LIMIT 1`
   ).bind(input.instanceId, input.productId, keyHash));
   if (!license) throw new AppError("LICENSE_KEY_INVALID", "The License Key is invalid.", 404);
+  assertLicenseEnvironment(license, input.billingEnvironment ?? "live");
   assertLicenseUsable(license, now);
   const build = {
     version: input.releaseVersion,
@@ -528,6 +543,7 @@ export async function validateActivation(input: {
   releaseVersion: string;
   releasePlatform: string;
   releaseArch: string;
+  billingEnvironment?: "sandbox" | "live";
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -537,7 +553,7 @@ export async function validateActivation(input: {
             l.instance_id, l.product_id, l.license_model, l.renewal_mode,
             l.credential_mode, l.offline_grace_seconds,
             p.validation_interval_seconds, l.payment_grace_seconds,
-            l.max_activations, l.features_json, l.is_checkout_verification,
+            l.max_activations, l.features_json, l.is_checkout_verification, l.billing_environment,
             l.status AS license_status, l.status_reason, l.expires_at, l.updates_until,
             l.updated_at AS license_updated_at
      FROM activations a
@@ -577,12 +593,14 @@ export async function validateActivation(input: {
     max_activations: activation.max_activations,
     features_json: activation.features_json,
     is_checkout_verification: activation.is_checkout_verification,
+    billing_environment: activation.billing_environment,
     status: activation.license_status,
     status_reason: activation.status_reason,
     expires_at: activation.expires_at,
     updates_until: activation.updates_until,
     updated_at: activation.license_updated_at,
   };
+  assertLicenseEnvironment(license, input.billingEnvironment ?? "live");
   assertLicenseUsable(license, now);
   const build = {
     version: input.releaseVersion,
@@ -648,7 +666,7 @@ export async function validateActivation(input: {
       `SELECT l.id, l.instance_id, l.product_id, l.license_model, l.renewal_mode,
               l.credential_mode, l.offline_grace_seconds,
               p.validation_interval_seconds, l.payment_grace_seconds,
-              l.max_activations, l.features_json, l.is_checkout_verification, l.status,
+              l.max_activations, l.features_json, l.is_checkout_verification, l.billing_environment, l.status,
               l.status_reason, l.expires_at, l.updates_until, l.updated_at
        FROM licenses l
        JOIN products p ON p.instance_id = l.instance_id AND p.id = l.product_id
