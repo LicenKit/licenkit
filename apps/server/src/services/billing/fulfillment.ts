@@ -1,5 +1,4 @@
 import { ulid } from "ulid";
-import { licenseEmailNotificationType } from "../../domain/email/contracts";
 import { generateLicenseKey, hashLicenseKey, sha256Hex } from "../../infra/crypto";
 import { BillingProcessingError, PaddleHttpError } from "../../infra/billing/errors";
 import {
@@ -696,12 +695,14 @@ async function fulfillInitialPurchase(input: {
     env: input.env,
     instanceId: input.event.instance_id,
     customerId: customer.customerId,
-    notificationType: licenseEmailNotificationType("customer.license_issued", offer.provider_environment),
+    notificationType: "customer.license_issued",
     contractVersion: 1,
     recipientEmail: customer.email,
     variables: {
       product_id: offer.product_id,
-      product_name: offer.product_name,
+      product_name: offer.provider_environment === "sandbox"
+        ? offer.product_name + " (Sandbox)"
+        : offer.product_name,
       license_id: licenseId,
       license_key: licenseKey,
       license_model: offer.license_model,

@@ -751,8 +751,8 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
          id, instance_id, email_integration_id, notification_type,
          contract_version, provider_template_ref,
          status, created_at, updated_at
-       ) VALUES ('etb_billing_fulfillment', ?, ?, 'customer.sandbox_license_issued',
-         1, 'sandbox-license-issued-v1', 'active', ?, ?)`,
+       ) VALUES ('etb_billing_fulfillment', ?, ?, 'customer.license_issued',
+         1, 'license-issued-v1', 'active', ?, ?)`,
     ).run(instanceId, integrationId, nowIso, nowIso);
   }
 
@@ -1052,11 +1052,11 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(providerBodies[0]).toMatchObject({
       to: "buyer@example.test",
       template: {
-        id: "sandbox-license-issued-v1",
+        id: "license-issued-v1",
         variables: {
           instance_name: "Billing V1",
           product_id: "prd_00000000000000000000000001",
-          product_name: "One Time",
+          product_name: "One Time (Sandbox)",
           license_id: licenseId,
           license_model: "perpetual",
         },
@@ -1073,10 +1073,10 @@ describe("V1 Paddle billing and fulfillment contracts", () => {
     expect(testEnv.sqliteDb.prepare(
       `SELECT status, notification_type, provider_message_id
        FROM email_deliveries
-       WHERE instance_id = ? AND notification_type = 'customer.sandbox_license_issued'`,
+       WHERE instance_id = ? AND notification_type = 'customer.license_issued'`,
     ).get(instanceId)).toEqual({
       status: "accepted",
-      notification_type: "customer.sandbox_license_issued",
+      notification_type: "customer.license_issued",
       provider_message_id: "email_billing_license_issued",
     });
   });

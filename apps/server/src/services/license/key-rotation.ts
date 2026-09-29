@@ -4,7 +4,6 @@ import { AppError, NotFoundError } from "../../middleware/error";
 import { prepareEmailNotificationDelivery } from "../delivery/outbox";
 import { prepareLicenseAudit, type LicenseActor } from "./audit";
 import { firstD1 } from "./d1";
-import { licenseEmailNotificationType } from "../../domain/email/contracts";
 
 interface RotationLicenseRow {
   id: string;
@@ -74,12 +73,14 @@ export async function prepareLicenseKeyRotation(input: {
     env: input.env,
     instanceId: input.instanceId,
     customerId: license.customer_id,
-    notificationType: licenseEmailNotificationType(eventType, license.billing_environment),
+    notificationType: eventType,
     contractVersion: 1,
     recipientEmail: license.customer_email,
     variables: {
       product_id: license.product_id,
-      product_name: license.product_name,
+      product_name: license.billing_environment === "sandbox"
+        ? license.product_name + " (Sandbox)"
+        : license.product_name,
       license_id: license.id,
       license_key: licenseKey,
       license_model: license.license_model,

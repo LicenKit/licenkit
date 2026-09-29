@@ -127,11 +127,8 @@ describe("Admin Email API", () => {
     const contracts = (await json(contractsResponse)).data.items;
     expect(contracts.map((item: any) => item.notification_type)).toEqual([
       "customer.license_issued",
-      "customer.sandbox_license_issued",
       "customer.license_recovered",
-      "customer.sandbox_license_recovered",
       "customer.license_security_reset",
-      "customer.sandbox_license_security_reset",
       "customer.portal_access_requested",
       "instance.member_invited",
     ]);
@@ -207,24 +204,24 @@ describe("Admin Email API", () => {
     expect(body).toMatchObject({
       data: {
         provider: "resend",
-        installed_count: 7,
+        installed_count: 4,
         skipped_count: 1,
-        total_count: 8,
+        total_count: 5,
         complete: true,
       },
     });
     expectNoCamelCaseKeys(body);
-    expect(providerFetch).toHaveBeenCalledTimes(21);
+    expect(providerFetch).toHaveBeenCalledTimes(12);
     expect(providerFetch.mock.calls.every(([, init]) =>
       new Headers(init?.headers).get("Authorization") === `Bearer ${FULL_ACCESS_API_KEY}`
     )).toBe(true);
     expect(testEnv.sqliteDb.prepare(
       "SELECT COUNT(*) AS count FROM email_template_bindings WHERE instance_id = ? AND email_integration_id = ?",
-    ).get(INSTANCE_ID, integration.id)).toEqual({ count: 8 });
+    ).get(INSTANCE_ID, integration.id)).toEqual({ count: 5 });
     expect(testEnv.sqliteDb.prepare(
       `SELECT COUNT(*) AS count FROM audit_logs
        WHERE instance_id = ? AND action = 'admin.email_template_binding.default_installed'`,
-    ).get(INSTANCE_ID)).toEqual({ count: 7 });
+    ).get(INSTANCE_ID)).toEqual({ count: 4 });
 
     const stored = testEnv.sqliteDb.prepare(
       "SELECT credential_ciphertext FROM email_integrations WHERE id = ?",
@@ -248,7 +245,7 @@ describe("Admin Email API", () => {
     );
     expect(repeated.status).toBe(200);
     expect(await json(repeated)).toMatchObject({
-      data: { installed_count: 0, skipped_count: 8, complete: true },
+      data: { installed_count: 0, skipped_count: 5, complete: true },
     });
     expect(providerFetch).not.toHaveBeenCalled();
   });
@@ -367,13 +364,13 @@ describe("Admin Email API", () => {
           http_status: 403,
           provider_error_code: "invalid_permission",
           provider_request_id: "req_partial_install",
-          failed_notification_type: "customer.license_recovered",
+          failed_notification_type: "customer.license_security_reset",
           failed_contract_version: 1,
           installed_count: 1,
           skipped_count: 1,
           completed_count: 2,
-          pending_count: 5,
-          total_count: 8,
+          pending_count: 2,
+          total_count: 5,
         },
       },
     });

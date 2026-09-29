@@ -137,7 +137,7 @@ function example(
   return Object.freeze(value);
 }
 
-const BASE_RESEND_TEMPLATE_EXAMPLES = Object.freeze([
+const RESEND_TEMPLATE_EXAMPLES = Object.freeze([
   example({
     provider: "resend",
     notificationType: "customer.license_issued",
@@ -443,41 +443,6 @@ Sent by {{{instance_name}}} · Powered by LicenKit
 `,
   }),
 ] satisfies readonly EmailProviderTemplateExample[]);
-
-const RESEND_TEMPLATE_EXAMPLES = Object.freeze([
-  ...BASE_RESEND_TEMPLATE_EXAMPLES,
-  ...BASE_RESEND_TEMPLATE_EXAMPLES
-    .filter((item) => item.notificationType.startsWith("customer.license_"))
-    .map((item) => example({
-      ...item,
-      notificationType: item.notificationType.replace("customer.license_", "customer.sandbox_license_"),
-      fileName: item.fileName.replace("-v1.", "-sandbox-v1."),
-      subject: "[Sandbox] " + item.subject,
-      html: item.html
-        .replace(
-          "</h1>",
-          "</h1><p style=\"color: #9a3412; font-weight: 700;\">Sandbox test license. This key cannot activate the live application.</p>",
-        )
-        .replace(
-          "Here is your license key to activate {{{product_name}}}.",
-          "This Sandbox key cannot activate the live {{{product_name}}} application.",
-        )
-        .replace(
-          "Please re-activate your devices using the new license key above.",
-          "This Sandbox key cannot activate the live application.",
-        ),
-      text: "SANDBOX TEST LICENSE — Cannot activate the live application.\n\n" +
-        item.text
-          .replace(
-            "Here is your license key to activate {{{product_name}}}.",
-            "This Sandbox key cannot activate the live {{{product_name}}} application.",
-          )
-          .replace(
-            "Please re-activate your devices using the new license key above.",
-            "This Sandbox key cannot activate the live application.",
-          ),
-    })),
-]);
 
 const RESEND_TEMPLATE_EXAMPLE_REGISTRY: Readonly<
   Record<string, EmailProviderTemplateExample>

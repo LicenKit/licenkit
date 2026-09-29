@@ -53,11 +53,8 @@ describe("email contract registry", () => {
     const contracts = listEmailNotificationContracts();
     expect(contracts.map((item) => `${item.notificationType}@${item.version}`)).toEqual([
       "customer.license_issued@1",
-      "customer.sandbox_license_issued@1",
       "customer.license_recovered@1",
-      "customer.sandbox_license_recovered@1",
       "customer.license_security_reset@1",
-      "customer.sandbox_license_security_reset@1",
       "customer.portal_access_requested@1",
       "instance.member_invited@1",
     ]);
@@ -429,20 +426,6 @@ describe("email Provider template example registry", () => {
       for (const name of used) {
         expect(descriptors.get(name)?.required).toBe(true);
       }
-    }
-  });
-
-  it("labels every Sandbox license email and warns against live activation", () => {
-    for (const notificationType of [
-      "customer.sandbox_license_issued",
-      "customer.sandbox_license_recovered",
-      "customer.sandbox_license_security_reset",
-    ]) {
-      const template = getEmailProviderTemplateExample("resend", notificationType, 1);
-      expect(template.subject).toContain("[Sandbox]");
-      expect(template.html).toContain("Sandbox test license");
-      expect(template.html).toContain("cannot activate the live application");
-      expect(template.text).toContain("SANDBOX TEST LICENSE");
     }
   });
 
