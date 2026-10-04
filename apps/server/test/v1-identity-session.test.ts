@@ -428,6 +428,53 @@ describe("V1 deployment setup and administrator identity", () => {
     expect(revoked.status).toBe(401);
   });
 
+  it("reports invalid login credentials separately from an invalid session", async () => {
+    const app = identityApp();
+    const body = setupBody();
+    expect((await postJson(app, "/api/v1/setup", body, testEnv.env)).status).toBe(201);
+
+    for (const [reason, credentials] of [
+      ["unknown_email", { email: "unknown@example.test", password: body.user.password }],
+      ["wrong_password", { email: body.user.email, password: "wrong-password" }],
+    ] as const) {
+      const requestId = `req_invalid_login_${reason}`;
+      const response = await postJson(
+        app,
+        "/api/v1/admin/auth/login",
+        credentials,
+        testEnv.env,
+        { "X-Request-Id": requestId },
+      );
+      expect(response.status).toBe(401);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(await response.json()).toEqual({
+        success: false,
+        error: {
+          code: "INVALID_CREDENTIALS",
+          message: "Invalid email or password",
+          request_id: requestId,
+        },
+      });
+    }
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM admin_sessions").get()).toEqual({ count: 1 });
+
+    const session = await app.request(
+      `${ORIGIN}/api/v1/admin/auth/session`,
+      { headers: { "X-Request-Id": "req_missing_admin_session" } },
+      testEnv.env,
+    );
+    expect(session.status).toBe(401);
+    expect(await session.json()).toEqual({
+      success: false,
+      error: {
+        code: "UNAUTHORIZED",
+        message: "Administrator session cookie is missing",
+        request_id: "req_missing_admin_session",
+      },
+    });
+  });
+
   it("rejects a User immediately after the current Membership is disabled", async () => {
     const app = identityApp();
     const body = setupBody();

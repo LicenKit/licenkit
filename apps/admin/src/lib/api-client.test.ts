@@ -156,6 +156,35 @@ describe("Admin API JSON boundary", () => {
     expect(formatApiError(errorUnknown)).toBe("UNKNOWN_CUSTOM_ERROR: An unfamiliar internal error");
   });
 
+  it("登录凭据失败显示邮箱或密码错误并保留服务端诊断信息", async () => {
+    const payload = {
+      success: false,
+      error: {
+        code: "INVALID_CREDENTIALS",
+        message: "Invalid email or password",
+        request_id: "req_invalid_login",
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await api.admin.auth.login({ email: "owner@example.test", password: "wrong-password" })
+      .catch((caught: unknown) => caught);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/admin/auth/login");
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      code: "INVALID_CREDENTIALS",
+      message: "Invalid email or password",
+      status: 401,
+      method: "POST",
+      path: "/admin/auth/login",
+      requestId: "req_invalid_login",
+      rawResponse: payload,
+    });
+    expect(formatApiError(error)).toBe("INVALID_CREDENTIALS: 管理员邮箱或密码错误 · req_invalid_login");
+  });
+
   it("formatApiError 默认展示上游服务返回的精确错误而不是只保留泛化文案", () => {
     const error = new ApiError({
       code: "EMAIL_DEFAULT_TEMPLATE_INSTALL_PROVIDER_REJECTED",

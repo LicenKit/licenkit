@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ulid } from "ulid";
 import type { AppContext, InstanceRole } from "../types";
 import { verifyPassword } from "../infra/crypto";
-import { UnauthorizedError } from "../middleware/error";
+import { AppError, UnauthorizedError } from "../middleware/error";
 import {
   adminCsrf,
   adminSessionAuth,
@@ -104,7 +104,7 @@ authRouter.post(
       .all<LoginRow>();
     const user = result.results[0];
     if (!user || !(await verifyPassword(input.password, user.password_hash))) {
-      throw new UnauthorizedError("Invalid email or password");
+      throw new AppError("INVALID_CREDENTIALS", "Invalid email or password", 401);
     }
 
     const now = new Date();
