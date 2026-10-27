@@ -2,9 +2,7 @@
 
 [English](./README.md) | **简体中文**
 
-LicenKit 是面向独立开发者和小型软件团队的自托管软件授权系统。它把支付平台确认的购买事实转换为 License，提供注册码签发、设备激活、在线校验、签名授权令牌、客户自助管理和通知等能力。
-
-LicenKit 专注授权生命周期，不承载支付结账。支付由 Paddle 等外部平台完成；客户邮件由 LicenKit 通过当前 Instance 配置的 Email Integration 发送。
+LicenKit 是面向独立开发者和小型软件团队的自托管软件授权系统。提供注册码签发、设备激活、在线校验、签名授权令牌、客户自助管理和通知等能力。基础架构基于 Cloudflare。
 
 ## 核心能力
 
@@ -16,9 +14,8 @@ LicenKit 专注授权生命周期，不承载支付结账。支付由 Paddle 等
 - 可选签发 Ed25519 Signed License Token，供客户端本地验证授权快照，包括无网络场景；
 - 提供基于 Magic Link 和 Customer Session 的客户自助 API，用于查看 License、释放设备席位和进入支付平台管理订阅；
 - 通过 Instance 的 Email Integration 发送首次发码、注册码找回、安全重置、Customer Magic Link 和成员邀请通知；
-- 保存支付入站事件、邮件投递状态、重试次数和审计记录，支持失败诊断与恢复。
-- 使用全局 User 身份登录管理端，通过 Membership 在 Instance 内获得角色；Instance 是全部授权业务数据的租户边界。
-
+- 保存支付入站事件、邮件投递状态、重试次数和审计记录，支持失败诊断与恢复；
+- 天然支持多租户体系。
 ## 工作方式
 
 ```text

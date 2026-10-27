@@ -2,9 +2,7 @@
 
 **English** | [简体中文](./README.zh-CN.md)
 
-LicenKit is a self-hosted software licensing system for independent developers and small software teams. It turns purchases confirmed by payment platforms into licenses, with license key issuance, device activation, online validation, signed license tokens, customer self-service, and notifications.
-
-LicenKit manages the license lifecycle. Checkout is handled by external platforms such as Paddle. Customer emails are sent through the email integration configured for the current instance.
+LicenKit is a self-hosted software licensing system for independent developers and small software teams. It provides license key issuance, device activation, online validation, signed license tokens, customer self-service, and notifications. Its infrastructure is built on Cloudflare.
 
 ## Features
 
@@ -17,7 +15,7 @@ LicenKit manages the license lifecycle. Checkout is handled by external platform
 - Provide customer self-service APIs using magic links (email sign-in links) and customer sessions to view licenses, free device seats, and open the payment platform's subscription management page.
 - Send initial license keys, key recovery emails, security reset emails, customer magic links, and member invitations through the instance's email integration.
 - Record incoming payment events, email delivery status, retry counts, and audit history for troubleshooting and recovery.
-- Sign in to the admin console with a global user identity, with roles granted through instance memberships. Each instance is a tenant that keeps its licensing data separate.
+- Support multi-tenancy by design.
 
 ## How it works
 
