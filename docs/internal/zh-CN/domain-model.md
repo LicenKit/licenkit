@@ -32,7 +32,7 @@ User 还可使用独立的恢复凭据。`user_recovery_credentials` 只保存�
 
 Instance 是授权业务空间，也是唯一的租户隔离边界。Product、Customer、License、支付、邮件、Customer Session、System Issue 和实例审计都必须归属明确的 Instance。
 
-Instance 只有一个稳定 ID：首次 Setup 生成不带类型前缀的 22 位 Base64URL 随机字符串，用于数据关联、客户端配置、签名 Token 和支付 Webhook 路由。Customer Portal 与 Magic Link 由 Admin/API Origin 唯一解析 Instance，不再使用第二套人工标识。
+Instance 只有一个稳定 ID：首次 Setup 生成不带类型前缀的 22 位 Base64URL 随机字符串，用于服务端数据关联、签名 Token 和支付 Webhook 路由。客户端配置全局唯一 Product ID，由服务端解析 Instance。Customer Portal 与 Magic Link 由 Admin/API Origin 唯一解析 Instance，不再使用第二套人工标识。
 
 当前自部署版创建的唯一 Instance 保持 `active`。Admin 可以展示状态，但不提供修改状态的 API 或界面；`suspended/archived` 仅为未来 SaaS 控制面预留。
 
@@ -122,10 +122,10 @@ License 状态为 `active/suspended/revoked`。Plan 后续修改不追溯已签�
 ### 3.5 凭证与 Signed License Token
 
 - Registration Key：仅在签发、找回或安全轮换的响应/邮件变量中短暂出现；数据库保存 Hash；
-- 设备校验：使用 Activation 或 Trial Claim 的编号与设备指纹，数据库保存设备指纹 Hash；
+- 设备校验：使用 Activation 或 Trial Claim 的编号与设备指纹，数据库保存设备指纹 Hash；指纹只去除首尾空白，保留大小写，客户端本地验签使用同一比较规则；
 - Signed License Token：供本地离线验证，必须由 Product 的 Ed25519 Key 签名。
 
-Signed License Token 使用 `ins` Claim 表示 Instance ID，不接受旧 Claim 别名。CLI 和 SDK 必须同时校验 Instance、Product、License、Activation、设备指纹、版本/平台/架构、测试或正式环境、业务有效期和签名。Token 不携带 Product Release ID 或发布时间，Release 更新权益判断只在 Server 在线执行。
+Signed License Token 使用 `ins` Claim 表示 Instance ID，`lic` 表示 License ID，不接受旧 Claim 别名。这两个字段是服务端签发的身份事实，客户端不另行配置 Instance。CLI 和兼容 SDK 校验签名、公钥身份、Product、Activation、设备指纹、版本/平台/架构、测试或正式环境和业务有效期，并核对在线响应与签名中重复出现的授权条款。Token 不携带 Product Release ID 或发布时间，Release 更新权益判断只在 Server 在线执行。
 
 ### 3.6 Activation 与 Trial Claim
 

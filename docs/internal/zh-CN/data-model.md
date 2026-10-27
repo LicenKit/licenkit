@@ -1,6 +1,6 @@
 # V1 数据模型
 
-本文描述当前 Schema 的职责和不变量。字段、索引和 Trigger 的可执行来源是 `apps/server/drizzle/` 下按编号执行的迁移与 `apps/server/src/infra/db/schema.ts`；`docs/internal/schema.sql` 仅镜像 `0000_v1_initial.sql`，用于审阅初始结构。
+本文描述当前 Schema 的职责和不变量。字段、索引和 Trigger 的可执行来源是 `apps/server/drizzle/` 下按编号执行的迁移与 `apps/server/src/infra/db/schema.ts`；`docs/internal/schema.sql` 由 `pnpm docs:schema` 应用全部迁移后自动生成，用于审阅当前最终结构，不作为部署入口。`pnpm test` 会检查副本是否与迁移同步。
 
 ## 1. 设计目标
 
@@ -172,7 +172,7 @@ License 通过复合外键同时约束 Customer、Product、Plan 和可选 Billi
 
 ### 4.9 `activations`
 
-Activation 使用复合外键归属同一 Instance 的 License。设备指纹只保存 Hash；在线校验与解绑使用 Activation 编号和设备指纹，不保存额外的设备令牌；同一 License 和设备最多一个 active Activation；数据库 Trigger 执行席位上限。
+Activation 使用复合外键归属同一 Instance 的 License。设备指纹只去除首尾空白、保留大小写后计算 Hash；在线校验与解绑使用 Activation 编号和设备指纹，不保存额外的设备令牌；同一 License 和设备最多一个 active Activation；数据库 Trigger 执行席位上限。
 
 ### 4.10 `trial_claims`
 

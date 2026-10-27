@@ -5,6 +5,7 @@ import {
   computeHmacSha256,
   generateEd25519KeyPair,
   generateLicenseKey,
+  getStorageEncryptionKey,
   hashLicenseKey,
   hashPassword,
   jsonToBase64Url,
@@ -18,6 +19,16 @@ import {
 } from "../src/infra/crypto";
 
 describe("V1 cryptographic primitives", () => {
+  it.each([undefined, "", "   ", "short_key"])("rejects an unusable storage encryption key %j", (key) => {
+    expect(() => getStorageEncryptionKey({ STORAGE_ENCRYPTION_KEY: key }))
+      .toThrow(/STORAGE_ENCRYPTION_KEY/);
+  });
+
+  it("uses the configured storage key after removing surrounding whitespace", () => {
+    const key = "local-test-encryption-key-32-bytes";
+    expect(getStorageEncryptionKey({ STORAGE_ENCRYPTION_KEY: `  ${key}\n` })).toBe(key);
+  });
+
   it("hashes passwords with a unique salt and verifies only the original password", async () => {
     const first = await hashPassword("correct horse battery staple");
     const second = await hashPassword("correct horse battery staple");

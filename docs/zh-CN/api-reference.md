@@ -759,6 +759,8 @@ Client API 使用同一组授权状态，而不是让 License、Trial 和无凭�
 
 Swift SDK 对 `/validate` 同时应用 Product 在线复核间隔和硬编码 30 秒请求门槛。两个门槛只决定何时再次联网，不决定授权是否可用。距 `validated_at` 超过 License 的离线宽限期时，SDK 返回 `offlineGraceExceeded` 供宿主强提示，但仍允许使用；只有业务到期、暂停、吊销、Activation 失效、Release 不合格或签名凭据无效会使授权不可用。
 
+`fingerprint` 是客户端提供的设备标识字符串，不限定为 UUID 或十六进制。服务端在保存哈希和比较前只去除首尾空白，保留大小写；客户端本地验签应使用同一规则。领取、激活、在线校验和解绑必须稳定地提供同一标识，不能把大小写不同的字符串自动视为同一设备。
+
 ### 7.1 激活
 
 ```text

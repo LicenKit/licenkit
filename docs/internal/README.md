@@ -7,6 +7,8 @@
 - [系统架构](./zh-CN/system-architecture.md)
 - [数据模型](./zh-CN/data-model.md)
 - [实现验证与发布检查](./zh-CN/operations-and-verification.md)
-- [初始数据库结构审阅副本](./schema.sql)
+- [当前数据库结构审阅副本](./schema.sql)
 
 这些文档描述稳定的领域不变量、状态所有权、事务和安全边界。实现变化影响这些边界时，必须同步更新；阶段计划、临时差距和审计记录不应写入这里。
+
+`schema.sql` 从全部编号迁移自动生成，只用于审阅当前最终结构，不用于部署。修改迁移后运行 `pnpm docs:schema` 更新；`pnpm test` 会检查副本是否同步。

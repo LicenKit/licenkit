@@ -278,7 +278,7 @@ final class LicenseController: ObservableObject {
 
 无凭据 `validate()` 只查询当前设备的 Trial 可用性，不会领取 Trial，也不查询 Product Release。
 
-永久 License 只表示业务上没有 License 到期时间，不表示永久离线。它仍受到在线校验窗口和 Signed License Token 有效期约束。
+永久 License 没有独立的业务到期时间，Signed License Token 也不设置单独的 `exp`。在线复核间隔和离线宽限期只决定何时再次尝试联网及提示，不会自行使授权失效；取得新的服务端结果后，仍需遵守暂停、吊销、设备解绑和版本更新权益等业务状态。
 
 ## 7. 受保护功能的正确判断顺序
 

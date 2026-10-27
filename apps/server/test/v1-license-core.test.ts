@@ -624,7 +624,7 @@ describe("V1 License core contract", () => {
     )).json() as any).error.code).toBe("VALIDATION_ERROR");
   });
 
-  it("does not create a seat or replace a machine token when signed token preparation fails", async () => {
+  it("does not create a seat or change an existing Activation when signed token preparation fails", async () => {
     const keyId = "key_v1_failure_atomicity";
     const keyPair = await generateEd25519KeyPair();
     const encrypted = await encryptEnvelopeV1(keyPair.privateKeyPkcs8Base64, testEnv.env, {

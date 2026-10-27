@@ -30,7 +30,7 @@ VITE_PADDLE_ENVIRONMENT=live
 VITE_PADDLE_CLIENT_SIDE_TOKEN=live_...
 ```
 
-Customer Portal 不需要配置 Instance 选择字段；服务端由请求的 `adminApiUrl` Origin 唯一确定 Instance。Setup 中的 `customerSiteUrl` 是用户自己的官网地址，用于生成邮件 Magic Link；`adminApiUrl` 是 LicenKit 管理后台和 API 的 Origin，Setup 页面默认读取当前 Worker Origin。两者可以跨 Origin，但必须保持同协议、同可注册站点。站点通过 `adminApiUrl` 下的绝对 API 地址调用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断、Delivery 敏感负载和验证令牌不能进入源码、静态构建产物、日志或分析事件。
+Customer Portal 不需要配置 Instance 选择字段；服务端由请求的 `adminApiUrl` Origin 唯一确定 Instance。Setup 中的 `customerSiteUrl` 是用户自己的官网地址，用于生成邮件 Magic Link；`adminApiUrl` 是 LicenKit 管理后台和 API 的 Origin，Setup 页面默认读取当前 Worker Origin。两者可以跨 Origin，但必须保持同协议、同可注册站点。站点通过 `adminApiUrl` 下的绝对 API 地址调用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断和 Delivery 敏感负载不能进入源码、静态构建产物、日志或分析事件。
 
 同一个 Paddle Price ID 必须在 LicenKit Admin 中创建 Billing Offer，关联唯一 Billing Provider、Product、License Plan 和购买类型。前端不需要 LicenKit Offer ID、Product ID 或 License Plan ID；后端从已验签 Webhook 中取得 Price ID 后执行关联。
 
@@ -75,25 +75,25 @@ Sandbox 与 Live 必须分别设置 Paddle Default Payment Link。Live 产品页
 - License 已创建但 Email Integration/Binding 未就绪时创建 `waiting_configuration` Email Delivery；
 - 管理端必须提供告警、诊断和显式恢复动作。
 
-Offer 激活仍要求购买闭环 Readiness，用于证明首次上线前 Product/Plan/Provider、Paddle 事件合同、active Email Integration、`customer.license_issued@1` 当前 Binding、签名密钥和真实 Sandbox 闭环均已就绪。邮件配置测试和 System Issue 都不形成持久化门禁。Scheduler 最近成功时间不持久化，也不参与 Offer 激活；远程调度是否运行必须在 Cloudflare Cron Events 与 Workers Logs 中验收。找回、安全重置和 Magic Link Binding 可分别测试并在管理端展示状态，但不参与 Offer 激活门禁；激活状态不代表静态页面能够感知之后的运行期退化。
+Offer 激活时，服务端实时检查 Product、Plan、Provider、Client-side Token、Webhook Secret、active Email Integration 与凭证、`customer.license_issued@1` 当前 Binding、处理积压，以及 `signed` 模式所需的签名密钥。模拟事件覆盖率和真实购买测试都在上线后验证，不作为 Sandbox 或 Live Offer 的激活门槛。邮件配置测试和 System Issue 不形成持久化门禁；找回、安全重置和 Magic Link Binding 也不参与 Offer 激活。Scheduler 最近成功时间不持久化，远程调度是否运行须在 Cloudflare Cron Events 与 Workers Logs 中验收。Offer 已激活不代表静态页面能够感知之后的运行期退化。
 
-## 5. Admin Sandbox 验证
+## 5. Admin Sandbox 测试购买
 
-首个 draft Sandbox Offer 通过受管理员鉴权的接口创建短期一次性验证配置：
+Owner 或 Admin 可以针对已激活的 Sandbox Offer 获取普通测试购买配置：
 
 ```text
-POST /api/v1/admin/billing/offers/:offerId/verification-config
+GET /api/v1/admin/billing/offers/:offerId/test-checkout-config
 ```
 
-Admin 内部函数直接调用 Paddle.js，固定一个 Price、数量 1，并附加：
+接口只读、响应不缓存，返回当前 Sandbox 的公开 Client-side Token、Price ID 和数量 1。管理端使用官方 Paddle.js 打开 Checkout：
 
 ```ts
-customData: {
-  licenkit_checkout_verification: verificationToken,
-}
+Paddle.Checkout.open({
+  items: [{ priceId: config.checkout.price_id, quantity: 1 }],
+});
 ```
 
-验证令牌只在当前内存中使用，不进入静态产品页、URL、localStorage、sessionStorage、日志或分析事件。服务端只保存令牌哈希，并再次校验未过期、未消费、Offer/Provider/Price 完全一致且 Provider 为 Sandbox。验证成功仍复用正式 Webhook、Customer、Fulfillment 和 Delivery 模块，但生成永久不可激活的验证 License。
+这条流程不生成特殊验证令牌，也不附加用于特殊核验的 `customData`。付款按普通 Sandbox 履约处理，会生成可用于测试环境的 License 并发送邮件，管理员应使用测试客户资料。它不开放给未登录页面，也不接受 draft 或 Live Offer；静态产品页仍直接使用自己的 Paddle 配置，不调用管理端接口。
 
 ## 6. 验收
 
@@ -103,8 +103,8 @@ customData: {
 2. 产品与方案来自静态源码，点击购买使用对应 Paddle Price ID；
 3. Sandbox 与 Live Token/环境不匹配时 fail-fast；
 4. 每次 Checkout 只包含一个 Price、数量 1；
-5. Paddle API Key、Webhook Secret、Email Provider API Key 和验证令牌不进入产品页构建产物；
-6. Admin 验证只接受服务端返回的单个 draft Sandbox Price，并在打开后清除内存令牌；
+5. Paddle API Key、Webhook Secret 和 Email Provider API Key 不进入产品页构建产物；
+6. Admin 测试购买仅允许已激活的 Sandbox Offer，使用服务端返回的单个 Price 和数量 1，不附加特殊核验数据；
 7. Webhook 对多行、多数量、未知 Price、draft Offer、环境不一致和重复 Transaction 均拒绝发正式 License；
 8. 静态页面在 LicenKit 暂时不可用时产生的付款能够通过 Paddle 重试、事件持久化或管理员重放进入同一恢复链路；
 9. 实际 Live Origin 通过 Paddle Website Approval，CSP 下可以打开 Checkout；

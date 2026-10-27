@@ -229,7 +229,7 @@ export function evaluateSignedLicenseClaims(claims: SignedLicenseClaims, context
     [claims.env === context.billingEnvironment, "TOKEN_ENVIRONMENT_MISMATCH", "Token environment does not match configuration"],
     [claims.prd === context.productId, "TOKEN_PRODUCT_MISMATCH", "Token product does not match configuration"],
     [claims.act === context.activationId, "TOKEN_ACTIVATION_MISMATCH", "Token activation does not match server response"],
-    [claims.fp.toLowerCase() === context.fingerprint.toLowerCase(), "TOKEN_FINGERPRINT_MISMATCH", "Token fingerprint does not match this device"],
+    [claims.fp.trim() === context.fingerprint.trim(), "TOKEN_FINGERPRINT_MISMATCH", "Token fingerprint does not match this device"],
     [claims.ver === context.releaseVersion, "TOKEN_RELEASE_VERSION_MISMATCH", "Token release version does not match this build"],
     [claims.plt === context.releasePlatform, "TOKEN_RELEASE_PLATFORM_MISMATCH", "Token release platform does not match this build"],
     [claims.arc === context.releaseArch, "TOKEN_RELEASE_ARCH_MISMATCH", "Token release architecture does not match this build"],

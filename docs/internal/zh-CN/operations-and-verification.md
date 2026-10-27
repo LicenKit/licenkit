@@ -33,6 +33,19 @@ corepack pnpm --filter @licenkit/cli run test
 
 `pnpm run build` 会清理构建输出、构建 CLI/Admin，并用 Wrangler dry-run 生成 Worker 产物。它不部署远程资源。
 
+修改数据库迁移后，运行 `pnpm docs:schema` 重新生成当前结构的审阅副本。`pnpm test` 会先检查副本同步，再运行各分包测试；历史迁移与其快照保留，不手工改写成最新结构。
+
+需要按范围检查时，可以运行：
+
+```bash
+node scripts/verify-env-security.mjs
+node scripts/verify-phase2-webhooks.mjs
+node scripts/verify-offline-token.mjs
+node scripts/verify-rbac-matrix.mjs
+```
+
+这些入口分别调用当前实现的加密与会话、Paddle 履约、Server/CLI 签名凭据，以及管理员权限测试，不再维护独立协议或已移除功能的模拟实现。成功只证明对应本地测试通过。
+
 ## 3. 配置
 
 ### 3.1 Worker Secrets
