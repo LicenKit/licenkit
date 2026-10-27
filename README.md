@@ -1,67 +1,69 @@
 # LicenKit
 
-LicenKit 是面向独立开发者和小型软件团队的自托管软件授权系统。它把支付平台确认的购买事实转换为 License，提供注册码签发、设备激活、在线校验、签名授权令牌、客户自助管理和通知等能力。
+**English** | [简体中文](./README.zh-CN.md)
 
-LicenKit 专注授权生命周期，不承载支付结账。支付由 Paddle 等外部平台完成；客户邮件由 LicenKit 通过当前 Instance 配置的 Email Integration 发送。
+LicenKit is a self-hosted software licensing system for independent developers and small software teams. It turns purchases confirmed by payment platforms into licenses, with license key issuance, device activation, online validation, signed license tokens, customer self-service, and notifications.
 
-## 核心能力
+LicenKit manages the license lifecycle. Checkout is handled by external platforms such as Paddle. Customer emails are sent through the email integration configured for the current instance.
 
-- 管理 Product、License Plan、License 和 Activation；
-- 支持永久、固定期限和订阅三种 License 生命周期；
-- 永久 License 可配置全版本使用或限定期限内发布版本的永久使用权；
-- 接收支付 Webhook，并以幂等方式完成首次签发、续费、暂停和取消；
-- 使用激活记录编号和设备指纹完成在线设备校验；
-- 可选签发 Ed25519 Signed License Token，供客户端本地验证授权快照，包括无网络场景；
-- 提供基于 Magic Link 和 Customer Session 的客户自助 API，用于查看 License、释放设备席位和进入支付平台管理订阅；
-- 通过 Instance 的 Email Integration 发送首次发码、注册码找回、安全重置、Customer Magic Link 和成员邀请通知；
-- 保存支付入站事件、邮件投递状态、重试次数和审计记录，支持失败诊断与恢复。
-- 使用全局 User 身份登录管理端，通过 Membership 在 Instance 内获得角色；Instance 是全部授权业务数据的租户边界。
+## Features
 
-## 工作方式
+- Manage products, license plans, licenses, and device activations.
+- Support perpetual, fixed-term, and subscription licenses.
+- Offer perpetual access to all versions, or to versions released within a configured update period.
+- Process payment webhooks for initial license issuance, renewals, suspension, and cancellation, without applying the same event more than once.
+- Validate devices online using activation IDs and device fingerprints.
+- Optionally issue Ed25519 signed license tokens so clients can verify a snapshot of their license locally, including while offline.
+- Provide customer self-service APIs using magic links (email sign-in links) and customer sessions to view licenses, free device seats, and open the payment platform's subscription management page.
+- Send initial license keys, key recovery emails, security reset emails, customer magic links, and member invitations through the instance's email integration.
+- Record incoming payment events, email delivery status, retry counts, and audit history for troubleshooting and recovery.
+- Sign in to the admin console with a global user identity, with roles granted through instance memberships. Each instance is a tenant that keeps its licensing data separate.
+
+## How it works
 
 ```text
-支付平台 Webhook
+Payment platform webhook
         │
         ▼
-入站事件 ──> 支付履约 ──> License / Subscription
-                              │
-                              ├──> Activation / Validation / Signed License Token
-                              ├──> Customer API / Device Management
-                              │
-                              └──> Delivery ──> Email Provider ──> 邮件服务
+Inbound event ──> Purchase fulfillment ──> License / Subscription
+                                              │
+                                              ├──> Activation / Validation / Signed License Token
+                                              ├──> Customer API / Device Management
+                                              │
+                                              └──> Delivery ──> Email Provider ──> Email service
 ```
 
-LicenKit 将数据库中的入站事件和 Delivery 作为异步任务的事实来源。请求后的即时处理用于降低延迟，Scheduled Worker 负责扫描、重试和崩溃恢复；当前架构不依赖 Cloudflare Queues。
+Incoming events and delivery records stored in the database are the source of truth for asynchronous work. Immediate processing after a request reduces latency, while a scheduled Worker scans for pending work, retries failures, and recovers interrupted processing. The current architecture does not depend on Cloudflare Queues.
 
-身份与租户关系固定为：User 是登录身份，Instance 是业务租户，Membership 保存角色与访问状态，Invitation 是加入 Instance 的入口。自部署产品只开放一个 Instance，但数据库与服务端查询仍按 `instance_id` 隔离；当前界面不提供第二个 Instance 的创建或切换入口。
+A User is a sign-in identity; an Instance is a business tenant; a Membership stores the user's role and access status within that instance; and an Invitation lets a user join an instance. Self-hosted installations expose a single instance, while database records and server queries remain isolated by `instance_id`. The current interface does not offer creation of, or switching to, a second instance.
 
-## 仓库结构
+## Repository structure
 
 ```text
 apps/server             Hono + Cloudflare Workers API
-apps/admin              React 管理控制台
-apps/cli                命令行客户端
-wrangler.jsonc          当前实例的 Cloudflare Worker 配置
-docs                    使用者文档、维护者参考与过程记录
+apps/admin              React admin console
+apps/cli                Command-line client
+wrangler.jsonc          Cloudflare Worker configuration for the current instance
+docs                    User guides, maintainer references, and development records
 ```
 
-Swift SDK 位于同级独立仓库 `licenkit-sdk-swift`。
+The Swift SDK lives in a separate sibling repository, `licenkit-sdk-swift`.
 
-## 技术栈
+## Technology stack
 
-- Cloudflare Workers、D1 和 Scheduled Triggers；
-- Hono、Drizzle ORM、TypeScript；
-- React、Vite；
-- Swift SDK 使用 Foundation、CryptoKit、Security 和 IOKit。
+- Cloudflare Workers, D1, and Scheduled Triggers.
+- Hono, Drizzle ORM, and TypeScript.
+- React and Vite.
+- The Swift SDK uses Foundation, CryptoKit, Security, and IOKit.
 
-## 本地开发
+## Local development
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-常用检查：
+Common checks:
 
 ```bash
 pnpm typecheck
@@ -69,28 +71,28 @@ pnpm test
 pnpm build
 ```
 
-## 部署与站点边界
+## Deployment and site responsibilities
 
-LicenKit 的生产部署只包含 Worker API、Scheduled Worker 和 `/admin` 管理控制台。根路径重定向到 `/admin/`；产品官网、购买结果页、Magic Link 页面和 Customer Portal 不由 LicenKit 提供，也不在仓库中保存前端示例源码。
+A production LicenKit deployment includes the Worker API, scheduled processing, and the `/admin` console. The root path redirects to `/admin/`. Product websites, purchase result pages, magic link pages, and customer portals are implemented by the integrator; LicenKit does not provide those pages or keep example frontend source for them in this repository.
 
-Setup 为每个 Instance 保存 `admin_api_url` 与 `customer_site_url`。前者是 LicenKit 管理后台和 API 的公开 Origin，Setup 页面默认读取当前 Worker Origin，服务端也要求两者完全一致；后者是用户自己的官网及 Customer Portal 基础地址，用于生成邮件中的 Magic Link。两者可以跨 Origin，但必须保持同协议、同可注册站点，才能使用 `SameSite=Lax` Customer Cookie。Customer CORS 按请求到达的 `admin_api_url` 找到 Instance，再只允许该 Instance 的 `customer_site_url` Origin，不再使用 Wrangler 全局变量。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP 本地开发。自部署只需把 Admin/API 域名绑定到对应 Worker，不显示 CNAME 或托管证书配置。
+Setup stores `admin_api_url` and `customer_site_url` for each instance. `admin_api_url` is the public origin (scheme, host, and port) of the LicenKit admin console and API. The setup page defaults to the current Worker's origin, and the server requires an exact match. `customer_site_url` is the base URL of your website and customer portal, used to generate magic links in emails. The two URLs may have different origins, but must use the same scheme and registrable domain to support `SameSite=Lax` customer cookies. Customer CORS, which controls cross-origin browser access, identifies the instance from the `admin_api_url` receiving the request and allows only that instance's `customer_site_url` origin, rather than using global Wrangler variables. Production environments and regular domains require HTTPS. HTTP is allowed only for local development on `localhost` or `127.0.0.1` in an explicitly non-production environment. For self-hosting, bind the admin/API domain to the corresponding Worker; the interface does not display CNAME or managed certificate settings.
 
-根目录 `wrangler.jsonc` 是当前部署唯一的 Worker 配置来源。Wrangler 由根包直接依赖，因为它负责整个 LicenKit 部署的开发、迁移、构建和发布；`apps/server` 只负责 Worker 服务端源码及其测试。直接在根配置中填写数据库 ID、变量和环境，不再从其他目录选择或合并配置。根配置显式开启 Workers Observability，远程验收还必须在 Cloudflare Cron Events 与 Workers Logs 中确认调度真实触发。
+The root `wrangler.jsonc` is the sole source of Worker configuration for the current deployment. Wrangler is a direct dependency of the root package because it handles development, migrations, builds, and deployment for LicenKit as a whole. `apps/server` contains only Worker server source and its tests. Set database IDs, variables, and environments directly in the root configuration; configuration is not selected or merged from other directories. Workers Observability is explicitly enabled in the root configuration. Remote acceptance checks must also confirm actual scheduled executions in Cloudflare Cron Events and Workers Logs.
 
-`dist` 只包含 LicenKit Admin 的部署资产。使用方需要实现的页面、Customer API 和安全合同见[Customer Site 接入清单](./docs/zh-CN/customer-site-integration.md)。
+`dist` contains only the LicenKit admin deployment assets. See the [Customer Site integration checklist (Simplified Chinese)](./docs/zh-CN/customer-site-integration.md) for the pages you need to implement, customer APIs, and security requirements.
 
-测试与正式环境使用相同模块和调用流程，只替换资源地址、Secret 和支付平台环境等配置。
+Test and production environments use the same modules and flows, with configuration changes for resource URLs, secrets, and payment platform environments.
 
-## 文档
+## Documentation
 
-从 [文档入口](./docs/README.md) 开始阅读。
+Start with the [documentation index (Simplified Chinese)](./docs/README.md). The user guides are currently available in Simplified Chinese.
 
-## 许可证与贡献
+## License and contributions
 
-本仓库的 LicenKit 原创代码和文档采用 **GNU Affero General Public License, version 3 only**，标识为 `AGPL-3.0-only`。完整条款见 [LICENSE](./LICENSE)。本项目未选择“3.0 或任何后续版本”；许可证原文附录中的应用示例不改变这一选择。版权所有者保留其各自的版权。
+Original LicenKit code and documentation in this repository are licensed under the **GNU Affero General Public License, version 3 only**, identified as `AGPL-3.0-only`. See [LICENSE](./LICENSE) for the full terms. The project has not selected "version 3 or any later version"; the application example in the license's appendix does not change this choice. Copyright holders retain their respective copyrights.
 
-AGPL 允许商业使用，使用、修改、分发及通过网络提供修改版本时，应遵守其相应条款；网络交互场景的源码提供要求见第 13 节。该许可证声明不构成另外一项专有或商业许可。
+The AGPL permits commercial use, subject to its applicable terms when using, modifying, distributing, or providing modified versions over a network. See section 13 for source availability requirements for network interaction. This license notice does not grant a separate proprietary or commercial license.
 
-第三方依赖、资产及其许可证和版权声明继续适用各自条款，不因本仓库的许可证选择而改写。[CLA.md](./CLA.md) 基于 Harmony 范本改编，其文本按文件内注明的 CC BY 3.0 许可提供；该文本的复用许可与贡献者授予项目的权利分别处理。本声明不替代既有贡献的权利归属核查，也不追溯取得其他权利人的额外授权。
+Third-party dependencies, assets, licenses, and copyright notices remain subject to their own terms, which are not changed by this repository's license choice. [CLA.md](./CLA.md) is adapted from a Harmony template, and its text is provided under CC BY 3.0 as stated in that file. Permission to reuse the agreement's text is separate from the rights contributors grant to the project. This notice does not replace ownership checks for existing contributions or retroactively obtain additional rights from other rights holders.
 
-贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。**向本仓库提交供合并的 PR，即表示您同意 [LicenKit CLA v1.0](./CLA.md) 的英文条款，并将该 PR 中您有权授权的贡献按该协议授权。** 请在提交前阅读完整协议。英文为本协议唯一具有约束力的文本；其他语言的翻译或说明仅供参考。您保留版权，同时授予接收方**商业、专有及多层级再许可权**；允许随项目或相关业务收购合法承接，受让方须**书面承担协议义务**，既有公开许可权利继续保留。初始接收方为 CLA 中标识的 GitHub 账号持有人。本规则适用于协议及提交提示发布后新提交的 PR，不自动覆盖历史贡献或其他权利人的权利。
+See [CONTRIBUTING.md (Simplified Chinese)](./CONTRIBUTING.md) for the contribution process. **By submitting a PR for inclusion in this repository, you agree to the English terms of the [LicenKit CLA v1.0](./CLA.md) and license the contributions in that PR that you have authority to license under that agreement.** Read the full agreement before submitting. The English terms are the sole binding text; translations and explanations in other languages are for reference only. You retain copyright while granting the recipient **commercial, proprietary, and multi-tier sublicensing rights**. The agreement permits lawful transfer with the project or a related business, including an acquisition, provided the transferee **assumes the agreement's obligations in writing**; existing public-license rights remain in place. The initial recipient is the holder of the GitHub account identified in the CLA. This rule applies to new PRs submitted after the agreement and its submission notice have been published; it does not automatically cover earlier contributions or other rights holders' rights.
