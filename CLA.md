@@ -4,11 +4,11 @@
 
 **向本仓库提交供合并的 PR（合并请求），即表示您同意 CLA v1.0 的英文条款，并将该 PR 中您有权授权的贡献按本协议授权。** 请在提交前阅读完整条款，特别留意商业、专有及多层级再许可和项目转让安排。本规则适用于本版本及提交提示发布后新提交的 PR。
 
-英文为唯一确认文本，中文仅帮助理解。具体确认方法见 [贡献指南](./CONTRIBUTING.md#如何确认-cla)。
+英文为本协议唯一具有约束力的文本；其他语言的翻译或说明仅供参考。具体确认方法见 [贡献指南](./CONTRIBUTING.md#如何确认-cla)。
 
 ## English terms — version 1.0
 
-The English terms are the sole agreement text. The Chinese explanation is for reference only.
+The English terms are the sole legally binding text of this agreement. Translations or explanations in other languages are provided for reference only.
 
 Thank you for contributing to LicenKit. This agreement records the permissions You grant for the Contribution You submit in a pull request ("PR") for inclusion in LicenKit.
 
