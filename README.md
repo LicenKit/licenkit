@@ -17,6 +17,22 @@ LicenKit is a self-hosted software licensing system for independent developers a
 - Record incoming payment events, email delivery status, retry counts, and audit history for troubleshooting and recovery.
 - Support multi-tenancy by design.
 
+## Core workflow
+
+For example, when a user enters a license key to activate an app:
+
+1. When a product is created, the server automatically generates an Ed25519 signing key pair. The private key signs licenses, and the public key checks that they are authentic.
+2. The developer bundles the public key with the app; the private key is stored encrypted on the server.
+3. After a successful activation in `signed` mode, the server signs information such as the license validity period, available features, device identifier, and app version with the private key, then sends it to the app.
+4. The app uses its bundled public key to verify the signature and checks the device, version, and validity period. Changing the expiration date or features in the license causes signature verification to fail.
+5. The `opaque` mode uses a traditional online ID-based model without client-side signature verification.
+
+## Storage encryption
+
+Signing private keys, credentials for payment and email services, some email content, and similar sensitive data are encrypted with AES-256-GCM before being stored in the database. The server decrypts this data using `STORAGE_ENCRYPTION_KEY`, configured as a Cloudflare Secret during deployment, to issue licenses, send emails, and perform similar operations.
+
+Encryption is bound to the owning instance, record, and field. Moving encrypted data from one record to another prevents it from being decrypted correctly. This protects these sensitive fields; it does not encrypt the entire database.
+
 ## How it works
 
 ```text
