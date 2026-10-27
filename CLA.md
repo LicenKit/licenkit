@@ -1,12 +1,14 @@
-# LicenKit 贡献者许可协议（CLA）简版草案
+# LicenKit 贡献者许可协议（CLA）
 
-版本：`0.3-draft` · 更新日期：2026-10-04
+版本：`1.0` · 发布日期：2026-10-27
 
-**草案，未生效，确认流程尚未启用。** 计划正式版本为 CLA v1.0，目前尚未发布，固定版本链接不存在。草案阶段的勾选或评论不能作为 CLA 授权依据。
+**CLA v1.0 确认流程已启用。** 请阅读英文条款，并使用自己的 GitHub 账号在 PR（合并请求）中发表一条明确同意本版本的评论，授权范围为该评论中确认的本次 PR 贡献。
 
-英文为拟议的唯一确认文本，中文仅帮助理解。最终文本及语言安排仍待定稿；本稿没有添加未选定的适用法律、法院或仲裁条款。
+英文为唯一确认文本，中文仅帮助理解。具体确认方法见 [贡献指南](./CONTRIBUTING.md#如何确认-cla)。
 
-## 英文候选条款
+## English terms — version 1.0
+
+The English terms are the sole agreement text. The Chinese explanation is for reference only.
 
 Thank you for contributing to LicenKit. This agreement records the permissions You grant for the Contribution identified in Your PR confirmation.
 
@@ -24,7 +26,7 @@ Thank you for contributing to LicenKit. This agreement records the permissions Y
 
 7. **Project transfer.** We may lawfully transfer this agreement's rights and obligations with LicenKit or its related business, including an acquisition, provided the transferee agrees in writing to uphold all rights and obligations under this agreement, including clause 4.
 
-You accept the specified published fixed version by actively agreeing from Your own GitHub account in the PR, identifying that version and the Contribution.
+You accept version 1.0 of this agreement by posting a comment from Your own GitHub account in the PR, expressly agreeing to its English terms and licensing the Contribution identified in that PR confirmation under this agreement.
 
 ## 中文简明解释（不替代英文条款）
 
@@ -34,10 +36,10 @@ You accept the specified published fixed version by actively agreeing from Your 
 - 项目可使用商业或专有许可，同时按提交时适用的项目公开许可证另行许可贡献，保留既有 AGPL 等公开许可权利。
 - 您需有权授权并取得必要的雇主或其他权利人同意，区分和披露第三方材料。
 - 随项目或相关业务收购等情形合法转让时，受让方须书面承担协议的全部权利和义务。
-- 除权属及权限确认外，贡献按现状提供；正式启用后本人在 PR 主动同意固定版本。
+- 除权属及权限确认外，贡献按现状提供；本人在 PR 评论中明确同意 v1.0，并按该协议授权本次 PR 中确认的贡献。
 
 PR 确认方法、共同作者与雇主核查见 [CONTRIBUTING.md](./CONTRIBUTING.md)；版本留存和合并核查见 [CLA 维护说明](./docs/internal/zh-CN/cla-administration.md)。
 
 ## 来源与文本许可
 
-本稿改编自 **Harmony Project — Harmony Combined Contributor Agreement Template, Version 1.0**（[原文](https://www.harmonyagreements.org/docs/ha-combined-v1)），精简了条款，替换了项目与接收方，并调整了贡献确认方式和转让条件。原范本及本稿文本按 [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) 提供；复用须保留署名、许可链接并说明改动。文本许可不改变项目代码的许可证。
+本协议改编自 **Harmony Project — Harmony Combined Contributor Agreement Template, Version 1.0**（[原文](https://www.harmonyagreements.org/docs/ha-combined-v1)），精简了条款，替换了项目与接收方，并调整了贡献确认方式和转让条件。原范本及本协议文本按 [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) 提供；复用须保留署名、许可链接并说明改动。文本许可不改变项目代码的许可证。
