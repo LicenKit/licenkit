@@ -84,7 +84,7 @@ Admin Invitation 页面属于 LicenKit；Customer Magic Link 页面属于使用�
 
 - 手动/API/支付签发；
 - Plan → License 条款快照；
-- Registration Key、Machine Token 和 Signed License Token；
+- Registration Key、激活记录与设备指纹、Signed License Token；
 - 席位上限、激活、验证、停用和撤销；
 - 无需支付方式的设备 Trial Claim。
 
@@ -167,7 +167,7 @@ Customer Session 不与 Admin Session 混用。
 
 ### 4.3 Client 请求
 
-客户端只显式发送全局唯一 `product_id`。Server 先据此解析 Instance，再让 Registration Key、Machine Token 或 Trial Token 的查找和更新继续使用完整 `instance_id + product_id` 数据库边界；Signed License Token 仍携带 `ins`，但客户端不再重复配置一份 Instance ID。
+客户端只显式发送全局唯一 `product_id`。Server 先据此解析 Instance，再让注册码、Activation 或 Trial Claim 的查找和更新继续使用完整 `instance_id + product_id` 数据库边界；在线设备校验使用记录编号和设备指纹；Signed License Token 仍携带 `ins`，但客户端不再重复配置一份 Instance ID。
 
 ### 4.4 Webhook 请求
 
@@ -287,7 +287,7 @@ Signed Claim  ins
 ## 12. 安全边界
 
 - 密码使用服务端强 Hash；
-- Session、CSRF、Magic Link、Invitation、Registration Key、Machine Token 只存 Hash；
+- Session、CSRF、Magic Link、Invitation、Registration Key 和设备指纹只存 Hash；
 - Provider Secret、邮件变量和短期敏感载荷加密存储；
 - 一次性链接使用 Fragment，页面立即清理，只在内存保管；
 - 所有 Instance 关联由复合外键和查询条件共同保证；

@@ -233,7 +233,7 @@ export interface InstanceInvitation {
   revokedAt?: IsoDateTime | null;
   createdAt: IsoDateTime;
 }
-export interface AdminSession { user: User; instance: Instance; membership: InstanceMembership; expiresAt?: IsoDateTime }
+export interface AdminSession { user: User; instance: Instance; membership: InstanceMembership; expiresAt?: IsoDateTime; recoveryCredential?: string }
 export interface TrialConfiguration { enabled: boolean; durationSeconds?: number; features: string[] }
 export interface ProductSigningKey {
   id: Identifier;
@@ -519,6 +519,10 @@ export const api = {
       login: (body: { email: string; password: string }) => request<AdminSession>("/admin/auth/login", { method: "POST", body, scope: "public", credentials: "include" }),
       session: () => request<AdminSession>("/admin/auth/session", { scope: "admin" }),
       logout: () => request<{ loggedOut: true }>("/admin/auth/logout", { method: "POST", scope: "admin" }),
+      passwordResetConfig: () => request<{ turnstileSiteKey: string; turnstileAction: string }>("/admin/auth/password-reset/config", { scope: "public" }),
+      requestPasswordReset: (body: { email: string; turnstileToken: string }) => request<{ accepted: true }>("/admin/auth/password-reset/request", { method: "POST", body, scope: "public" }),
+      resetPassword: (body: { token: string; newPassword: string }) => request<{ passwordReset: true }>("/admin/auth/password-reset/consume", { method: "POST", body, scope: "public", credentials: "include" }),
+      recoverPassword: (body: { email: string; recoveryCredential: string; newPassword: string }) => request<{ passwordReset: true; recoveryCredential: string }>("/admin/auth/recovery-credential/consume", { method: "POST", body, scope: "public", credentials: "include" }),
     },
     stats: {
       get: () => request<AdminStats>("/admin/stats", { scope: "admin" }),
@@ -541,6 +545,7 @@ export const api = {
       resend: (invitationId: string) => request<InstanceInvitation>(`/admin/invitations/${encodeURIComponent(invitationId)}/resend`, { method: "POST", scope: "admin" }),
     },
     profile: {
+      regenerateRecoveryCredential: (currentPassword: string) => request<{ recoveryCredential: string }>("/admin/profile/recovery-credential", { method: "POST", body: { currentPassword }, scope: "admin" }),
       get: () => request<User>("/admin/profile", { scope: "admin" }),
       update: (name: string) => request<User>("/admin/profile", { method: "PATCH", body: { name }, scope: "admin" }),
       changePassword: (body: { currentPassword: string; newPassword: string }) => request<{ passwordChanged: true }>("/admin/profile/password", {

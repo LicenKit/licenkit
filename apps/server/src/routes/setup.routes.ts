@@ -21,6 +21,7 @@ import {
   setAdminCookies,
 } from "../services/identity/session";
 import { prepareAuditInsert } from "../services/identity/audit";
+import { prepareInitialRecoveryCredential } from "../services/identity/recovery-credential";
 
 export const setupRouter = new Hono<AppContext>();
 
@@ -195,6 +196,8 @@ setupRouter.post(
       "ADMIN_SESSION_TTL_SECONDS",
     );
     const expiresAt = new Date(now.getTime() + sessionTtl * 1000).toISOString();
+    const recovery = await prepareInitialRecoveryCredential({ db: c.env.DB, userId, now: nowIso,
+      request: { requestId: c.get("requestId"), ip: requestIp(c), userAgent: c.req.header("user-agent") } });
 
     const statements: D1PreparedStatement[] = [
       ...prepareInitialDeployment({
@@ -239,6 +242,7 @@ setupRouter.post(
            VALUES ('deployment', ?1)`,
         )
         .bind(nowIso),
+      ...(recovery?.statements ?? []),
     ];
 
     try {
@@ -276,6 +280,7 @@ setupRouter.post(
           },
           membership: { role: "owner", status: "active" },
           expires_at: expiresAt,
+          ...(recovery ? { recovery_credential: recovery.credential } : {}),
         },
       },
       201,

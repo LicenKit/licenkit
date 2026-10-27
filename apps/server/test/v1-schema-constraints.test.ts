@@ -180,6 +180,8 @@ describe("User and Instance database schema", () => {
         "0006_license_billing_environment.sql",
         "0007_remove_device_tokens.sql",
         "0008_webhook_rejections.sql",
+        "0009_password_reset.sql",
+        "0010_recovery_credentials.sql",
       ]);
     const db = createDb();
     expect(db.pragma("foreign_key_check")).toEqual([]);
@@ -187,7 +189,8 @@ describe("User and Instance database schema", () => {
     const tables = (db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
     ).all() as Array<{ name: string }>).map((row) => row.name);
-    expect(tables).toHaveLength(31);
+    expect(tables).toHaveLength(34);
+    expect(tables).toEqual(expect.arrayContaining(["password_reset_requests", "identity_request_limits", "user_recovery_credentials"]));
     expect(tables).toEqual(expect.arrayContaining([
       "users", "instances", "instance_memberships", "instance_invitations",
       "deployment_bootstrap", "admin_sessions",
@@ -643,6 +646,8 @@ describe("User and Instance database schema", () => {
       "trg_instance_invitations_terminal_guard",
       "trg_customer_login_challenges_terminal_guard",
     ]));
-    expect(triggers).toHaveLength(23);
+    expect(triggers).toEqual(expect.arrayContaining(["password_reset_consume_guard", "password_change_revokes_reset_links"]));
+    expect(triggers).toContain("recovery_credential_consume_guard");
+    expect(triggers).toHaveLength(26);
   });
 });

@@ -6,6 +6,7 @@ import { requireRole } from "../../middleware/auth";
 import { AppError, NotFoundError } from "../../middleware/error";
 import { prepareAuditInsert } from "../../services/identity/audit";
 import { requestIp } from "../../services/identity/session";
+import { regenerateRecoveryCredential } from "../../services/identity/recovery-credential";
 
 const ALL_INSTANCE_ROLES: InstanceRole[] = ["owner", "admin", "member", "viewer"];
 
@@ -25,6 +26,8 @@ const ChangePasswordSchema = z.object({
   current_password: z.string().min(1).max(256),
   new_password: z.string().min(12).max(256),
 }).strict();
+
+const RecoveryCredentialSchema = z.object({ current_password: z.string().min(1).max(256) }).strict();
 
 interface MemberRow {
   instance_id: string;
@@ -327,3 +330,11 @@ adminProfileRouter.post(
     return c.json({ success: true, data: { password_changed: true } });
   },
 );
+
+adminProfileRouter.post("/recovery-credential", requireRole(ALL_INSTANCE_ROLES), async (c) => {
+  const input = RecoveryCredentialSchema.parse(await c.req.json());
+  const credential = await regenerateRecoveryCredential({ db: c.env.DB, userId: c.get("userId")!,
+    currentPassword: input.current_password,
+    request: { requestId: c.get("requestId"), ip: requestIp(c), userAgent: c.req.header("user-agent") } });
+  return c.json({ success: true, data: { recovery_credential: credential } });
+});

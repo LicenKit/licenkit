@@ -9,7 +9,7 @@ Swift SDK 把 License、无需支付方式的设备 Trial，以及“当前设�
 - 这份状态是否仍在可信时间窗口内；
 - 失败时上一次已知状态是什么，以及如何用 `requestID` 回溯服务端请求。
 
-SDK 不决定商业权益，不自行延长 License，也不会把网络失败改写为“已到期”“已吊销”或“仍然有效”。本文描述仓库中的本地实现；它不代表对应版本已经发布到 Swift Package Registry，也不代表服务端代码已经部署到生产环境。
+SDK 不决定商业权益，不自行延长 License，也不会把网络失败改写为“已到期”“已吊销”或“仍然有效”。本文说明兼容当前 Server 所需的 SDK 接入行为。Swift SDK 位于独立仓库，使用前需确认所选版本符合本文的记录编号、设备指纹与环境字段要求；本仓库的验证不代表独立 SDK 已发布或已完成 App 联调。
 
 完整接入步骤见[统一客户端校验开发指南](./unified-client-validation-guide.md)，HTTP 字段见 [API 参考](./api-reference.md#7-client-api)。
 
@@ -163,8 +163,8 @@ public enum StateSource: String, Codable, Equatable, Sendable {
 
 SDK 从 Keychain 选择凭据：优先 License，其次 Trial，否则使用 `none`，然后统一调用 `POST /api/v1/client/validate`。
 
-- License：提交 `activation_id + machine_token`，并原子接收可选 `credential_update`。
-- Trial：提交 `trial_id + trial_token`。
+- License：提交 `activation_id` 和设备指纹，并原子接收可选 `credential_update`。
+- Trial：提交 `trial_id` 和设备指纹。
 - None：不提交秘密，只查询此设备是否还能领取 Trial；Product Release 是否登记不影响该结果。
 
 并发调用若实际发出同一次校验请求，会共享结果；静默调用因 Product 间隔被跳过时，不会吞掉同时到来的用户主动校验。`activate()`、`startTrial()`、`deactivate()` 与所有凭据/快照写入使用同一顺序化边界，避免较早的校验响应覆盖较新的激活或解绑结果。
@@ -196,22 +196,22 @@ public struct ActivationData: Equatable, Sendable {
 }
 ```
 
-两种凭证模式都保存 `activationID + machineToken`，区别是：
+两种凭证模式都保存 `activationID` 和当前授权快照，后续请求使用该编号及设备指纹，区别是：
 
 - `opaque`：没有可离线验签的授权载荷，签名相关字段必须为 `nil`。
 - `signed`：同时返回 Signed License Token 与 `signingKeyID`；SDK 在保存前完成验签和 Claim 一致性检查。
 
-Signed Token 必须满足：Header 为 `alg=EdDSA`、`typ=licenkit-license+jwt` 且 `kid` 受信；`ins/prd/act/fp/ver/plt/arc` 与当前配置、Activation 和设备一致；活动 License 的功能、更新期限和最终有效期与签名 Claims 一致。Token 不携带 `exp`、Product Release ID 或发布时间，SDK 不在本地重复执行 Release 发布时间与更新期限的业务比对。
+Signed Token 必须满足：Header 为 `alg=EdDSA`、`typ=licenkit-license+jwt` 且 `kid` 受信；`ins/prd/act/env/fp/ver/plt/arc` 与当前配置、Activation、测试或正式环境及设备一致；活动 License 的功能、更新期限和最终有效期与签名 Claims 一致。Token 不携带 `exp`、Product Release ID 或发布时间，SDK 不在本地重复执行 Release 发布时间与更新期限的业务比对。
 
 Plan 的 `offline_grace_seconds` 默认 30 天，签发时固化到 License，Opaque 与 Signed 共用。它只决定何时进入 `.offlineGraceExceeded` 强提示，不会使 `isUsable()` 变为 `false`。Product 的 `validation_interval_seconds` 只决定多久尝试一次在线复核，也不是业务到期时间。
 
-激活前，SDK 先把客户端生成的 Machine Token 作为“Activation 验证中凭据”写入 Keychain，再使用本次 `activate()` 传入的 Registration Key 发请求。验证中凭据不保存 Registration Key 明文或 Hash，也不保存设备名称。服务端已经创建 Activation 但响应丢失、进程退出或最终凭据写入失败时，再次调用 `activate()` 会复用同一 Machine Token，服务端重复下发同一 Activation 与当前授权信息；完整凭据和快照全部落盘后才删除验证中凭据。`validate()` 不会替用户执行激活。不同 Machine Token 不能仅凭相同设备指纹取得既有 Activation。激活完成后清除同一设备上的 Trial 凭据。
+激活请求使用用户本次输入的 Registration Key 和设备指纹，不生成额外的随机设备口令。服务端已创建 Activation 但响应丢失、进程退出或本地保存失败时，用户可再次提交同一注册码；同一 License 和设备已有 active Activation 时返回原编号和当前授权信息，不重复占用席位。客户端在保存前校验响应与签名，再一起保存激活记录和快照；不长期保存注册码。`validate()` 不会替用户执行激活。激活完成后清除同一设备上的 Trial 凭据。
 
 ## 8. Product/设备 Trial
 
-`startTrial()` 调用 `POST /api/v1/client/trials/claim`。SDK 在请求前生成 Trial Token，并把它作为“Trial 验证中凭据”写入 Keychain；服务端只保存 Token Hash。若响应丢失、进程退出或正式 Trial 凭据/快照写入失败，用户无需再次输入任何内容，只需再次调用 `startTrial()`，SDK 就会复用同一 Trial Token，服务端重复下发同一 Trial。完整 Trial 凭据与快照全部落盘后才清理验证中凭据。正常 License 激活后，SDK 清除 Trial 凭据。
+`startTrial()` 调用 `POST /api/v1/client/trials/claim`，提交 Product 和设备指纹。服务端保存设备指纹 Hash，返回 `trial_id`、绝对到期时间和当前状态。响应丢失、进程退出或本地保存失败后，再次调用该接口可取得原记录，不需要生成或恢复额外的设备口令。正常 License 激活后，SDK 清除 Trial 凭据。
 
-相同设备指纹和相同 Trial Token 的重复或并发领取返回同一 Trial，不会延长试用；不同 Token 不能仅凭相同指纹取得历史 Trial。后续不再调用独立的 `trials/validate`，而是由统一 `validate()` 自动选择 `credential.kind=trial`。没有完整 Trial 凭据时，`validate()` 只按 `credential.kind=none` 查询状态，不会替用户领取 Trial。
+相同 Product 和设备指纹的重复或并发领取返回同一 Trial 和原到期时间，不会延长试用；已到期或撤销的 Trial 不会重新开始。后续由统一 `validate()` 选择 `credential.kind=trial`。没有保存 Trial 编号时，`validate()` 只按 `credential.kind=none` 查询状态，不会替用户领取 Trial。
 
 Paddle 免费订阅试用是普通支付型 License：用户获得 Registration Key 后调用 `activate()`，不调用 `startTrial()`。SDK 不根据 Paddle 前端状态自行推断授权。
 
@@ -225,7 +225,7 @@ public struct DeactivationData: Equatable, Sendable {
 ```
 
 - 有 License 凭据时，只有服务端确认 Activation 已 `deactivated` 后才清除本地 License 凭据，并返回 `wasDeactivated=true`。
-- 网络或服务端失败时返回 `.failure`，保留本地 Machine Token，使用户可以重试并真正释放远端席位。
+- 网络或服务端失败时返回 `.failure`，保留本地 Activation 记录，使用户可以重试并真正释放远端席位。
 - 本地没有 License 凭据时不发请求，返回 `wasDeactivated=false`，并生成 `source=.local`、Trial 可用性为 `.unknown` 的 `activationRequired` 快照。它不含伪造的 `validatedAt`。
 
 ## 10. 错误与诊断
@@ -249,16 +249,14 @@ case transportError(
 
 HTTP 5xx 属于 `transportError(.server(...))`，但仍保留安全的服务端 `code`、`requestID` 与 `details`；4xx 业务拒绝通过 `apiError` 原样到达宿主 App。脱敏按字段递归处理 Token、Secret、密码、注册码和 Authorization，不隐藏整个响应。
 
-操作成功或服务端业务状态的 Request ID 位于 `OperationMetadata.requestID`；失败时还可从 `LicenKitError.requestID` 读取。记录诊断信息时不要记录 Registration Key、Machine Token、Trial Token 或 Signed License Token。
+操作成功或服务端业务状态的 Request ID 位于 `OperationMetadata.requestID`；失败时还可从 `LicenKitError.requestID` 读取。记录诊断信息时不要记录 Registration Key、完整设备指纹或 Signed License Token。
 
 ## 11. 本地凭据边界
 
-Keychain 分别保存完成态凭据、验证中凭据与授权快照：
+Keychain 保存授权记录、签名凭据与授权快照：
 
-- License：Activation ID、Machine Token、凭证模式、可选 Signed Token/key ID；
-- Trial：Trial ID、Trial Token；
-- Activation Verification：客户端预生成的 Machine Token；
-- Trial Verification：客户端预生成的 Trial Token；
+- License：Activation ID、测试或正式环境、凭证模式、可选 Signed Token/key ID；
+- Trial：Trial ID；
 - Snapshot：凭据主体、统一状态、服务端业务时间、收到/生效的在线复核间隔、离线宽限期、业务码、安全细节及可信快照对应的 Release 身份；另保存最近一次取得明确 `/validate` Server 结果的时间，用于静默 Product 间隔。
 - Validation Attempt：最近一次实际 `/validate` 请求尝试的本地时间和 Release 身份，用于固定 30 秒及一次性提前复核。
 

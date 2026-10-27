@@ -19,7 +19,7 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
     const stored = loadStoredLicense();
     if (!stored) throw new Error("Offline verification requires a local signed activation context");
     if (stored.credentialMode === "opaque") {
-      console.log(pc.yellow("Online validation required: opaque machine credentials are not offline-verifiable."));
+      console.log(pc.yellow("Online validation required: opaque credentials are not offline-verifiable."));
       process.exitCode = 2;
       return;
     }
@@ -32,6 +32,7 @@ export async function verifyCommand(rawTokenArg: string | undefined, options: Ve
     const fingerprint = options.fingerprint || (await getMachineFingerprint());
     const evaluation = evaluateSignedLicenseClaims(claims, {
       productId: stored.productId,
+      billingEnvironment: stored.billingEnvironment,
       activationId: stored.activationId,
       fingerprint,
       releaseVersion: stored.releaseVersion,

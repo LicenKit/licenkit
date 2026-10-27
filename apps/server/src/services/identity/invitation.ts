@@ -4,6 +4,7 @@ import { hashPassword, verifyPassword } from "../../infra/crypto";
 import { AppError, ConflictError, NotFoundError, UnauthorizedError } from "../../middleware/error";
 import { prepareEmailNotificationDelivery } from "../delivery/outbox";
 import { prepareAuditInsert } from "./audit";
+import { prepareInitialRecoveryCredential } from "./recovery-credential";
 import {
   createSessionSecrets,
   positiveIntegerSetting,
@@ -70,6 +71,7 @@ export interface AcceptedInvitationSession {
     status: "active";
   };
   expires_at?: string;
+  recovery_credential?: string;
 }
 
 export type InvitationAcceptanceMode =
@@ -781,6 +783,7 @@ export async function acceptInstanceInvitation(input: {
     ? input.mode.sessionId
     : `ase_${ulid().toLowerCase()}`;
   const secrets = needsSession ? await createSessionSecrets("adm") : undefined;
+  const recovery = needsSession ? await prepareInitialRecoveryCredential({ db: input.db, userId: user.id, now: nowIso, request: input.request }) : null;
   const statements: D1PreparedStatement[] = [];
   if (passwordHash) {
     statements.push(
@@ -861,8 +864,11 @@ export async function acceptInstanceInvitation(input: {
       }),
     );
   }
+  statements.push(...(recovery?.statements ?? []));
+  let recoveryIssued = false;
   try {
-    await input.db.batch(statements);
+    const results = await input.db.batch(statements);
+    recoveryIssued = recovery !== null && Number(results[results.length - 2].meta.changes) === 1;
   } catch (error) {
     throw invitationDatabaseFailure(
       error,
@@ -882,6 +888,7 @@ export async function acceptInstanceInvitation(input: {
     },
     membership: { role: candidate.invitation_role, status: "active" },
     ...(needsSession ? { expires_at: expiresAt } : {}),
+    ...(recovery && recoveryIssued ? { recovery_credential: recovery.credential } : {}),
   };
   return {
     session: acceptedSession,

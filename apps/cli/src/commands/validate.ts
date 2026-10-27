@@ -19,6 +19,7 @@ export async function validateCommand(): Promise<void> {
     const response = await apiValidate({
       serverUrl: stored.serverUrl,
       productId: stored.productId,
+      billingEnvironment: stored.billingEnvironment,
       fingerprint,
       releaseVersion: stored.releaseVersion,
       releasePlatform: stored.releasePlatform,
@@ -62,6 +63,7 @@ export async function validateCommand(): Promise<void> {
             stored.trustedSigningKeys ?? {},
             {
               productId: stored.productId,
+              billingEnvironment: stored.billingEnvironment,
               activationId: stored.activationId,
               fingerprint,
               releaseVersion: stored.releaseVersion,

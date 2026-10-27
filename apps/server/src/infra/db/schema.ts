@@ -85,6 +85,66 @@ export const adminSessions = sqliteTable(
   ],
 );
 
+// Account recovery belongs to the User identity, independently of any Instance.
+export const passwordResetRequests = sqliteTable(
+  "password_reset_requests",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, restrictReference),
+    tokenHash: text("token_hash").notNull(),
+    passwordHashAtRequest: text("password_hash_at_request").notNull(),
+    adminOrigin: text("admin_origin").notNull(),
+    linkCiphertext: text("link_ciphertext"),
+    expiresAt: text("expires_at").notNull(),
+    consumedAt: text("consumed_at"),
+    revokedAt: text("revoked_at"),
+    sendStatus: text("send_status").notNull().default("pending"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    nextAttemptAt: text("next_attempt_at").notNull(),
+    leaseId: text("lease_id"),
+    lockedUntil: text("locked_until"),
+    lastErrorCode: text("last_error_code"),
+    providerMessageId: text("provider_message_id"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_password_reset_token").on(table.tokenHash),
+    index("idx_password_reset_user").on(table.userId, table.createdAt),
+    index("idx_password_reset_due").on(table.sendStatus, table.nextAttemptAt),
+    index("idx_password_reset_expiry").on(table.expiresAt),
+    check("ck_password_reset_send_status", sql`${table.sendStatus} in ('pending', 'processing', 'accepted', 'failed', 'cancelled', 'expired')`),
+    check("ck_password_reset_attempts", sql`${table.attemptCount} >= 0`),
+  ],
+);
+
+export const identityRequestLimits = sqliteTable(
+  "identity_request_limits",
+  {
+    keyHash: text("key_hash").primaryKey(),
+    requestCount: integer("request_count").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [index("idx_identity_request_limit_expiry").on(table.expiresAt)],
+);
+
+export const userRecoveryCredentials = sqliteTable(
+  "user_recovery_credentials",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, restrictReference),
+    credentialHash: text("credential_hash").notNull(),
+    createdAt: text("created_at").notNull(),
+    consumedAt: text("consumed_at"),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("uq_recovery_credential_hash").on(table.credentialHash),
+    uniqueIndex("uq_recovery_credential_active_user").on(table.userId)
+      .where(sql`${table.consumedAt} is null and ${table.revokedAt} is null`),
+    index("idx_recovery_credential_user").on(table.userId),
+  ],
+);
+
 export const customers = sqliteTable(
   "customers",
   {

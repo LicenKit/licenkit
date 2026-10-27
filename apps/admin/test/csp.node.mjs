@@ -18,5 +18,5 @@ test("admin build remains isolated under the reserved /admin path", () => {
   assert.match(headers, /frame-ancestors 'none'/);
   assert.match(headers, /cdn\.paddle\.com/);
   assert.match(headers, /sandbox-buy\.paddle\.com/);
-  assert.doesNotMatch(headers, /challenges\.cloudflare\.com/);
+  assert.match(headers, /challenges\.cloudflare\.com/);
 });

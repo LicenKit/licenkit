@@ -31,6 +31,7 @@ type AuditInsertInput = AuditInsertBase & (
 );
 
 const SENSITIVE_KEYS = new Set([
+  "recoverycredential",
   "password",
   "passwordhash",
   "licensekey",

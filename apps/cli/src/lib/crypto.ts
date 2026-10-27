@@ -1,3 +1,5 @@
+import type { BillingEnvironment } from "./client-api";
+
 export interface SignedLicenseHeader {
   alg: "EdDSA";
   typ: "licenkit-license+jwt";
@@ -9,6 +11,7 @@ export interface SignedLicenseClaims {
   act: string;
   ins: string;
   prd: string;
+  env: BillingEnvironment;
   ver: string;
   plt: string;
   arc: string;
@@ -169,13 +172,16 @@ export async function verifySignedLicenseToken(
   if (!verified) throw new SignedTokenError("TOKEN_SIGNATURE_INVALID", "Ed25519 signature verification failed");
 
   const claims = parseStrictObject<Record<string, unknown>>(parts[1]);
-  const allowedClaims = new Set(["lic", "act", "ins", "prd", "ver", "plt", "arc", "fp", "iat", "lexp", "upd", "fea"]);
+  const allowedClaims = new Set(["lic", "act", "ins", "prd", "env", "ver", "plt", "arc", "fp", "iat", "lexp", "upd", "fea"]);
   const unknownClaim = Object.keys(claims).find((key) => !allowedClaims.has(key));
   if (unknownClaim) {
     throw new SignedTokenError("TOKEN_CLAIMS_INVALID", `Unsupported Claim '${unknownClaim}'`);
   }
   if (Object.prototype.hasOwnProperty.call(claims, "acc")) {
     throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Legacy Claim 'acc' is not supported");
+  }
+  if (claims.env !== "sandbox" && claims.env !== "live") {
+    throw new SignedTokenError("TOKEN_CLAIMS_INVALID", "Claim 'env' must be sandbox or live");
   }
   const requiredStrings = ["lic", "act", "ins", "prd", "ver", "plt", "arc", "fp"] as const;
   for (const field of requiredStrings) {
@@ -202,6 +208,7 @@ export async function verifySignedLicenseToken(
 
 export interface ClaimsContext {
   productId: string;
+  billingEnvironment: BillingEnvironment;
   activationId: string;
   fingerprint: string;
   releaseVersion: string;
@@ -219,6 +226,7 @@ export interface ClaimsEvaluation {
 export function evaluateSignedLicenseClaims(claims: SignedLicenseClaims, context: ClaimsContext): ClaimsEvaluation {
   const now = context.nowSeconds ?? Math.floor(Date.now() / 1000);
   const comparisons: Array<[boolean, string, string]> = [
+    [claims.env === context.billingEnvironment, "TOKEN_ENVIRONMENT_MISMATCH", "Token environment does not match configuration"],
     [claims.prd === context.productId, "TOKEN_PRODUCT_MISMATCH", "Token product does not match configuration"],
     [claims.act === context.activationId, "TOKEN_ACTIVATION_MISMATCH", "Token activation does not match server response"],
     [claims.fp.toLowerCase() === context.fingerprint.toLowerCase(), "TOKEN_FINGERPRINT_MISMATCH", "Token fingerprint does not match this device"],

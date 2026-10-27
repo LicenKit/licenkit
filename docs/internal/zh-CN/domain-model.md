@@ -24,6 +24,10 @@ User 是使用邮箱和密码登录 Admin 的全局身份：
 
 当前自部署版允许 User 修改自己的显示名称和密码，邮箱只读。修改密码必须验证当前密码，并撤销该 User 除当前请求 Session 外的全部 Admin Session。
 
+User 可以通过邮箱一次性链接找回密码。重置申请保存在独立的 `password_reset_requests` 中，不归属 Instance；只持久化 Token Hash，待发送链接使用 identity 范围加密。请求同时记录密码 Hash 快照，用于拒绝申请后密码已变的旧链接，快照在消费、撤销或到期后清除。发送由部署级 Resend 配置和既有 Cron 处理，不进入 Instance 邮件中心。`identity_request_limits` 保存邮箱/IP 的散列限流键和短期计数。成功重置撤销全部 Admin Session；任何密码变更都会通过数据库 Trigger 作废该 User 尚未使用的重置申请。
+
+User 还可使用独立的恢复凭据。`user_recovery_credentials` 只保存凭据 Hash、所属 User、生成/消费/撤销时间；部分唯一索引保证每个 User 最多一份有效凭据。首次密码登录、Setup 和新用户接受邀请时生成明文，只在生成的成功响应中返回，前端自动下载 TXT，不持久化到浏览器。使用凭据时，数据库 Trigger 保证单次消费，原子更新密码、撤销 Session 与重置链接并生成替代凭据；重新生成必须验证当前密码且在事务内确认其未变。普通修改密码和邮件找回都保留现有恢复凭据，只有消费或手动重新生成时旧凭据才会失效。
+
 ### 1.3 Instance（实例/租户）
 
 Instance 是授权业务空间，也是唯一的租户隔离边界。Product、Customer、License、支付、邮件、Customer Session、System Issue 和实例审计都必须归属明确的 Instance。
@@ -91,7 +95,6 @@ Product 是可授权的软件或数字产品；Product Release 是产品的不�
 
 Product 还持有：
 
-- 支付环境；
 - 默认支付宽限期 `payment_grace_seconds`，默认 `0`；
 - 无需支付方式的设备试用配置；
 - active/archived 生命周期。
@@ -105,24 +108,24 @@ License Plan 是新 License 的条款模板，保存修订号和以下快照来�
 - `license_model`：`perpetual/fixed_term/subscription`；
 - `credential_mode`：`opaque/signed`；
 - 有效期、更新权益期、激活上限、功能集；
-- Signed Token TTL；
+- 离线提示宽限期 `offline_grace_seconds`；
 - 支付型订阅的 `payment_grace_seconds`。
 
 创建订阅 Plan 时，从 Product 固化当前宽限期；非订阅 Plan 的宽限期固定为 `0`。Product 后续变化不追溯已有 Plan。
 
 ### 3.4 License
 
-License 是已经签发给 Customer 的授权事实。它必须固化签发时的 Plan 修订、授权模型、续期模式、凭证模式、功能、激活上限、Signed Token TTL 和支付宽限期。
+License 是已经签发给 Customer 的授权事实。它必须固化签发时的 Plan 修订、授权模型、续期模式、凭证模式、功能、激活上限、离线提示宽限期、测试或正式环境和支付宽限期。
 
 License 状态为 `active/suspended/revoked`。Plan 后续修改不追溯已签发 License。
 
 ### 3.5 凭证与 Signed License Token
 
 - Registration Key：仅在签发、找回或安全轮换的响应/邮件变量中短暂出现；数据库保存 Hash；
-- Machine Token：绑定一次 Activation，数据库保存 Hash；
+- 设备校验：使用 Activation 或 Trial Claim 的编号与设备指纹，数据库保存设备指纹 Hash；
 - Signed License Token：供本地离线验证，必须由 Product 的 Ed25519 Key 签名。
 
-Signed License Token 使用 `ins` Claim 表示 Instance ID，不接受旧 Claim 别名。CLI 和 SDK 必须同时校验 Instance、Product、License、Activation、设备指纹、版本/平台/架构、有效期和签名。Token 不携带 Product Release ID 或发布时间，Release 更新权益判断只在 Server 在线执行。
+Signed License Token 使用 `ins` Claim 表示 Instance ID，不接受旧 Claim 别名。CLI 和 SDK 必须同时校验 Instance、Product、License、Activation、设备指纹、版本/平台/架构、测试或正式环境、业务有效期和签名。Token 不携带 Product Release ID 或发布时间，Release 更新权益判断只在 Server 在线执行。
 
 ### 3.6 Activation 与 Trial Claim
 

@@ -1,4 +1,12 @@
 export type CredentialMode = "opaque" | "signed";
+export type BillingEnvironment = "sandbox" | "live";
+
+export function parseBillingEnvironment(value: unknown): BillingEnvironment {
+  if (value !== "sandbox" && value !== "live") {
+    throw new ClientContractError("billing_environment must be sandbox or live");
+  }
+  return value;
+}
 
 export const DEFAULT_VALIDATION_INTERVAL_SECONDS = 3600;
 export const MIN_VALIDATION_INTERVAL_SECONDS = 3600;
@@ -105,6 +113,7 @@ export type EntitlementState = ActivationRequiredState | TrialState | LicenseSta
 
 export interface CredentialUpdate {
   credential_mode: CredentialMode;
+  billing_environment: BillingEnvironment;
   signed_license_token: string | null;
   signing_key_id: string | null;
 }
@@ -112,6 +121,7 @@ export interface CredentialUpdate {
 export interface ActivationResponse {
   activation_id: string;
   credential_mode: CredentialMode;
+  billing_environment: BillingEnvironment;
   signed_license_token: string | null;
   signing_key_id: string | null;
   license_expires_at: string | null;
@@ -123,6 +133,7 @@ export interface ActivationResponse {
 
 export interface ValidateResponse {
   state: EntitlementState;
+  billing_environment?: BillingEnvironment;
   credential_update?: CredentialUpdate;
   validation: ValidationMetadata;
   meta: ResponseMetadata;
@@ -387,6 +398,7 @@ function parseCredentialUpdate(value: unknown): CredentialUpdate {
   }
   const parsed: CredentialUpdate = {
     credential_mode: update.credential_mode,
+    billing_environment: parseBillingEnvironment(update.billing_environment),
     signed_license_token: update.signed_license_token === null ? null : contractString(update.signed_license_token, "signed_license_token"),
     signing_key_id: update.signing_key_id === null ? null : contractString(update.signing_key_id, "signing_key_id"),
   };
@@ -431,10 +443,19 @@ function parseValidateResponse(value: unknown): ValidateResponse {
   if (!(state.kind === "license" && state.status === "active") && "credential_update" in response) {
     throw new ClientContractError("credential_update is only valid for an active License state");
   }
+  const credentialUpdate = state.kind === "license" && state.status === "active"
+    ? parseCredentialUpdate(response.credential_update)
+    : undefined;
+  const billingEnvironment = credentialUpdate
+    ? parseBillingEnvironment(response.billing_environment)
+    : undefined;
+  if (credentialUpdate && billingEnvironment !== credentialUpdate.billing_environment) {
+    throw new ClientContractError("Validation environment does not match credential_update");
+  }
   return {
     state,
-    ...(state.kind === "license" && state.status === "active" && "credential_update" in response
-      ? { credential_update: parseCredentialUpdate(response.credential_update) }
+    ...(credentialUpdate
+      ? { billing_environment: billingEnvironment, credential_update: credentialUpdate }
       : {}),
     validation: parseValidationMetadata(response.validation),
     meta: parseResponseMetadata(response.meta),
@@ -575,6 +596,7 @@ export async function requestClientApi<T>(
 export interface ClientContext {
   serverUrl: string;
   productId: string;
+  billingEnvironment: BillingEnvironment;
   fingerprint: string;
   devicePlatform: string;
   releaseVersion: string;
@@ -592,6 +614,7 @@ export async function apiActivate(params: ActivateParams): Promise<ActivationRes
     method: "POST",
     body: JSON.stringify({
       product_id: params.productId,
+      billing_environment: params.billingEnvironment,
       license_key: params.licenseKey,
       fingerprint: params.fingerprint,
       device_platform: params.devicePlatform,
@@ -617,6 +640,7 @@ export async function apiValidate(params: ValidateParams): Promise<ValidateRespo
     method: "POST",
     body: JSON.stringify({
       product_id: params.productId,
+      billing_environment: params.billingEnvironment,
       fingerprint: params.fingerprint,
       release_version: params.releaseVersion,
       release_platform: params.releasePlatform,

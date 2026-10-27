@@ -7,9 +7,9 @@
 - 根 `wrangler.jsonc` 是 Worker、D1、Assets、Cron 和 Observability 的部署来源；
 - `apps/server` 是 Hono/Workers API 与 Scheduled Handler；
 - `apps/admin` 构建到 `dist/admin`；
-- `custom/site` 存在时选择完整自定义 Customer Site，否则使用模板站点；
+- Customer Site 由使用方独立实现和部署，本仓库不包含模板站点；
 - Customer Site 仍由使用方实现和验收，不是 Admin 的一部分；
-- 当前数据库从唯一初始 migration 建立，不执行旧数据升级。
+- 空库按编号执行全部 migration；既有主线数据库执行尚未应用的增量 migration，不提供旧原型的数据兼容层。
 
 ## 2. 本地命令
 
@@ -40,7 +40,7 @@ corepack pnpm --filter @licenkit/cli run test
 至少包括：
 
 - `INITIAL_SETUP_TOKEN`：首次 Setup 的一次性部署 Secret；
-- `SECRET_ENCRYPTION_KEY`：加密 Provider 凭据、邮件变量和受限载荷；
+- `STORAGE_ENCRYPTION_KEY`：加密 Provider 凭据、邮件变量和受限载荷；
 - `TURNSTILE_SECRET_KEY`：Customer Magic Link 等公开入口验证。
 
 Provider Webhook Secret、API Secret 和 Email API Key 通过 Admin 加密进入 D1，不写进 `wrangler.jsonc`、前端环境变量、日志或文档示例。
@@ -80,7 +80,7 @@ corepack pnpm run db:migrate:local
 
 验证：
 
-1. 唯一初始 migration 成功；
+1. 当前全部 migration 按编号执行成功；
 2. 所有目标表、索引和 Trigger 存在；
 3. 不存在旧租户表、旧设置表或 User 全局状态列；
 4. `deployment_bootstrap`、User、Instance、Membership 与 Invitation 都为空；
@@ -240,7 +240,7 @@ Scheduled Worker 必须按 Instance 分页领取任务，并使用 Instance 条�
 
 Readiness 只报告服务是否能处理请求所必需的绑定和数据库访问，不读取 System Issue 或 Scheduler 最近成功时间作为门禁。
 
-日志允许记录：请求 ID、Instance ID、路由、稳定错误码、外部状态和必要脱敏详情。禁止记录密码、Setup Token、Session/CSRF 明文、Magic Link/Invitation Token、Registration Key、Machine Token、Provider Secret 或完整敏感载荷。
+日志允许记录：请求 ID、Instance ID、路由、稳定错误码、外部状态和必要脱敏详情。禁止记录密码、Setup Token、Session/CSRF 明文、Magic Link/Invitation Token、Registration Key、完整设备指纹、Provider Secret 或完整敏感载荷。
 
 错误响应和日志应保留原始原因链；只脱敏必要字段，不能把完整包体统一隐藏或把不同错误归一成无法定位的通用错误。
 

@@ -3,6 +3,10 @@ dist/
 build/
 .cache/
 
+# Browser testing artifacts
+/.playwright-cli/
+/output/playwright/
+
 # Environment secrets
 .env
 .env.*

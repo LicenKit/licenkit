@@ -6,6 +6,7 @@ import {
   MIN_VALIDATION_INTERVAL_SECONDS,
   parseEntitlementState,
   type CredentialMode,
+  type BillingEnvironment,
   type EntitlementState,
   type LicenseTerms,
 } from "./client-api";
@@ -13,6 +14,7 @@ import {
 export interface StoredLicenseData {
   serverUrl: string;
   productId: string;
+  billingEnvironment: BillingEnvironment;
   releaseVersion: string;
   releasePlatform: string;
   releaseArch: string;
@@ -54,6 +56,7 @@ function normalizeStoredLicenseData(value: unknown): StoredLicenseData | null {
   const baseIsValid = (
     typeof candidate.serverUrl === "string" &&
     typeof candidate.productId === "string" &&
+    (candidate.billingEnvironment === "sandbox" || candidate.billingEnvironment === "live") &&
     typeof candidate.releaseVersion === "string" &&
     typeof candidate.releasePlatform === "string" &&
     typeof candidate.releaseArch === "string" &&

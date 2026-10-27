@@ -312,9 +312,10 @@ describe("V1 deployment setup and administrator identity", () => {
     expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
     const rejected = responses.find((response) => response.status === 409)!;
     expect((await rejected.json() as any).error.code).toBe("SETUP_ALREADY_COMPLETED");
-    for (const table of ["users", "instances", "instance_memberships", "admin_sessions", "audit_logs", "deployment_bootstrap"]) {
+    for (const table of ["users", "instances", "instance_memberships", "admin_sessions", "user_recovery_credentials", "deployment_bootstrap"]) {
       expect(testEnv.sqliteDb.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 1 });
     }
+    expect(testEnv.sqliteDb.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 2 });
   });
 
   it("preserves the original Setup batch failure when bootstrap did not complete", async () => {
@@ -418,7 +419,7 @@ describe("V1 deployment setup and administrator identity", () => {
     expectOnlySnakeCaseJsonKeys(logoutPayload);
     expect(testEnv.sqliteDb.prepare(
       "SELECT COUNT(*) AS count FROM audit_logs WHERE scope_type = 'identity' AND instance_id IS NULL",
-    ).get()).toEqual({ count: 2 });
+    ).get()).toEqual({ count: 3 });
 
     const revoked = await app.request(
       `${ORIGIN}/api/v1/admin/auth/session`,

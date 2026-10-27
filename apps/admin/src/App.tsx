@@ -7,14 +7,26 @@ import { SetupPage } from "./pages/SetupPage";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { InvitationAcceptPage } from "./pages/InvitationAcceptPage";
+import { PasswordResetPage } from "./pages/PasswordResetPage";
+import { RecoveryCredentialDialog } from "./components/RecoveryCredentialDialog";
+import type { RecoveryCredentialFile } from "./lib/recovery-credential-file";
+import { RecoveryPasswordPage } from "./pages/RecoveryPasswordPage";
 
 export function App() {
   const { t } = useI18n();
   const invitationPath = window.location.pathname === "/admin/invitations/accept";
+  const passwordResetPath = ["/admin/forgot-password", "/admin/reset-password", "/admin/recover-password"].includes(window.location.pathname);
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState<boolean | null>(null);
   const [session, setSession] = useState<AdminSession | null>(null);
   const [bootstrapError, setBootstrapError] = useState<unknown>(null);
+  const [recoveryFile, setRecoveryFile] = useState<RecoveryCredentialFile | null>(null);
+
+  function establishSession(result: AdminSession) {
+    const { recoveryCredential, ...safeSession } = result;
+    setSession(safeSession);
+    if (recoveryCredential) setRecoveryFile({ credential: recoveryCredential, email: result.user.email, adminUrl: window.location.origin });
+  }
 
   async function bootstrap() {
     setLoading(true);
@@ -40,9 +52,11 @@ export function App() {
     }
   }
 
-  useEffect(() => { if (!invitationPath) void bootstrap() }, [invitationPath]);
+  useEffect(() => { if (!invitationPath && !passwordResetPath) void bootstrap() }, [invitationPath, passwordResetPath]);
 
-  if (invitationPath) return <InvitationAcceptPage onAccepted={(accepted) => { setSession(accepted); setInitialized(true); setLoading(false) }} />;
+  if (passwordResetPath) return window.location.pathname === "/admin/recover-password" ? <RecoveryPasswordPage /> : <PasswordResetPage />;
+
+  if (invitationPath) return <InvitationAcceptPage onAccepted={(accepted) => { establishSession(accepted); setInitialized(true); setLoading(false) }} />;
 
   if (loading) {
     return (
@@ -72,12 +86,12 @@ export function App() {
     );
   }
 
-  if (!initialized) return <SetupPage onSetupSuccess={(result) => { setSession(result); setInitialized(true) }} />;
-  if (!session) return <LoginPage onLoginSuccess={setSession} />;
+  if (!initialized) return <SetupPage onSetupSuccess={(result) => { establishSession(result); setInitialized(true) }} />;
+  if (!session) return <LoginPage onLoginSuccess={establishSession} />;
 
-  return <DashboardPage session={session} onSessionChange={setSession} onLogout={() => {
+  return <><DashboardPage session={session} onSessionChange={setSession} onLogout={() => {
     void api.admin.auth.logout().then(() => setSession(null)).catch(setBootstrapError);
-  }} />;
+  }} />{recoveryFile ? <RecoveryCredentialDialog file={recoveryFile} onClose={() => setRecoveryFile(null)} /> : null}</>;
 }
 
 export default App;

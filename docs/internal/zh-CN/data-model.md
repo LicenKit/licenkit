@@ -154,7 +154,7 @@ Plan 通过复合外键属于同一 Instance 的 Product，保存修订和完整
 - `credential_mode`：`opaque/signed`；
 - 非订阅 Plan 的 `payment_grace_seconds` 必须为 `0`；
 - 订阅 Plan 创建时由 Trigger 从 Product 固化宽限期；
-- Opaque 凭证的 Token TTL 为 `0`，Signed 凭证的 Token TTL 大于 `0`。
+- 两种凭证模式都使用正数 `offline_grace_seconds`，签发时固化到 License；Signed Token 不包含独立的 `exp`，业务期限通过 `lexp` 表达。
 
 ### 4.8 `licenses`
 
@@ -172,11 +172,11 @@ License 通过复合外键同时约束 Customer、Product、Plan 和可选 Billi
 
 ### 4.9 `activations`
 
-Activation 使用复合外键归属同一 Instance 的 License。Machine Token 与设备指纹只保存 Hash；同一 License 和设备最多一个 active Activation；数据库 Trigger 执行席位上限。
+Activation 使用复合外键归属同一 Instance 的 License。设备指纹只保存 Hash；在线校验与解绑使用 Activation 编号和设备指纹，不保存额外的设备令牌；同一 License 和设备最多一个 active Activation；数据库 Trigger 执行席位上限。
 
 ### 4.10 `trial_claims`
 
-`instance_id + product_id + fingerprint_hash` 唯一，保证同一设备不能重复领取同一 Product 试用。领取时固化功能与绝对过期时间。
+`instance_id + product_id + fingerprint_hash` 唯一，保证同一设备不能重复领取同一 Product 试用。领取时固化功能与绝对过期时间。重复领取返回原编号、原过期时间和当前状态；后续通过 Trial 编号和设备指纹校验。
 
 ### 4.11 `license_key_rotations`
 
@@ -274,9 +274,9 @@ Issue 只聚合业务错误，不代替业务对象状态，不保存 Deployment
 
 当前项目按全新项目处理：
 
-- 唯一初始 migration 直接建立目标 Schema；
+- 初始 migration 建立空 Schema，后续按编号应用全部增量 migration；
 - 空库应用后保持未初始化；
-- 不回填旧表或旧字段；
+- 不迁移旧原型的租户表或身份模型；当前主线字段变更按增量 migration 明确执行回填、约束更新或字段删除；
 - 不提供双读、双写或协议兼容层；
 - 本地验证不能代替真实远程 D1 验证。
 

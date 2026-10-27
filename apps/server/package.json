@@ -2,6 +2,7 @@
   "name": "@licenkit/server",
   "version": "1.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "LicenKit Server - Core Licensing & Key Generation Engine on Cloudflare Workers",
   "main": "src/index.ts",
   "scripts": {

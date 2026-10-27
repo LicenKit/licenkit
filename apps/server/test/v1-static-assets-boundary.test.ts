@@ -32,4 +32,13 @@ describe("LicenKit static asset deployment boundary", () => {
     expect(site.status).toBe(404);
     expect(assetFetch).toHaveBeenCalledTimes(1);
   });
+
+  it("serves the recovery pages from the Admin shell without redirecting away the fragment", async () => {
+    for (const path of ["/admin/forgot-password", "/admin/reset-password", "/admin/recover-password"]) {
+      const response = await app.request(`https://license.example.test${path}`, {}, testEnv());
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("/admin/");
+      expect(response.headers.get("location")).toBeNull();
+    }
+  });
 });

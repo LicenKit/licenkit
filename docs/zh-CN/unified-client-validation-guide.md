@@ -2,6 +2,8 @@
 
 本文面向把 LicenKit 接入 macOS App 的开发者，也供维护 Server 与 CLI 的开发者核对调用边界。目标是让宿主 App 只回答一个问题：用户此刻能否使用当前产品和功能；至于本地保存的是正式 License、设备 Trial，还是还没有凭据，由 SDK 处理。
 
+Swift SDK 位于独立仓库。本文说明当前 Server 与兼容 SDK 的接入要求，具体 SDK 版本仍需在其仓库和宿主 App 中验证。
+
 ## 1. 先理解一次校验返回的内容
 
 `validate(trigger:)` 的结果包含两个互不替代的层次：
@@ -23,7 +25,7 @@
 
 Server 是授权业务事实的来源，负责：
 
-- 认证 Machine Token 或 Trial Token，并核对设备、Instance、Product 与 Release；
+- 按 Activation 或 Trial 编号核对设备指纹、Instance 与 Product；License 还核对测试或正式环境，并按授权条款检查 Release 更新权益；
 - 返回 Trial、License 与 Release 资格的准确业务状态；
 - 把已认证且已查明的到期、暂停、吊销等终态作为成功响应返回；
 - 返回服务端校验时间和校验间隔；
@@ -37,7 +39,7 @@ SDK 是客户端授权事实的唯一入口，负责：
 
 - 按“正式 License、Trial、无凭据”的顺序选择校验对象；
 - 将 Server 响应转换为 `EntitlementSnapshot`；
-- 把 Machine Token、Trial Token 与签名凭据保存在 Keychain；
+- 把 Activation 或 Trial 编号、授权快照与签名凭据保存在 Keychain；
 - 按宿主传入的主动/静默意图、Product 在线复核间隔和固定 30 秒请求限制判断本次 `validate(trigger:)` 是否联网；
 - 合并同一 Product 和设备上的并发校验请求；
 - 校验 Signed License Token；本地可用性由业务状态、业务期限和签名有效性决定，在线复核间隔与离线宽限只影响复核和提示；
@@ -325,13 +327,13 @@ func performProExport(using controller: LicenseController) async {
 
 Trial Claim 对同一 Product 和设备只能领取一次，因此必须由用户明确点击“开始试用”后调用 `startTrial()`。首次安装不能自动领取，也不能为了展示 Trial 天数而领取。
 
-`startTrial()` 成功结果已经包含 active Trial 快照。它不写入 `lastValidateResponseAt`，因此不会替下一次 `validate()` 启动请求冷却。Paddle 免费订阅试用产生的是普通 License Key，应调用 `activate()`，不调用设备 Trial API。
+`startTrial()` 首次领取成功结果包含 active Trial 快照；重复领取返回原试用的当前状态和原到期时间，不重新计时。它不写入 `lastValidateResponseAt`，因此不会替下一次 `validate()` 启动请求冷却。Paddle 免费订阅试用产生的是普通 License Key，应调用 `activate()`，不调用设备 Trial API。
 
 ### 解绑
 
 `deactivate()` 是远端释放设备席位与本地清理凭据的组合操作。只有 Server 明确确认远端 Activation 已解绑后，SDK 才清除本地凭据并返回成功。
 
-若网络或 Server 失败，SDK 保留 Machine Token，让用户可以重试。宿主不能自行删除 Keychain 并显示“解绑成功”，否则远端席位仍被占用，同时客户端失去再次提交解绑所需的凭据。
+若网络或 Server 失败，SDK 保留 Activation 记录，让用户可以重试。宿主不能自行删除 Keychain 并显示“解绑成功”，否则远端席位仍被占用，同时客户端失去再次提交解绑所需的凭据。
 
 ## 9. 错误与日志
 
@@ -354,7 +356,7 @@ Trial Claim 对同一 Product 和设备只能领取一次，因此必须由用�
 日志不得记录：
 
 - License Key；
-- Machine Token、Trial Token、Signed License Token；
+- Signed License Token；
 - Authorization Header；
 - 完整设备指纹；
 - 未脱敏的完整错误包体。
@@ -380,7 +382,9 @@ licenkit deactivate
 
 CLI 不是宿主 App 的授权运行时。App 不应通过启动子进程调用 CLI，也不应复用 CLI 的本地文件代替 SDK Keychain。
 
-当前 `licenkit validate` 只校验 CLI 已保存的正式 License Activation；CLI 没有新增 Trial 或无凭据查询命令。`verify-token` 验证签名、版本/平台/架构身份、设备绑定和 Token/License 自身期限，也会检查最近一次 Server 校验时间与生效 interval；在线窗口结束时会要求先运行 `licenkit validate`，并以退出码 `2` 结束。Product Release 的发布时间与 `updates_until` 只由 Server 在线比对，不在本地 Token 中重复实现。
+当前 `licenkit validate` 只校验 CLI 已保存的 License Activation；CLI 没有 Trial 或无凭据查询命令。`verify-token` 验证签名、测试或正式环境、版本/平台/架构、设备绑定和 License 业务期限；在线复核时间到达或离线宽限期经过时，只提示需要联网，仍允许有效签名授权继续使用。Product Release 的发布时间与 `updates_until` 只由 Server 在线比对，不在本地 Token 中重复实现。
+
+CLI 激活默认使用正式环境 `live`。测试授权需显式传入 `--billing-environment sandbox`；也可通过 `LICENKIT_BILLING_ENVIRONMENT` 配置，命令参数优先。CLI 会将环境保存到本地，后续在线校验和本地验签继续使用同一环境，并检查服务端响应与签名内 `env` 一致。没有保存环境字段的旧本地授权文件需重新执行激活，CLI 不自行猜测它属于哪个环境。
 
 自动化脚本调用 `licenkit validate` 时，应使用退出码而不是解析终端文案：
 
@@ -445,9 +449,9 @@ SDK 不会在门槛结束时自动调用 Server。检查宿主是否在冷启动
 
 ### `startTrial()` 已在 Server 领取成功，但 Keychain 写入失败
 
-SDK 在发请求前已经把客户端生成的 Trial Token 写入 Trial 验证中 Keychain 项。再次调用 `startTrial()` 会复用该 Token；Server 验证 Token Hash 后重复下发同一 Trial ID、原到期时间和当前状态。完整 Trial 凭据与快照全部写入成功后才删除验证中项。`validate()` 不会替用户执行 Trial 领取；没有完整凭据时它只使用 `credential.kind=none` 查询状态。
+再次调用 `startTrial()`，以相同 Product 和设备指纹请求即可。Server 返回同一 Trial ID、原到期时间和当前状态；客户端一起保存 Trial 编号与快照。`validate()` 不会替用户执行 Trial 领取；没有保存 Trial 编号时，它只使用 `credential.kind=none` 查询可用性。
 
-如果验证中 Keychain 项本身丢失，则不能仅凭设备指纹取得历史 Trial；Server 返回 `TRIAL_CREDENTIALS_INVALID`。这是防止其他设备伪造同一指纹取得既有凭据的必要边界。
+当前设备绑定依赖客户端提交的设备指纹与服务端保存的哈希比较，不是设备私钥或平台证明；不能将它描述成另一份随机口令或密码学设备证明。
 
 ## 13. 验收边界
 
@@ -457,7 +461,7 @@ SDK 在发请求前已经把客户端生成的 Trial Token 写入 Trial 验证�
 - Trial active、expired、revoked；
 - License active、expired、suspended、revoked；
 - Activation revoked、deactivated；
-- Release unknown、update entitlement required；
+- Release 未登记时按授权条款放行，已登记且超出更新权益时返回 update entitlement required；
 - 用户主动与静默调用正确区分；静默 Product 间隔与固定 30 秒分别返回独立的未执行原因和代码；
 - Trial/License 首次业务到期、Release 身份变化首次静默复核及 Signed Token 本地失效跳过 Product 间隔，但仍遵守固定 30 秒；
 - 明确 HTTP 失败更新 `lastValidateResponseAt`，但不推进 `validatedAt`；

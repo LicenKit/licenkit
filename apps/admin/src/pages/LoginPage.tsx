@@ -80,6 +80,7 @@ export function LoginPage({ onLoginSuccess }: { onLoginSuccess: (session: AdminS
           <Button className="w-full" type="submit" loading={loading}>
             {t.auth.loginSubmit} <ArrowRight className="size-4" />
           </Button>
+          <a href="/admin/forgot-password">{t.auth.forgotPassword}</a>
           <p className="auth-footnote">{t.auth.customerFootnote}</p>
         </form>
       </section>

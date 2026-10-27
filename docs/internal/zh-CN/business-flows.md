@@ -227,10 +227,10 @@ Cron 每分钟触发恢复流程：
 
 客户端公共配置只使用 Server URL、全局唯一 Product ID，以及 `signed` 模式需要的内置签名公钥。Swift SDK 从宿主 App Bundle 自动读取当前构建的 Release 版本与平台；Server 从 Product ID 解析 Instance：
 
-1. 首次启动或没有本地凭据时，以 `credential.kind=none` 调用统一校验接口；服务端先确认 Release，再返回需要激活以及 Trial 可用性；
-2. 用户提交 Registration Key 前，客户端先把自己生成的 Machine Token 持久化为 Activation 验证中凭据；服务端在 Instance 内查找 License，检查业务状态、包含支付宽限期的最终有效期和席位，并原子创建 Activation，或在相同 Token 重试时重复下发同一份 Activation 凭据；
-3. 激活回传同一个 Machine Token；Signed 模式同时返回包含 `ins` Claim 且不含 `exp` 的 Signed License Token。业务到期写入 `lexp`，Product 在线复核间隔与 License 离线宽限期通过响应元数据下发；
-4. Product/设备 Trial 在请求前把客户端生成的 Trial Token 持久化为 Trial 验证中凭据，并通过 `trials/claim` 创建 Trial，或在相同 Token 重试时重复下发同一份 Trial 凭据；之后与 License 一样使用统一 `/client/validate`，但提交 `credential.kind=trial`；
+1. 首次启动或没有本地凭据时，以 `credential.kind=none` 调用统一校验接口；服务端确认 Product 与设备试用状态，返回需要激活以及 Trial 可用性；这条路径不要求登记 Release；
+2. 用户提交 Registration Key 和设备指纹；服务端在 Instance 内查找 License，检查测试或正式环境、业务状态、包含支付宽限期的最终有效期和席位，并创建 Activation；相同 License 和设备已有 active Activation 时返回原记录，不重复占用席位；
+3. 激活返回 `activation_id` 和当前授权信息；Signed 模式同时返回包含 `ins` 与 `env` Claim 且不含 `exp` 的 Signed License Token。业务到期写入 `lexp`，Product 在线复核间隔与 License 离线宽限期通过响应元数据下发；
+4. Product/设备 Trial 通过 `trials/claim` 提交 Product 和设备指纹；首次创建 Trial，重复领取返回原编号、原到期时间和当前状态。之后统一使用 `/client/validate`，License 提交 `activation_id`，Trial 提交 `trial_id`，两者均携带设备指纹；
 5. 统一校验把 License、Trial、无凭据三条路径投影为同一个授权状态树。到期、暂停、吊销、Activation 失效、Release 不合格和需要激活都是已确认的业务状态，不是传输失败；
 6. Swift SDK 把 `validated_at`、Product 在线复核间隔与 License 离线宽限期保存为业务快照；超过离线宽限期只进入强提示，不停止授权；
 7. `/validate` 另存 `lastValidateResponseAt`：合法成功业务响应或明确 HTTP 失败会推进它；DNS、TLS、超时、断网等无 HTTP 响应失败，以及 2xx 非法正文不会推进。HTTP 失败也不得推进 `validated_at`；

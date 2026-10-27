@@ -2,6 +2,7 @@
   "name": "licenkit",
   "version": "1.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "LicenKit - Modern, self-hosted API-First licensing hub and key generator",
   "keywords": [
     "licensing",

@@ -17,6 +17,7 @@ import {
   setAdminCookies,
 } from "../services/identity/session";
 import { prepareAuditInsert } from "../services/identity/audit";
+import { prepareInitialRecoveryCredential } from "../services/identity/recovery-credential";
 
 export const authRouter = new Hono<AppContext>();
 export const adminAuthRouter = authRouter;
@@ -117,7 +118,9 @@ authRouter.post(
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
     const sessionId = `ase_${ulid().toLowerCase()}`;
     const secrets = await createSessionSecrets("adm");
-    await c.env.DB.batch([
+    const recovery = await prepareInitialRecoveryCredential({ db: c.env.DB, userId: user.user_id, now: nowIso,
+      request: { requestId: c.get("requestId"), ip: requestIp(c), userAgent: c.req.header("user-agent") } });
+    const results = await c.env.DB.batch([
       c.env.DB
         .prepare(
           `INSERT INTO admin_sessions (
@@ -145,6 +148,7 @@ authRouter.post(
         userAgent: c.req.header("user-agent"),
         now: nowIso,
       }),
+      ...(recovery?.statements ?? []),
     ]);
     setAdminCookies(c, {
       sessionToken: secrets.sessionToken,
@@ -156,6 +160,8 @@ authRouter.post(
       data: {
         ...formatIdentityContext(user),
         expires_at: expiresAt,
+        ...(recovery && Number(results[results.length - 2].meta.changes) === 1
+          ? { recovery_credential: recovery.credential } : {}),
       },
     });
   },

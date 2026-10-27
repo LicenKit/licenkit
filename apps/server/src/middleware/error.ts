@@ -53,7 +53,7 @@ export { ConfigurationError };
 
 function redactErrorSource(value: unknown, key = ""): unknown {
   const normalizedKey = key.toLowerCase();
-  if (/password|secret|token|authorization|cookie|payload|private[_-]?key/.test(normalizedKey)) {
+  if (/password|secret|token|recovery.?credential|authorization|cookie|payload|private[_-]?key/.test(normalizedKey)) {
     return "[REDACTED]";
   }
   if (Array.isArray(value)) return value.map((item) => redactErrorSource(item));

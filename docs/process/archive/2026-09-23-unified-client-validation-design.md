@@ -2,9 +2,9 @@
 
 日期：2026-09-23
 
-状态：本地实现已完成并通过自动化验证；本变更不需要新的 D1 迁移，但 Server 尚未部署、Swift SDK 尚未发布，也未完成真实宿主 App 验收
+状态：历史设计，2026-10-27 归档。本文保留 2026-09-23 的方案与当时验证记录；设备随机令牌、验证中凭据和部分校验窗口规则已被后续实现替代，不能作为当前接入要求。
 
-适用版本：LicenKit Server V1 Client API 下一破坏性合同；`licenkit-sdk-swift` 下一破坏性版本
+适用版本：2026-09-23 的 LicenKit Server V1 Client API 与 Swift SDK 设计快照。当前字段和行为以[API 参考](../../zh-CN/api-reference.md#7-client-api)及[统一校验指南](../../zh-CN/unified-client-validation-guide.md)为准；当前在线校验使用 Activation 或 Trial 编号与设备指纹，不生成额外的随机设备令牌。
 
 适用范围：LicenKit Server 当前主线、`licenkit-sdk-swift` 下一破坏性版本，以及依赖 Client Validate 网络合同的 LicenKit CLI。本文的本地冷却和 `lastValidateResponseAt` 是 Swift SDK 宿主运行时合同；CLI 是显式命令工具，不因共享 Server 字段而自动继承该本地调度策略，当前每次显式执行 `licenkit validate` 都会联网。
 

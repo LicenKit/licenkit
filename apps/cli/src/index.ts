@@ -20,6 +20,7 @@ cli
   .command("activate <key>", "Activate a license key and bind current device seat")
   .option("-s, --server <url>", "LicenKit API server URL (default: http://localhost:8787)")
   .option("-p, --product <productId>", "LicenKit Product ID")
+  .option("--billing-environment <environment>", "License environment: live (default) or sandbox")
   .option("-r, --release <version>", "Immutable Product Release version")
   .option("--release-platform <platform>", "Product Release operating system: macos, windows, or linux")
   .option("--release-arch <arch>", "Product Release architecture: universal, arm64, or x86_64")
@@ -38,7 +39,7 @@ cli
 
 // 4. Verify Command (Offline Mathematical Verification)
 cli
-  .command("verify-token [token]", "Verify a signed credential within its current periodic online-validation window")
+  .command("verify-token [token]", "Verify a signed credential locally and report when online validation is due")
   .alias("verify")
   .option("-f, --feature <feature>", "Check if a specific feature entitlement is granted")
   .option("--fingerprint <fp>", "Override current host fingerprint (for testing)")

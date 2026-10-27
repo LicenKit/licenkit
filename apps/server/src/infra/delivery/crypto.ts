@@ -11,8 +11,7 @@ interface EnvelopeV1 {
   ciphertext: string;
 }
 
-export interface EnvelopeIdentity {
-  instanceId: string;
+export type EnvelopeIdentity = ({ instanceId: string; scope?: never } | { scope: "identity"; instanceId?: never }) & {
   table: string;
   rowId: string;
   field: string;
@@ -24,7 +23,7 @@ export interface DeliveryCryptoEnv {
 }
 
 function aadFor(identity: EnvelopeIdentity): string {
-  return [identity.instanceId, identity.table, identity.rowId, identity.field].join("\u001f");
+  return [identity.scope === "identity" ? "identity" : identity.instanceId, identity.table, identity.rowId, identity.field].join("\u001f");
 }
 
 async function deriveKey(secret: string): Promise<CryptoKey> {

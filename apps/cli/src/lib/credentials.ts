@@ -54,6 +54,9 @@ function verifyClaimsMatchResponse(
   credential: CredentialUpdate,
   state: ActiveLicenseState
 ): void {
+  if (claims.env !== credential.billing_environment) {
+    throw new SignedTokenError("TOKEN_ENVIRONMENT_MISMATCH", "Token env does not match the credential response");
+  }
   if (claims.lexp !== timestampSeconds(state.expires_at)) {
     throw new SignedTokenError("TOKEN_LICENSE_EXPIRY_MISMATCH", "Token lexp does not match the active License state");
   }
@@ -73,6 +76,9 @@ export async function verifyActivationResponse(
   if (!response || typeof response !== "object") throw new ClientContractError("Server returned an invalid credential response");
   if (!response.activation_id) {
     throw new ClientContractError("Credential response is missing activation_id");
+  }
+  if (response.billing_environment !== context.billingEnvironment) {
+    throw new ClientContractError("Activation environment does not match configuration");
   }
   assertTerms(response.terms);
   if (response.state.kind !== "license" || response.state.status !== "active") {
@@ -108,6 +114,9 @@ export async function verifyValidationCredentialUpdate(
   context: ClaimsContext,
   state: ActiveLicenseState
 ): Promise<SignedLicenseClaims | undefined> {
+  if (credential.billing_environment !== context.billingEnvironment) {
+    throw new ClientContractError("Credential update environment does not match configuration");
+  }
   if (credential.credential_mode === "opaque") {
     if (credential.signed_license_token || credential.signing_key_id) {
       throw new ClientContractError("Opaque credential update unexpectedly contains Signed License Token fields");

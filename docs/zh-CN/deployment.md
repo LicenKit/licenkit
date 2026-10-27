@@ -52,7 +52,10 @@ Admin/API 与 Customer Site 地址属于 Instance 数据，不写入 Wrangler。
 | --- | --- |
 | `INITIAL_SETUP_TOKEN` | 首次 Setup 使用的一次性高熵令牌。初始化完成后移除。 |
 | `STORAGE_ENCRYPTION_KEY` | 加密支付/邮件 Provider 凭证、签名私钥和 Email Delivery 敏感变量。 |
-| `TURNSTILE_SECRET_KEY` | 服务端验证 Customer Magic Link 请求。 |
+| `TURNSTILE_SECRET_KEY` | 服务端验证客户邮箱登录和后台找回密码请求。 |
+| `IDENTITY_EMAIL_API_KEY` | 可选：后台账号邮件使用的独立 Resend API Key，不读取实例邮件配置。 |
+| `IDENTITY_EMAIL_FROM` | 可选：账号邮件发件地址，例如 `LicenKit <accounts@example.com>`。 |
+| `IDENTITY_PASSWORD_RESET_TEMPLATE` | 可选：已发布的 Resend 密码重置模板 ID 或别名。 |
 
 在仓库根目录写入 Secret，例如：
 
@@ -63,6 +66,37 @@ pnpm exec wrangler secret put TURNSTILE_SECRET_KEY
 ```
 
 Secret 不进入仓库、普通环境变量文件、日志、审计详情或 API 响应。
+
+### 4.1 后台账号找回密码
+
+启用邮件找回前，在部署的 Secret 中配置上述三个 `IDENTITY_*` 项，并在 Resend 中创建、发布密码重置模板。模板仅接收两个变量：`reset_url`（设置新密码的完整链接，敏感）和 `expires_at`（链接的 UTC 到期时间）。可使用以下模板正文：
+
+```html
+<h1>重置 LicenKit 密码</h1>
+<p>你申请了密码重置。请在 15 分钟内使用下面的链接设置新密码。</p>
+<p><a href="{{{reset_url}}}">设置新密码</a></p>
+<p>链接有效至 {{{expires_at}}}。如果不是你发起的申请，请忽略此邮件。</p>
+```
+
+账号邮件与实例的客户邮件、成员邀请分开配置，不会出现在实例的邮件中心，也不要求创建实例模板绑定。现有 Turnstile Widget 需要允许管理后台域名；服务端为后台找回校验 `admin_password_reset` action 和唯一可信的后台 hostname，客户登录的验证规则保持独立。
+
+登录页提供「忘记密码」。系统对已注册、未注册、冷却期内的邮箱统一回复「请求已受理」，该回复不表示邮件已送达。同一邮箱每分钟最多生成一封重置邮件；同一 IP 每十分钟最多受理十次。链接有效期为 15 分钟，重新申请后旧链接失效。用户设置新密码后须重新登录，原有登录和未使用的重置链接全部失效；正常修改密码也会作废未使用的重置链接。
+
+缺少账号邮件配置时，找回页面显示「暂时无法通过邮件找回密码，请联系部署管理员」，正常登录和已登录修改密码仍可使用。用户还可以选择「使用恢复凭据找回」，该入口不要求邮件或 Turnstile 配置。
+
+发送任务与密码重置申请一起存入 `password_reset_requests`。Worker 尝试即时发送，现有每分钟 Cron 补发或重试，最多尝试四次；发送前校验凭据，永久失败停止重试，临时失败按 1、2、4 分钟退避。成功、取消、过期和永久失败均清理加密链接。发送失败写入该申请的 `last_error_code` 和 Worker 结构化日志 `identity.password_reset.email_failed`，不写入实例业务告警，也不记录邮箱或链接明文。排查时按申请 ID 查询 `send_status`、`attempt_count`、`last_error_code`，不要输出 `link_ciphertext` 或密码 Hash。Resend 接收不等于最终送达，需要在邮件服务侧确认实际投递。
+
+升级现有部署时，先应用 `0009_password_reset.sql` 和 `0010_recovery_credentials.sql` 数据库迁移，再发布代码。
+
+### 4.2 恢复凭据
+
+每个后台账号各自拥有一份有效的恢复凭据，系统只保存其 Hash。首次 Setup、受邀者创建账号并登录、已有账号升级后的首次密码登录，会生成凭据并自动发起 `LicenKit-恢复凭据.txt` 下载，同时提示用户确认文件已保存。浏览器可能阻止自动下载，当前窗口提供「再次下载」。关闭窗口或刷新页面后，凭据明文不再提供；用户可以在「个人资料 → 恢复凭据」验证当前密码后重新生成，旧凭据立即失效。恢复凭据不写入 Cookie、Local Storage、Session Storage、日志或审计详情。
+
+TXT 文件包含后台登录地址、登录邮箱、恢复凭据和使用说明，不包含登录密码。文件应保存在密码管理器或其他安全位置，持有文件的人可以重置该账号密码。恢复凭据没有邮件链接的 15 分钟有效期；只在使用或重新生成时失效。
+
+忘记密码且邮件不可用时，用户打开「忘记密码 → 使用恢复凭据找回」，选择 TXT 文件自动填入邮箱和凭据，也可以手动填写。成功设置新密码后，旧凭据在同一数据库事务中作废，全部旧登录和密码重置链接失效；系统立即提供新的 TXT 文件，用户仍需使用新密码登录。每个 IP 十分钟最多尝试十次，不因错误尝试锁定账号。
+
+普通的已登录修改密码和通过邮件找回密码都保留现有恢复凭据，不要求重新下载文件。只有使用恢复凭据或手动重新生成，旧凭据才会立即失效。恢复凭据的生成、替换和使用写入全局身份审计，不属于实例业务操作，也不改变成员角色或访问权限。
 
 ## 5. 数据库迁移
 
@@ -78,7 +112,7 @@ pnpm db:migrate:local
 pnpm db:migrate:remote
 ```
 
-首次部署使用空数据库执行当前完整的初始迁移。迁移只创建空 Schema；不会创建 User、Instance、Membership 或 `deployment_bootstrap` 完成记录。当前项目不提供旧 `accounts`、`system_settings`、`account_*` 字段或旧 migration 历史的数据迁移/兼容层。需要重新初始化测试部署时，应明确重建可丢弃数据库，不能删除单表或完成记录来绕过 Setup。
+首次部署使用空数据库，按编号执行 `apps/server/drizzle/` 中全部迁移。迁移只创建空 Schema；不会创建 User、Instance、Membership 或 `deployment_bootstrap` 完成记录。当前项目不提供旧 `accounts`、`system_settings`、`account_*` 字段或旧 migration 历史的数据迁移/兼容层。需要重新初始化测试部署时，应明确重建可丢弃数据库，不能删除单表或完成记录来绕过 Setup。
 
 在目标库执行前先查询：
 
@@ -129,7 +163,6 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 4. Product、License Plan 和 Offer Mapping；只有“永久可用、有限期免费更新”的产品需要登记 Product Release；
 5. 需要本地签名凭据时，从 Product 页面复制 LicenKit 自动生成的公钥并内置到客户端；私钥只由 Server 托管，不提供上传或下载入口；
 6. 只有启用 Paddle Customer 读穿、对账或支付平台门户时，才配置具备对应最小权限的 Paddle API Key；
-7. 若需要客户系统接收 License/订阅等业务事件，另行创建 `event_subscriber` Endpoint。它不发送邮件。
 
 每个 Template Binding 的测试成功只证明 Resend Send API 返回 Message ID（Provider 已接收），不证明最终送达。没有真实 API Key、已发布 Template ID/Alias 和测试收件地址时，不得将 Resend E2E 写成已完成。
 

@@ -1,18 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { KeyRound, Languages, RefreshCw, UserRound } from "lucide-react";
-import { api, type User } from "../../lib/api-client";
+import { api, isApiError, type User } from "../../lib/api-client";
 import {
   Button,
   Card,
   ErrorPanel,
   Field,
   Input,
+  Modal,
   Notice,
   PageHeader,
   Select,
 } from "../../components/ui";
 import { useI18n } from "../../lib/i18n/I18nContext";
 import type { SupportedLocale } from "../../lib/i18n/types";
+import { RecoveryCredentialDialog } from "../../components/RecoveryCredentialDialog";
+import type { RecoveryCredentialFile } from "../../lib/recovery-credential-file";
 
 export function ProfileView({
   initialUser,
@@ -27,9 +30,23 @@ export function ProfileView({
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState<"profile" | "password" | null>(null);
+  const [saving, setSaving] = useState<"profile" | "password" | "recovery" | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [verifyRecovery, setVerifyRecovery] = useState(false);
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [recoveryError, setRecoveryError] = useState<unknown>(null);
+  const [recoveryFile, setRecoveryFile] = useState<RecoveryCredentialFile | null>(null);
+
+  async function regenerateRecovery(event: FormEvent) {
+    event.preventDefault(); setSaving("recovery"); setRecoveryError(null);
+    try {
+      const result = await api.admin.profile.regenerateRecoveryCredential(recoveryPassword);
+      setRecoveryFile({ email: user.email, credential: result.recoveryCredential, adminUrl: window.location.origin });
+      setVerifyRecovery(false); setRecoveryPassword("");
+    } catch (caught) { setRecoveryError(caught) }
+    finally { setSaving(null) }
+  }
 
   async function load() {
     setLoading(true);
@@ -201,6 +218,19 @@ export function ProfileView({
           </div>
         </form>
       </Card>
+      <Card>
+        <div className="card-header"><div><h2>{t.recoveryCredential.title}</h2><p>{t.recoveryCredential.description}</p></div><KeyRound className="size-5" /></div>
+        <p>{t.recoveryCredential.regenerateHint}</p>
+        <div className="form-actions"><Button variant="secondary" onClick={() => { setRecoveryError(null); setRecoveryPassword(""); setVerifyRecovery(true) }}>{t.recoveryCredential.regenerate}</Button></div>
+      </Card>
+      <Modal open={verifyRecovery} title={t.recoveryCredential.verifyTitle} description={t.recoveryCredential.verifyDescription} onClose={() => { setVerifyRecovery(false); setRecoveryPassword("") }}>
+        <form className="form-stack" onSubmit={regenerateRecovery}>
+          {recoveryError ? <Notice tone="warning"><p>{isApiError(recoveryError) ? (t.errors[recoveryError.code] ?? t.common.requestFailed) : t.common.requestFailed}</p></Notice> : null}
+          <Field label={t.settings.currentPasswordLabel}><Input type="password" autoComplete="current-password" required maxLength={256} value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} /></Field>
+          <div className="form-actions"><Button type="submit" loading={saving === "recovery"}>{t.common.confirm}</Button></div>
+        </form>
+      </Modal>
+      {recoveryFile ? <RecoveryCredentialDialog file={recoveryFile} onClose={() => setRecoveryFile(null)} /> : null}
     </div>
   );
 }

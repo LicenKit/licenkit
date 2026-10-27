@@ -64,6 +64,20 @@
       "when": 1790669967198,
       "tag": "0008_webhook_rejections",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793088035302,
+      "tag": "0009_password_reset",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793089558176,
+      "tag": "0010_recovery_credentials",
+      "breakpoints": true
     }
   ]
 }

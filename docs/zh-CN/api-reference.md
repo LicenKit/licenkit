@@ -11,7 +11,7 @@
 | Initial Setup API | 独立部署首次安装 | `INITIAL_SETUP_TOKEN`，且数据库必须未初始化 |
 | Admin API | 管理控制台和自动化工具 | 管理员 Session |
 | Customer Portal API | 客户授权中心 | Magic Link 与 Customer Session |
-| Client API | 集成 LicenKit SDK 的 App | 注册码或机器令牌 |
+| Client API | 集成 LicenKit SDK 的 App | 注册码激活；记录编号与设备指纹校验 |
 | Payment Inbound Webhook | 支付平台 | 渠道原始请求签名 |
 
 ## 2. 通用响应
@@ -121,12 +121,17 @@ Setup 使用三个独立页面：第一步只验证部署 Token；第二步收�
 POST /api/v1/admin/auth/login
 GET  /api/v1/admin/auth/session
 POST /api/v1/admin/auth/logout
+GET  /api/v1/admin/auth/password-reset/config
+POST /api/v1/admin/auth/password-reset/request
+POST /api/v1/admin/auth/password-reset/consume
+POST /api/v1/admin/auth/recovery-credential/consume
 
 GET   /api/v1/admin/instance
 
 GET   /api/v1/admin/profile
 PATCH /api/v1/admin/profile
 POST  /api/v1/admin/profile/password
+POST  /api/v1/admin/profile/recovery-credential
 
 GET   /api/v1/admin/members
 PATCH /api/v1/admin/members/:userId
@@ -142,6 +147,20 @@ POST /api/v1/invitations/accept
 `GET /admin/instance` 对四种 active 角色开放，只读返回当前 Instance 的 ID、名称、`admin_api_url`、`customer_site_url` 和状态。当前自部署不提供 Instance 状态修改接口；`suspended/archived` 的修改主体属于未来 SaaS 控制面。
 
 Profile 只操作当前 User：显示名称可修改，邮箱只读，不存在修改邮箱 API。修改密码必须验证当前密码，并在同一个原子写入中替换密码 Hash、写 identity 审计并撤销该 User 除当前请求外的其他 Admin Session；撤销对该 User 所属的全部 Instance 生效。
+
+邮件找回密码属于 User 身份流程，使用部署级账号邮件配置，不使用任何 Instance 邮件 Integration、Binding 或 Delivery。`GET /admin/auth/password-reset/config` 返回 `turnstile_site_key` 和 `turnstile_action`；账号邮件或人机验证配置缺失时返回 `503 PASSWORD_RESET_UNAVAILABLE`。
+
+`POST /admin/auth/password-reset/request` 接收 `{ email, turnstile_token }`，要求精确 Admin Origin，通过服务端 Turnstile hostname/action 校验后受理。已注册、未注册、邮箱冷却及 IP 限流均返回 `202 { success: true, data: { accepted: true } }`，不代表已发送或送达。每个邮箱一分钟最多生成一次请求，每个 IP 十分钟最多受理十次。邮件链接固定为可信 Admin Origin 下的 `/admin/reset-password#token=...`，15 分钟有效，重新申请撤销旧链接。公开响应不包含 Token、User ID 或投递结果。
+
+`POST /admin/auth/password-reset/consume` 接收 `{ token, new_password }`，要求精确 Admin Origin，不要求现有 Session 或邮件服务仍然可用。新密码为 12–256 位。服务端在数据库原子批次内验证链接未过期、未撤销、未消费且申请后密码未变，再消费链接、更新密码、撤销该 User 的全部 Session、作废其他重置链接并写 identity 审计。成功返回 `{ password_reset: true }` 并清除当前浏览器的 Admin Cookie，不自动登录。过期、撤销、重复或未知链接均返回 `400 PASSWORD_RESET_LINK_INVALID`；并发失败方无密码、Session 或审计副作用。
+
+首次密码登录（包括 Setup 或通过邀请创建账号并登录）在没有有效恢复凭据时，于登录原子批次中生成一份恢复凭据。仅生成方的成功响应额外返回 `recovery_credential`，管理端自动触发 TXT 下载；已有有效凭据的登录响应与 `GET /admin/auth/session` 不返回明文。并发首次登录只生成一份凭据。凭据为 256 位密码安全随机数，只保存 Hash，不使用邮件配置。
+
+`POST /admin/profile/recovery-credential` 接收 `{ current_password }`，要求 Admin Session、精确 Origin 和 CSRF，且用户只能操作自己的凭据。在原子批次内重新确认密码未变、撤销旧凭据、保存新凭据 Hash 并记录审计，返回 `{ recovery_credential }` 一次性明文。个人资料中的密码复核使用独立弹窗。
+
+`POST /admin/auth/recovery-credential/consume` 接收 `{ email, recovery_credential, new_password }`，要求精确 Admin Origin，不要求现有 Session、邮件或 Turnstile 配置。每个 IP 十分钟最多尝试十次，超限返回 `429 RECOVERY_TOO_MANY_ATTEMPTS`。凭据与邮箱不匹配、已使用或被撤销均返回 `400 RECOVERY_CREDENTIAL_INVALID`。成功时，在同一数据库事务内消费旧凭据、更新密码、撤销全部 Session 和重置链接、生成替代凭据并记录审计；返回 `{ password_reset: true, recovery_credential }`，清除当前 Admin Cookie，前端下载新文件并引导重新登录。并发消费只允许一次成功。恢复凭据不按邮件链接的短期 TTL 过期。
+
+普通已登录修改密码和邮件找回都保留现有恢复凭据。只有使用恢复凭据或手动重新生成时，旧凭据才会立即失效。
 
 Members 与 Invitation 只允许 active Owner 管理。Owner 可以邀请邮箱、调整 Membership 角色、暂停、恢复或软移除 Membership，但不能修改其他 User 的显示名称、邮箱、密码或全局 Session。Membership 状态为 `active/disabled/removed`；`removed` 重新加入必须接受新邀请。最后一个 active Owner 的降级、暂停或移除由数据库不变量拒绝并返回 `LAST_ACTIVE_OWNER_REQUIRED`。
 
@@ -276,7 +295,7 @@ POST   /api/v1/admin/license-plans/:planId/migrations
 ```
 
 - `license_model` 描述有效期生命周期：永久、固定期限或随订阅周期更新；
-- `credential_mode` 不描述是否联网。`opaque` 只签发 Machine Token，`signed` 在相同在线流程上额外签发 Signed License Token；
+- `credential_mode` 不描述是否联网。`opaque` 使用激活记录编号和设备指纹完成在线校验，`signed` 在相同在线流程上额外签发 Signed License Token；
 - `update_window_seconds` 只适用于 `perpetual`；`null` 表示所有未来版本，正整数表示签发后的版本更新窗口；
 - `offline_grace_seconds` 是正整数，默认 2592000 秒（30 天）；它对 `opaque` 与 `signed` 使用同一语义：距最近一次成功在线确认超过该时间后，客户端进入强提示状态，但仍允许使用；
 - 签发 License 时会把 Plan 当时的 `offline_grace_seconds` 固化到 License，之后修改 Plan 不追溯已签发 License；
@@ -657,7 +676,7 @@ GET /api/v1/customer/licenses/:licenseId/subscription
 
 所有查询必须在持久层同时限定当前 `instance_id + customer_id`。对不属于当前 Customer 的资源统一返回资源不存在，不能通过 ID 枚举其他 Customer 的 License 或 Activation。
 
-Customer 响应不返回注册码哈希、机器令牌哈希、支付 Secret、支付事件原文或内部敏感 Delivery 负载。
+Customer 响应不返回注册码哈希、设备指纹哈希、支付 Secret、支付事件原文或内部敏感 Delivery 负载。
 
 `GET .../subscription` 对 `renewal_mode=manual` 返回发行方管理的到期时间且 `billing_subscription=null`；对 `renewal_mode=billing` 返回对应 Billing Subscription；`perpetual` 和 `fixed_term` 返回无订阅关系。客户端不得仅根据 `license_model=subscription` 假设一定存在支付门户。
 
@@ -752,7 +771,6 @@ POST /api/v1/client/activate
 {
   "product_id": "prd_01...",
   "license_key": "LK-...",
-  "machine_token": "mtk_由客户端预先生成并持久化...",
   "fingerprint": "sha256:...",
   "device_platform": "macos-arm64",
   "name": "Alex's MacBook Pro",
@@ -770,7 +788,6 @@ POST /api/v1/client/activate
   "success": true,
   "data": {
     "activation_id": "act_01...",
-    "machine_token": "mtk_...",
     "credential_mode": "opaque",
     "billing_environment": "live",
     "signed_license_token": null,
@@ -778,7 +795,7 @@ POST /api/v1/client/activate
     "license_expires_at": null,
     "terms": {
       "license_model": "perpetual",
-      "renewal_mode": "manual",
+      "renewal_mode": "none",
       "max_activations": 3,
       "features": ["pro_export"],
       "updates_until": "2027-09-19T10:00:00Z"
@@ -789,7 +806,7 @@ POST /api/v1/client/activate
       "expires_at": null,
       "terms": {
         "license_model": "perpetual",
-        "renewal_mode": "manual",
+        "renewal_mode": "none",
         "max_activations": 3,
         "features": ["pro_export"],
         "updates_until": "2027-09-19T10:00:00Z"
@@ -821,7 +838,7 @@ POST /api/v1/client/activate
 
 Signed License Token 不包含 `exp`，响应也不返回独立的 Signed Token 到期时间。Signed 与 Opaque 的业务规则相同：业务到期使用 `state.expires_at` 和签名内 `lexp`；在线复核调度使用 Product 的 `validation_interval_seconds`；离线强提示使用 License 快照的 `offline_grace_seconds`。签名内的 `env` 固化为 License 的 `sandbox` 或 `live`，SDK 本地校验它与 App 配置一致。不能把在线复核间隔或离线宽限期解释为本地停用时间。
 
-`machine_token` 必须由客户端在发请求前生成，并先作为验证中凭据持久化。相同 License、相同设备指纹和相同 Machine Token 的重复或并发请求返回既有 Activation 与当前授权信息，不创建第二份 Activation；相同指纹但无法提供原 Machine Token 的请求返回 `ACTIVATION_CREDENTIALS_INVALID`，避免其他设备仅凭注册码或指纹取得既有凭据。客户端不需要保存 Registration Key 明文或 Hash；它应使用本次 `activate()` 的 Registration Key 发请求，并在完整凭据与快照全部落盘后再清理验证中凭据。`validate` 不负责重新执行激活。
+客户端提交注册码和设备指纹后，服务端创建 Activation 并返回 `activation_id`。相同 License 和设备已有 active Activation 时，重复或并发激活返回原 Activation，不重复占用席位。后续校验与解绑使用该编号和设备指纹；服务端比较设备指纹哈希并检查授权状态。客户端不需要长期保存注册码明文或 Hash；激活响应丢失或本地保存失败时，用户可使用本次注册码重试激活。`validate` 不负责重新执行激活。
 
 ### 7.2 在线验证
 
@@ -841,8 +858,7 @@ POST /api/v1/client/validate
   "billing_environment": "live",
   "credential": {
     "kind": "license",
-    "activation_id": "act_01...",
-    "machine_token": "mtk_..."
+    "activation_id": "act_01..."
   }
 }
 ```
@@ -851,8 +867,8 @@ POST /api/v1/client/validate
 
 | `kind` | 附加字段 | 用途 |
 | --- | --- | --- |
-| `license` | `activation_id`、`machine_token` | 校验已激活 License |
-| `trial` | `trial_id`、`trial_token` | 校验已经领取的设备 Trial |
+| `license` | `activation_id` | 校验已激活 License |
+| `trial` | `trial_id` | 校验已经领取的设备 Trial |
 | `none` | 无 | 查询此设备是否还能领取 Trial |
 
 验证响应固定包含 `state`、`validation` 和 `meta`。有效 License 校验还返回 `billing_environment` 和 `credential_update`；`signed` 模式借此原子刷新 Signed License Token，`opaque` 模式返回空的签名字段。Trial 和 `none` 响应不得包含 `credential_update`。服务端在激活和 License 校验时比较请求的运行环境与 License 固化环境；旧版未传环境的客户端按 `live` 处理，不能借此激活 Sandbox License。
@@ -911,7 +927,7 @@ POST /api/v1/client/validate
 | `license` | `activation_revoked` / `activation_deactivated` | 原始 `code` | 否 |
 | `release_not_eligible` | `update_required` | `UPDATE_ENTITLEMENT_REQUIRED`、版本、平台、架构，以及必填的 `updates_until`、`released_at` | 否 |
 
-对 active Product，无凭据请求不查询 Product Release。Trial 未启用或设备已经领取过分别返回 `activation_required + trial.unavailable(not_enabled)` 与 `activation_required + trial.unavailable(already_claimed)`。已归档 Product 仍是调用失败，返回 `PRODUCT_UNAVAILABLE`；Product 不存在返回资源不存在。无凭据响应不会返回历史 `trial_id` 或 Trial Token。
+对 active Product，无凭据请求不查询 Product Release。Trial 未启用或设备已经领取过分别返回 `activation_required + trial.unavailable(not_enabled)` 与 `activation_required + trial.unavailable(already_claimed)`。已归档 Product 仍是调用失败，返回 `PRODUCT_UNAVAILABLE`；Product 不存在返回资源不存在。无凭据响应不会返回历史 `trial_id`。
 
 到期、吊销等状态仍可携带 `code` 和安全的 `details`。客户端缓存业务快照时必须保留这些字段；脱敏应按字段处理 Token、Secret、密码、注册码和 Authorization，不能整包丢弃诊断信息。
 
@@ -926,7 +942,6 @@ POST /api/v1/client/trials/claim
 ```json
 {
   "product_id": "prd_01...",
-  "trial_token": "ttk_由客户端预先生成并持久化...",
   "fingerprint": "sha256:...",
   "device_platform": "macos-arm64",
   "release_version": "2.4.0",
@@ -935,14 +950,13 @@ POST /api/v1/client/trials/claim
 }
 ```
 
-服务端要求 Product 为 active 且已启用试用。Product Release 是否登记不影响 Trial 领取；首次领取以 `Cache-Control: no-store` 返回一次 Trial Token：
+服务端要求 Product 为 active 且已启用试用。Product Release 是否登记不影响 Trial 领取；领取响应带 `Cache-Control: no-store`，返回 Trial 编号、绝对到期时间和当前状态：
 
 ```json
 {
   "success": true,
   "data": {
     "trial_id": "trl_01...",
-    "trial_token": "ttk_...",
     "status": "active",
     "expires_at": "2026-10-03T10:00:00Z",
     "features": ["pro_export"],
@@ -964,9 +978,9 @@ POST /api/v1/client/trials/claim
 }
 ```
 
-`trial_token` 必须由客户端在请求前生成，并先作为验证中凭据持久化；服务端只保存其哈希。相同 Product、相同设备指纹和相同 Trial Token 的重复或并发领取返回同一 Trial ID、同一 Token 与原到期时间，不创建第二份 Trial，也不返回 `TRIAL_ALREADY_CLAIMED`。相同指纹但无法提供原 Trial Token 的请求返回 `TRIAL_CREDENTIALS_INVALID`；无凭据查询仍只报告 `TRIAL_ALREADY_CLAIMED`，不会泄露历史 Trial 身份。客户端在响应丢失、进程退出或正式落盘失败后再次调用 `startTrial()` 即可，不需要用户输入；完整 Trial 凭据与快照全部落盘后再清理验证中凭据。`validate` 不负责重新执行 Trial 领取。
+同一 Product 和设备指纹只对应一条 Trial Claim。重复或并发领取返回原 `trial_id`、原到期时间和当前状态，不创建第二份 Trial，也不延长试用；已过期或撤销的 Trial 不会因此重新开始。响应丢失或本地保存失败后，可再次提交相同 Product 和设备指纹领取并保存原记录。`validate` 不负责执行 Trial 领取。
 
-后续 Trial 校验使用 7.2 的统一 `/validate`，提交 `credential.kind=trial`。服务端同时限定 Instance 与 Product，验证 Token 哈希、设备绑定、吊销状态和绝对到期时间；成功时更新 `last_validated_at`。到期和吊销分别得到 `trial.expired` 和 `trial.revoked`，不得归一化成 License 错误。Product Release 不参与 Trial 校验。V1 Trial Claim 不签发 Signed License Token。
+后续校验使用 7.2 的统一 `/validate`，提交 `credential.kind=trial` 和 `trial_id`，并携带设备指纹。服务端在同一 Instance 和 Product 内查找记录，比较设备指纹哈希，检查撤销状态与绝对到期时间。到期和吊销分别得到 `trial.expired` 和 `trial.revoked`，不得归一化成 License 错误。Product Release 不参与 Trial 校验。V1 Trial Claim 不签发 Signed License Token。
 
 Paddle 免费订阅试用不调用这两个接口。它在已验签支付事件履约后得到普通 License Key，随后走 7.1 和 7.2 的正常 License 激活与校验合同。
 
@@ -976,7 +990,7 @@ Paddle 免费订阅试用不调用这两个接口。它在已验签支付事件�
 POST /api/v1/client/deactivate
 ```
 
-请求携带 `product_id`、`activation_id`、`machine_token` 和 `fingerprint`；Server 通过 Product ID 解析 Instance。服务端成功后 Activation 进入 `deactivated` 并返回 `meta.request_id`。网络失败时 SDK 不能假装远端已经释放席位，也不能清除仍可用于重试的本地 Machine Token。若本地原本没有 License 凭据，SDK 可以返回 `wasDeactivated=false` 的本地结果，但这不是一次服务端确认。
+请求携带 `product_id`、`activation_id` 和 `fingerprint`；Server 通过 Product ID 解析 Instance。服务端成功后 Activation 进入 `deactivated` 并返回 `meta.request_id`。网络失败时 SDK 不能假装远端已经释放席位，也不能清除仍可用于重试的本地 Activation 记录。若本地原本没有 License 凭据，SDK 可以返回 `wasDeactivated=false` 的本地结果，但这不是一次服务端确认。
 
 ### 7.6 公钥集合
 
@@ -1038,23 +1052,3 @@ LicenKit Worker 通过 Email Provider Adapter 直接发送邮件。V1 Resend Ada
 正式主题、HTML、文本和已发布模板版本在 Provider 中管理。LicenKit 可以通过一次性安装操作创建初始 Resend 模板；Binding 建立后只保存 Template Reference、Contract Version、变量和投递证据，不再维护远程模板内容或一致性。因此 LicenKit 可以证明某次请求使用了哪个 Template Reference 与变量，但不能还原 Provider 最终渲染内容。
 
 Resend 成功响应必须包含有效 Message ID；否则记为 Provider 协议错误。成功后 Delivery 进入 `accepted`，该状态不等于最终送达、进入收件箱或已读。V1 不接收 Resend bounce/complaint/suppression Webhook 来更新最终送达状态。
-
-## 10. 业务事件 Webhook
-
-业务事件使用同一签名头，但不包含发码明文，典型事件包括：
-
-- `license.issued`；
-- `license.suspended`；
-- `license.reinstated`；
-- `license.revoked`；
-- `activation.created`；
-- `activation.deactivated`；
-- `subscription.trial_started`；
-- `subscription.activated`；
-- `subscription.renewed`；
-- `subscription.past_due`；
-- `subscription.canceled`。
-
-邮件与业务事件是两类 Delivery，不能因为配置了通配 `event_subscriber` 端点就自动触发客户邮件。
-
-订阅事件负载必须携带 `renewal_mode`；`subscription.renewed` 还携带 `renewal_source=manual|billing`，避免接收方把管理员续期误当成支付成功。Paddle provider 的原始事件类型和 ID 仍保存在来源字段中，不能被内部事件名覆盖。

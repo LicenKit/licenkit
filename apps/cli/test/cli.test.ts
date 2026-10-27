@@ -44,6 +44,7 @@ async function signedToken(overrides: Partial<SignedLicenseClaims> = {}) {
     act: "act_1",
     ins: "ins_1",
     prd: "prd_1",
+    env: "live",
     ver: "2.4.0",
     plt: "macos",
     arc: "universal",
@@ -94,6 +95,7 @@ function opaqueActivationData(): ActivationResponse {
   return {
     activation_id: "act_1",
     credential_mode: "opaque",
+    billing_environment: "live",
     signed_license_token: null,
     signing_key_id: null,
     license_expires_at: null,
@@ -115,8 +117,10 @@ describe("unified Client API contract", () => {
         success: true,
         data: {
           state: activeState(),
+          billing_environment: "live",
           credential_update: {
             credential_mode: "opaque",
+            billing_environment: "live",
             signed_license_token: null,
             signing_key_id: null,
           },
@@ -129,6 +133,7 @@ describe("unified Client API contract", () => {
     const result = await apiValidate({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
@@ -141,6 +146,7 @@ describe("unified Client API contract", () => {
 
     expect(body).toEqual({
       product_id: "prd_1",
+      billing_environment: "live",
       fingerprint: "device-fingerprint",
       release_version: "2.4.0",
       release_platform: "macos",
@@ -177,6 +183,7 @@ describe("unified Client API contract", () => {
     const context = {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
@@ -196,6 +203,46 @@ describe("unified Client API contract", () => {
       { kind: "trial", trial_id: "trl_1" },
       { kind: "none" },
     ]);
+  });
+
+  it("sends and retains the selected Sandbox environment for activation and validation", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      const data = bodies.length === 1
+        ? { ...opaqueActivationData(), billing_environment: "sandbox" }
+        : {
+            state: activeState(), billing_environment: "sandbox",
+            credential_update: { credential_mode: "opaque", billing_environment: "sandbox", signed_license_token: null, signing_key_id: null },
+            validation: validation(), meta: { request_id: "req_sandbox" },
+          };
+      return new Response(JSON.stringify({ success: true, data }), { status: 200 });
+    }));
+    const context = {
+      serverUrl: "https://license.example.com", productId: "prd_1", billingEnvironment: "sandbox" as const,
+      fingerprint: "device-fingerprint", releaseVersion: "2.4.0", releasePlatform: "macos", releaseArch: "universal",
+    };
+    await expect(apiActivate({ ...context, devicePlatform: "macos-arm64", licenseKey: "LIC-LOCAL-TEST-ONLY" }))
+      .resolves.toMatchObject({ billing_environment: "sandbox" });
+    await expect(apiValidate({ ...context, credential: { kind: "license", activation_id: "act_1" } }))
+      .resolves.toMatchObject({ billing_environment: "sandbox", credential_update: { billing_environment: "sandbox" } });
+    expect(bodies.map((body) => body.billing_environment)).toEqual(["sandbox", "sandbox"]);
+  });
+
+  it("rejects conflicting environments in an active validation response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        state: activeState(), billing_environment: "sandbox",
+        credential_update: { credential_mode: "opaque", billing_environment: "live", signed_license_token: null, signing_key_id: null },
+        validation: validation(), meta: { request_id: "req_environment_conflict" },
+      },
+    }), { status: 200 })));
+    await expect(apiValidate({
+      serverUrl: "https://license.example.com", productId: "prd_1", billingEnvironment: "sandbox",
+      fingerprint: "device-fingerprint", releaseVersion: "2.4.0", releasePlatform: "macos", releaseArch: "universal",
+      credential: { kind: "license", activation_id: "act_1" },
+    })).rejects.toMatchObject({ name: "ClientContractError", requestId: "req_environment_conflict" });
   });
 
   it("parses unavailable License and Release states as successful business results with original details", async () => {
@@ -233,6 +280,7 @@ describe("unified Client API contract", () => {
     const params = {
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
@@ -270,6 +318,7 @@ describe("unified Client API contract", () => {
     await expect(apiValidate({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
@@ -308,6 +357,7 @@ describe("unified Client API contract", () => {
       await expect(apiValidate({
         serverUrl: "https://license.example.com",
         productId: "prd_1",
+        billingEnvironment: "live" as const,
         fingerprint: "device-fingerprint",
         releaseVersion: "2.4.0",
         releasePlatform: "macos",
@@ -333,6 +383,7 @@ describe("unified Client API contract", () => {
     await expect(apiValidate({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
@@ -391,6 +442,7 @@ describe("unified Client API contract", () => {
     await expect(apiActivate({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       licenseKey: "LK-SECRET-VALUE-123",
       fingerprint: "device-fingerprint",
       devicePlatform: "macos-arm64",
@@ -412,6 +464,34 @@ describe("unified Client API contract", () => {
 });
 
 describe("signed credential verification", () => {
+  it.each([undefined, "production", ""])("rejects a signed Token with invalid environment %s", async (env) => {
+    const signed = await signedToken({ env } as Partial<SignedLicenseClaims>);
+    await expect(verifySignedLicenseToken(signed.token, signed.publicKey))
+      .rejects.toMatchObject({ code: "TOKEN_CLAIMS_INVALID" });
+  });
+
+  it("requires the signed environment to match configuration and response", async () => {
+    const signed = await signedToken({ env: "sandbox" });
+    const state: ActiveLicenseState = {
+      kind: "license", status: "active", expires_at: null,
+      terms: { max_activations: 1, features: signed.claims.fea, updates_until: new Date(Number(signed.claims.upd) * 1000).toISOString() },
+    };
+    const credential: CredentialUpdate = {
+      credential_mode: "signed", billing_environment: "sandbox",
+      signed_license_token: signed.token, signing_key_id: "key_v1",
+    };
+    const context = {
+      productId: "prd_1", activationId: "act_1", fingerprint: "device-fingerprint",
+      billingEnvironment: "sandbox" as const, releaseVersion: "2.4.0", releasePlatform: "macos", releaseArch: "universal",
+    };
+    await expect(verifyValidationCredentialUpdate(credential, { key_v1: signed.publicKey }, context, state))
+      .resolves.toMatchObject({ env: "sandbox" });
+    await expect(verifyValidationCredentialUpdate(credential, { key_v1: signed.publicKey }, { ...context, billingEnvironment: "live" }, state))
+      .rejects.toMatchObject({ name: "ClientContractError" });
+    await expect(verifyValidationCredentialUpdate({ ...credential, billing_environment: "live" }, { key_v1: signed.publicKey }, { ...context, billingEnvironment: "live" }, state))
+      .rejects.toMatchObject({ code: "TOKEN_ENVIRONMENT_MISMATCH" });
+  });
+
   it("verifies signature, identities and all duplicated response facts before activation storage", async () => {
     const signed = await signedToken();
     const validatedAt = new Date(signed.claims.iat * 1000).toISOString();
@@ -425,6 +505,7 @@ describe("signed credential verification", () => {
     const response: ActivationResponse = {
       activation_id: "act_1",
       credential_mode: "signed",
+      billing_environment: "live",
       signed_license_token: signed.token,
       signing_key_id: "key_v1",
       license_expires_at: null,
@@ -435,6 +516,7 @@ describe("signed credential verification", () => {
     };
     const context = {
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -467,6 +549,7 @@ describe("signed credential verification", () => {
     };
     const update: CredentialUpdate = {
       credential_mode: "signed",
+      billing_environment: "live",
       signed_license_token: signed.token,
       signing_key_id: "key_v1",
     };
@@ -475,6 +558,7 @@ describe("signed credential verification", () => {
       { key_v1: signed.publicKey },
       {
         productId: "prd_1",
+        billingEnvironment: "live" as const,
         activationId: "act_1",
         fingerprint: "device-fingerprint",
         releaseVersion: "2.4.0",
@@ -494,6 +578,7 @@ describe("signed credential verification", () => {
     const verified = await verifySignedLicenseToken(current.token, current.publicKey);
     expect(evaluateSignedLicenseClaims(verified.claims, {
       productId: "prd_other",
+      billingEnvironment: "live" as const,
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -509,6 +594,7 @@ describe("signed credential verification", () => {
     const licenseClaims = (await verifySignedLicenseToken(beyondLicense.token, beyondLicense.publicKey)).claims;
     expect(evaluateSignedLicenseClaims(licenseClaims, {
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -521,6 +607,7 @@ describe("signed credential verification", () => {
     const updateClaims = (await verifySignedLicenseToken(updateEnded.token, updateEnded.publicKey)).claims;
     expect(evaluateSignedLicenseClaims(updateClaims, {
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       activationId: "act_1",
       fingerprint: "device-fingerprint",
       releaseVersion: "2.4.0",
@@ -552,6 +639,7 @@ describe("local credential state and periodic verification", () => {
     saveStoredLicense({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
       releaseArch: "universal",
@@ -568,11 +656,34 @@ describe("local credential state and periodic verification", () => {
     });
   }
 
+  it("requires an explicit environment in saved credentials", () => {
+    saveOpaqueActive();
+    const stored = JSON.parse(fs.readFileSync(getLicenseFilePath(), "utf8"));
+    delete stored.billingEnvironment;
+    fs.writeFileSync(getLicenseFilePath(), JSON.stringify(stored));
+    expect(() => loadStoredLicense()).toThrow("does not match the LicenKit V1 contract");
+  });
+
+  it("checks the saved environment during offline verification", async () => {
+    saveOpaqueActive();
+    const signed = await signedToken({ env: "sandbox" });
+    saveStoredLicense({
+      ...loadStoredLicense()!, credentialMode: "signed", signedLicenseToken: signed.token,
+      signingKeyId: "key_v1", trustedSigningKeys: { key_v1: signed.publicKey },
+    });
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await verifyCommand(undefined, { fingerprint: "device-fingerprint" });
+    expect(process.exitCode).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("TOKEN_ENVIRONMENT_MISMATCH");
+  });
+
   it("rejects the old local License shape instead of silently applying compatibility defaults", () => {
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(getLicenseFilePath(), JSON.stringify({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
       releaseArch: "universal",
@@ -593,6 +704,7 @@ describe("local credential state and periodic verification", () => {
     saveStoredLicense({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
       releaseArch: "universal",
@@ -642,6 +754,7 @@ describe("local credential state and periodic verification", () => {
     saveStoredLicense({
       serverUrl: "https://license.example.com",
       productId: "prd_1",
+      billingEnvironment: "live" as const,
       releaseVersion: "2.4.0",
       releasePlatform: "macos",
       releaseArch: "universal",

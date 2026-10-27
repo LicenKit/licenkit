@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import os from "node:os";
 import { getMachineFingerprint } from "../lib/machine";
-import { apiActivate, ClientContractError, effectiveValidationIntervalSeconds } from "../lib/client-api";
+import { apiActivate, ClientContractError, effectiveValidationIntervalSeconds, parseBillingEnvironment } from "../lib/client-api";
 import { parseTrustedSigningKeys, verifyActivationResponse } from "../lib/credentials";
 import { SignedTokenError } from "../lib/crypto";
 import { describeClientError } from "../lib/errors";
@@ -10,6 +10,7 @@ import { saveStoredLicense } from "../lib/storage";
 export interface ActivateOptions {
   server?: string;
   product?: string;
+  billingEnvironment?: string;
   release?: string;
   releasePlatform?: string;
   releaseArch?: string;
@@ -31,6 +32,9 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
   try {
     const serverUrl = options.server || process.env.LICENKIT_SERVER_URL || "http://localhost:8787";
     const productId = required(options.product || process.env.LICENKIT_PRODUCT_ID, "Product ID");
+    const billingEnvironment = parseBillingEnvironment(
+      options.billingEnvironment ?? process.env.LICENKIT_BILLING_ENVIRONMENT ?? "live"
+    );
     const releaseVersion = required(options.release || process.env.LICENKIT_RELEASE_VERSION, "Release version");
     const releasePlatform = required(
       options.releasePlatform || process.env.LICENKIT_RELEASE_PLATFORM,
@@ -49,6 +53,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     const response = await apiActivate({
       serverUrl,
       productId,
+      billingEnvironment,
       licenseKey: normalizedLicenseKey,
       fingerprint,
       devicePlatform: diagnosticPlatform,
@@ -60,6 +65,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     try {
       await verifyActivationResponse(response, trustedSigningKeys, {
         productId,
+        billingEnvironment,
         activationId: response.activation_id,
         fingerprint,
         releaseVersion,
@@ -84,6 +90,7 @@ export async function activateCommand(licenseKey: string, options: ActivateOptio
     saveStoredLicense({
       serverUrl,
       productId,
+      billingEnvironment,
       releaseVersion,
       releasePlatform,
       releaseArch,

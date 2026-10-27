@@ -193,6 +193,50 @@ export interface AuthDictionary {
   connectionFailedTitle: string;
   connectionFailedDescription: string;
   reconnectButton: string;
+  forgotPassword: string;
+}
+
+export interface PasswordResetDictionary {
+  requestTitle: string;
+  requestDescription: string;
+  requestButton: string;
+  acceptedTitle: string;
+  acceptedDescription: string;
+  resetTitle: string;
+  resetDescription: string;
+  newPassword: string;
+  passwordHint: string;
+  confirmPassword: string;
+  passwordMismatch: string;
+  resetButton: string;
+  successTitle: string;
+  successDescription: string;
+  invalidLink: string;
+  requestAgain: string;
+  backToLogin: string;
+  verificationFailed: string;
+  verificationLoading: string;
+}
+
+export interface RecoveryCredentialDictionary {
+  title: string;
+  description: string;
+  saveTitle: string;
+  saveDescription: string;
+  downloadStarted: string;
+  downloadFailed: string;
+  downloadAgain: string;
+  saved: string;
+  useCredential: string;
+  recoverTitle: string;
+  recoverDescription: string;
+  credentialLabel: string;
+  uploadLabel: string;
+  fileInvalid: string;
+  regenerate: string;
+  regenerateHint: string;
+  verifyTitle: string;
+  verifyDescription: string;
 }
 
 export interface InvitationAcceptDictionary {
@@ -953,6 +997,8 @@ export interface LocaleDictionary {
   topbar: TopbarDictionary;
   settings: SettingsDictionary;
   auth: AuthDictionary;
+  passwordReset: PasswordResetDictionary;
+  recoveryCredential: RecoveryCredentialDictionary;
   invitationAccept: InvitationAcceptDictionary;
   overview: OverviewDictionary;
   products: ProductsDictionary;

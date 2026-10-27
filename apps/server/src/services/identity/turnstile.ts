@@ -1,6 +1,7 @@
 import { AppError } from "../../middleware/error";
 
 export const CUSTOMER_MAGIC_LINK_TURNSTILE_ACTION = "customer_magic_link";
+export const PASSWORD_RESET_TURNSTILE_ACTION = "admin_password_reset";
 
 interface TurnstileRuntimeEnv {
   TURNSTILE_SECRET_KEY?: string;
@@ -26,7 +27,7 @@ const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverif
 function configurationError(): AppError {
   return new AppError(
     "TURNSTILE_CONFIGURATION_ERROR",
-    "Turnstile is not configured for Customer authentication",
+    "Turnstile is not configured for this authentication request",
     503,
   );
 }
@@ -59,6 +60,12 @@ function errorCodes(value: unknown): string[] {
  */
 export async function verifyCustomerMagicLinkTurnstile(
   input: VerifyCustomerMagicLinkTurnstileInput,
+): Promise<void> {
+  return verifyTurnstile({ ...input, action: CUSTOMER_MAGIC_LINK_TURNSTILE_ACTION });
+}
+
+export async function verifyTurnstile(
+  input: VerifyCustomerMagicLinkTurnstileInput & { action: string },
 ): Promise<void> {
   const secret = input.env.TURNSTILE_SECRET_KEY?.trim();
   if (!secret || secret.startsWith("replace-with-")) throw configurationError();
@@ -107,7 +114,7 @@ export async function verifyCustomerMagicLinkTurnstile(
 
   if (
     result.success !== true
-    || result.action !== CUSTOMER_MAGIC_LINK_TURNSTILE_ACTION
+    || result.action !== input.action
     || result.hostname?.trim().toLowerCase() !== expectedHostname
   ) {
     throw new AppError(
@@ -118,7 +125,7 @@ export async function verifyCustomerMagicLinkTurnstile(
         provider: "cloudflare_turnstile",
         errorCodes: errorCodes(result["error-codes"]),
         action: result.action ?? null,
-        actionMatched: result.action === CUSTOMER_MAGIC_LINK_TURNSTILE_ACTION,
+        actionMatched: result.action === input.action,
         hostnameMatched: result.hostname?.trim().toLowerCase() === expectedHostname,
       },
     );

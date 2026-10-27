@@ -56,6 +56,7 @@ const ALL_ROLE_ROUTE_KEYS = [
   "GET /api/v1/admin/system/issues",
   "PATCH /api/v1/admin/profile",
   "POST /api/v1/admin/profile/password",
+  "POST /api/v1/admin/profile/recovery-credential",
 ] as const;
 
 const OWNER_ONLY_ROUTE_KEYS = [
