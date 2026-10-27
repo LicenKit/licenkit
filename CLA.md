@@ -2,7 +2,7 @@
 
 版本：`1.0` · 发布日期：2026-10-27
 
-**CLA v1.0 确认流程已启用。** 请阅读英文条款，并使用自己的 GitHub 账号在 PR（合并请求）中发表一条明确同意本版本的评论，授权范围为该评论中确认的本次 PR 贡献。
+**向本仓库提交供合并的 PR（合并请求），即表示您同意 CLA v1.0 的英文条款，并将该 PR 中您有权授权的贡献按本协议授权。** 请在提交前阅读完整条款，特别留意商业、专有及多层级再许可和项目转让安排。本规则适用于本版本及提交提示发布后新提交的 PR。
 
 英文为唯一确认文本，中文仅帮助理解。具体确认方法见 [贡献指南](./CONTRIBUTING.md#如何确认-cla)。
 
@@ -10,9 +10,9 @@
 
 The English terms are the sole agreement text. The Chinese explanation is for reference only.
 
-Thank you for contributing to LicenKit. This agreement records the permissions You grant for the Contribution identified in Your PR confirmation.
+Thank you for contributing to LicenKit. This agreement records the permissions You grant for the Contribution You submit in a pull request ("PR") for inclusion in LicenKit.
 
-1. **Parties and contribution.** “We” means the individual holding the GitHub account [mixBayes](https://github.com/mixBayes), user ID **147024756**, when this agreement is first formally enabled, or a transferee under clause 7. “You” means the contributing rights holder, personally or through an authorized representative. “Contribution” means work You intentionally submit for inclusion in [LicenKit](https://github.com/LicenKit/licenkit) and identify in Your confirmation.
+1. **Parties and contribution.** “We” means the individual holding the GitHub account [mixBayes](https://github.com/mixBayes), user ID **147024756**, when this agreement is first formally enabled, or a transferee under clause 7. “You” means the contributing rights holder, personally or through an authorized representative. “Contribution” means work You intentionally submit in a PR for inclusion in [LicenKit](https://github.com/LicenKit/licenkit), to the extent You own or are authorized to license that work.
 
 2. **Copyright licence.** You keep ownership of Your Contribution and remain free to use or license it elsewhere. To the extent permitted by law, You grant Us a perpetual, worldwide, non-exclusive, royalty-free, irrevocable licence to use, reproduce, modify, display, perform and distribute the Contribution, including derivative works, and to sublicense these rights through multiple tiers. Transfer is governed by clause 7, and the licence is subject to clause 4. Rights not granted remain Yours.
 
@@ -26,17 +26,17 @@ Thank you for contributing to LicenKit. This agreement records the permissions Y
 
 7. **Project transfer.** We may lawfully transfer this agreement's rights and obligations with LicenKit or its related business, including an acquisition, provided the transferee agrees in writing to uphold all rights and obligations under this agreement, including clause 4.
 
-You accept version 1.0 of this agreement by posting a comment from Your own GitHub account in the PR, expressly agreeing to its English terms and licensing the Contribution identified in that PR confirmation under this agreement.
+By submitting a PR from Your own GitHub account for inclusion in LicenKit after version 1.0 and its submission notice have been published, You agree to these English terms and license the Contribution in that PR under this agreement. This does not automatically cover earlier contributions or grant rights that You do not own or have authority to license.
 
 ## 中文简明解释（不替代英文条款）
 
-- 初始接收方是 mixBayes 账号持有人本人（ID 147024756）；贡献范围以本人确认的 PR 内容为准。
+- 初始接收方是 mixBayes 账号持有人本人（ID 147024756）；贡献范围为您在本次 PR 中提交且有权授权的内容。
 - 您保留版权，可继续自行使用或许可自己的贡献；项目取得非独占、免许可费、永久且在法律允许范围内不可撤销的许可，并可多层级再许可。
 - 专利许可仅覆盖您有权许可、且实施贡献本身或其与 LicenKit 结合时涉及的专利权利要求。
 - 项目可使用商业或专有许可，同时按提交时适用的项目公开许可证另行许可贡献，保留既有 AGPL 等公开许可权利。
 - 您需有权授权并取得必要的雇主或其他权利人同意，区分和披露第三方材料。
 - 随项目或相关业务收购等情形合法转让时，受让方须书面承担协议的全部权利和义务。
-- 除权属及权限确认外，贡献按现状提供；本人在 PR 评论中明确同意 v1.0，并按该协议授权本次 PR 中确认的贡献。
+- 除权属及权限确认外，贡献按现状提供；本版本及提交提示发布后，提交供合并的 PR 即表示同意 v1.0，并按本协议授权本次 PR 中您有权授权的贡献，不自动覆盖历史贡献或其他权利人的权利。
 
 PR 确认方法、共同作者与雇主核查见 [CONTRIBUTING.md](./CONTRIBUTING.md)；版本留存和合并核查见 [CLA 维护说明](./docs/internal/zh-CN/cla-administration.md)。
 
