@@ -6,9 +6,10 @@ LicenKit 的生产部署包含：
 
 - Cloudflare Worker API；
 - D1 数据库与 Scheduled Trigger；
-- `/admin` 管理控制台。
+- `/admin/` 管理控制台；
+- `/` 的 Site（前台站点），包含产品展示、购买入口、邮箱登录和“我的授权”。
 
-产品官网、购买结果页、Magic Link 页面和 Customer Portal 不由 LicenKit 部署。需要这些页面时，请按 [Customer Site API 与页面清单](./customer-site-integration.md)在使用方站点中实现。
+Site 的内置文件位于 `apps/site/builtin/`，使用方只需把需要替换的文件放进 `apps/site/custom/`。每次请求先读取 custom，只有文件不存在才使用 builtin；页面与它引用的资源分别选择。custom 初始为空，商品默认未配置；配置商品与 Paddle 价格前仍可使用客户登录和授权管理。页面、公开配置和按文件定制说明见 [Site 定制与 API 接入](./customer-site-integration.md)。
 
 ## 2. 准备环境
 
@@ -38,9 +39,10 @@ pnpm exec wrangler d1 create licenkit-db
 - Scheduled Trigger；
 - `observability.enabled=true`；
 - `ENVIRONMENT`、`APP_VERSION` 和公开的 `TURNSTILE_SITE_KEY`；
-- Admin 静态资产目录仍为 `./dist`。
+- 静态资产目录为 `./dist`，其中 `admin/` 保存后台，`__site/builtin/` 和 `__site/custom/` 分别保存两套 Site 文件；
+- 静态资源先经过 Worker 执行文件选择，`html_handling` 与 `not_found_handling` 均为 `none`，页面路径显式映射，避免缺失文件自动变成其他页面。
 
-Admin/API 与 Customer Site 地址属于 Instance 数据，不写入 Wrangler。Setup 保存 `admin_api_url` 与 `customer_site_url`：前者必须是当前访问 Setup 的 Worker Origin，后者是用户自己的官网或 Customer Portal 基础地址。服务端按请求 Origin 找到 Instance，再从该 Instance 的 `customer_site_url` 得到唯一允许携带 Customer Cookie 的页面 Origin。两个地址可以跨 Origin，但必须保持同协议、同可注册站点。正式环境及普通域名必须使用 HTTPS；仅当 `ENVIRONMENT` 明确不是 `production`，且 hostname 精确为 `localhost` 或 `127.0.0.1` 时，才允许 HTTP 本地开发。
+Admin/API 与 Site 地址属于 Instance 数据，不写入 Wrangler。Setup 保存 `admin_api_url` 与 `customer_site_url`：前者必须是当前访问 Setup 的 Worker Origin，后者是前台站点基础地址，用于生成客户邮件登录链接。新实例默认填写当前 Worker Origin，使用内置 Site 时保留该地址；自行托管站点可继续填写自己的地址，已有实例不会自动改写。服务端按请求 Origin 找到 Instance，再从该 Instance 的 `customer_site_url` 得到唯一允许携带 Customer Cookie 的页面 Origin。两个地址可以跨 Origin，但必须保持同协议、同可注册站点。正式环境及普通域名必须使用 HTTPS；仅当 `ENVIRONMENT` 明确不是 `production`，且 hostname 精确为 `localhost` 或 `127.0.0.1` 时，才允许 HTTP 本地开发。
 
 `wrangler.jsonc` 不保存 Secret。测试和正式环境需要独立的 D1 与 Secret，但不应使用不同业务流程。
 
@@ -141,17 +143,17 @@ https://你的域名/admin/
 
 1. 只提交 `INITIAL_SETUP_TOKEN` 到 `POST /api/v1/setup/verify-token`；验证不写数据库，Token 只保存在当前页面内存，刷新后必须重新输入；
 2. 收集首位 User 的显示名称、邮箱和密码，不单独持久化；
-3. 收集首个 Instance 的名称、LicenKit Admin/API 地址和 Customer Site 地址，最后一次性提交完整数据到 `POST /api/v1/setup`；Instance ID 由服务端自动生成。
+3. 收集首个 Instance 的名称、LicenKit Admin/API 地址和 Site 地址，最后一次性提交完整数据到 `POST /api/v1/setup`；Instance ID 由服务端自动生成。
 
 最终提交使用 `setup_token`、`user` 与 `instance` 三段 JSON。服务端重新验证 Token 和初始化状态，并在同一个 D1 原子批次中创建 User、Instance、Owner Membership、Admin Session、Setup 审计和固定 `deployment_bootstrap(singleton_key='deployment')` 完成记录；任一步失败全部回滚，并发提交只有一个成功。其中：
 
-- Setup 页面把当前 `window.location.origin` 默认填入 `adminApiUrl`；服务端要求它与实际 Setup Worker Origin 完全一致；
+- Setup 页面把当前 `window.location.origin` 默认填入 `adminApiUrl` 和 `customerSiteUrl`；服务端要求 `adminApiUrl` 与实际 Setup Worker Origin 完全一致；
 - Admin 固定为 `adminApiUrl + /admin/`，API 固定为 `adminApiUrl + /api/v1`；
-- `customerSiteUrl` 是用户自己的官网地址，用于 Customer Portal、Magic Link 和 Turnstile hostname；它可以包含基础路径，但必须与 `adminApiUrl` 同协议、同可注册站点。
+- `customerSiteUrl` 是前台站点地址，用于“我的授权”、Magic Link 和 Turnstile hostname；使用内置 Site 时填写当前 Worker Origin。自行托管站点的地址可以包含基础路径，但仍必须与 `adminApiUrl` 同协议、同可注册站点。
 
 Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮箱和密码登录，不提交 Instance 标识。确认 Owner 可以登录后，从部署环境移除 `INITIAL_SETUP_TOKEN`。
 
-管理端的 Instance 页面只读展示服务端生成的 Instance ID、名称、LicenKit Admin/API 地址、Customer Site 地址和状态；当前自部署只要求把 Admin/API 域名绑定到对应 Worker，不显示 CNAME 或托管证书配置，也不提供状态修改、第二个 Instance 创建或切换入口。Profile 中邮箱只读；修改密码必须验证当前密码，并撤销该 User 除当前请求外的其他 Admin Session。Members 页面由 active Owner 管理 Invitation 与 Membership：邀请、改角色、暂停、恢复、软移除均不允许修改其他 User 的身份资料，最后一个 active Owner 不能被降级、暂停或移除。
+管理端的 Instance 页面只读展示服务端生成的 Instance ID、名称、LicenKit Admin/API 地址、Site 地址和状态；当前自部署只要求把 Admin/API 域名绑定到对应 Worker，不显示 CNAME 或托管证书配置，也不提供状态修改、第二个 Instance 创建或切换入口。Profile 中邮箱只读；修改密码必须验证当前密码，并撤销该 User 除当前请求外的其他 Admin Session。Members 页面由 active Owner 管理 Invitation 与 Membership：邀请、改角色、暂停、恢复、软移除均不允许修改其他 User 的身份资料，最后一个 active Owner 不能被降级、暂停或移除。
 
 ## 7. 外部服务配置
 
@@ -174,17 +176,56 @@ Setup 成功后会永久关闭初始化入口。管理员之后只用全局邮�
 
 每个 Paddle 环境建立一条 URL Notification Destination：使用 Admin 显示的环境回调 URL，将 `traffic_source` 设为 `all`（Platform, Simulation），保存该目标生成的 Secret。迁移旧配置时停用旧 Simulation-only 目标。仅有一次性 Offer 时订阅 `customer.created`、`customer.updated`、`transaction.completed`、`adjustment.created`、`adjustment.updated`；存在订阅 Offer 时再加入 `subscription.created`、`subscription.updated`。可在 Paddle Simulator 中逐类发送 Single event 检查模拟投递；这不是上线门禁，也不能替代真实购买。Sandbox 上线后通过管理后台发起普通购买测试，Live 上线后由管理员自行验证真实购买。
 
-## 8. Customer Site 路由
+## 8. Site 路由与站点切换
 
-Customer Site 与 LicenKit API 可以使用同站但不同 Origin，例如：
+### 8.1 内置 Site
+
+使用当前 Worker Origin 作为前台站点地址时：
 
 ```text
-https://tidest.app/customer/*                 使用方 Customer 页面
-https://license.tidest.app/api/v1/customer/*  LicenKit Customer API
-https://license.tidest.app/admin/*             LicenKit Admin
+https://license.example.com/                      Site 首页
+https://license.example.com/pricing               产品与价格
+https://license.example.com/customer/login        邮箱登录
+https://license.example.com/customer/auth         邮件登录确认
+https://license.example.com/customer/             我的授权
+https://license.example.com/api/v1/customer/*     Customer API
+https://license.example.com/admin/                管理后台
 ```
 
-站点调用 Customer API 时必须使用绝对 API 地址、`credentials: "include"` 和服务端返回的 CSRF Token。只部署 LicenKit 不会得到 `/customer/*` 页面。Magic Link 的固定落地路径和 Customer API 见 [Customer Site API 与页面清单](./customer-site-integration.md)。如果站点与 API 属于不同协议或不同可注册站点，Setup 会以 `SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED` 拒绝，不能只修改 CORS。
+内置 Site 当前挂在域名根路径，不需要额外托管前台项目。邮件登录仍需要有效的 Turnstile Sitekey、服务端 Secret、允许该 hostname 的 Widget，以及实例邮件配置和对应模板绑定。
+
+公开配置使用 `apps/site/custom/site.json` 整文件覆盖。它与服务端保存的站点地址用途不同：`site.json` 决定品牌、产品、Paddle 公开信息和页面调用的 API 地址；`customer_site_url` 决定邮件登录链接和允许访问 Customer API 的页面来源。前端配置不能覆盖服务端的请求来源校验。
+
+### 8.2 自行托管的站点
+
+Site 与 API 仍可使用同站但不同 Origin，例如：
+
+```text
+https://example.com/customer/*                 自行托管的客户页面
+https://license.example.com/api/v1/customer/*  LicenKit Customer API
+https://license.example.com/admin/             LicenKit Admin
+```
+
+站点调用 Customer API 时使用正确 API 地址、`credentials: "include"` 和服务端返回的 CSRF Token。跨 Origin 时使用绝对 API 地址；默认同源 Site 可以使用 `/api/v1`。如果站点与 API 属于不同协议或不同可注册站点，Setup 会以 `SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED` 拒绝，不能只修改 CORS。Magic Link 的固定落地路径和页面合同见 [Site 定制与 API 接入](./customer-site-integration.md)。
+
+### 8.3 已有实例切换到内置 Site
+
+已有实例的站点地址不会因升级自动改写，管理端的实例信息目前仍为只读。切换按明确的配置迁移执行：
+
+1. 备份 D1，记录目标 Instance ID、`admin_api_url` 和当前 `site_url`。
+2. 确认新地址为对应 Worker 的根地址，且符合现有 HTTPS、同协议及同可注册站点规则。
+3. 构建并部署 Site，验证首页、登录确认页及 `/admin/` 能访问。
+4. 由部署管理员按目标 Instance ID 定点更新 `instances.site_url`，并保留旧值条件，防止改错实例或覆盖同时发生的变更。对外 API 中该字段仍称为 `customer_site_url`，不新增字段或表结构迁移。
+5. 读回该实例，确认 `site_url`、`admin_api_url` 和部署地址一致，再重新申请邮件登录链接。
+6. 验证邮箱登录、授权查询和写操作；切换前发往旧站点地址的链接不作为新地址验收依据。
+
+只修改 `custom/site.json` 不会更新邮件地址或 Customer CORS 边界。配置迁移与页面部署是两个独立动作，应分别验证。
+
+### 8.4 自定义文件发布
+
+`pnpm dev` 会准备 Site 和首次缺少的后台构建产物，并持续检查两套 Site 文件的增删改。只检查 Site 时使用 `pnpm dev:site`，只构建 Site 时使用 `pnpm build:site`。
+
+生产修改 custom 后执行完整构建和部署，才能更新线上文件。构建只处理 `dist` 发布产物，不清理 custom 源文件；升级前仍需自行备份或用版本管理保存定制内容。部署后验证 HTML、配置、脚本和样式未被旧缓存混用。
 
 ## 9. 升级
 
@@ -193,7 +234,7 @@ https://license.tidest.app/admin/*             LicenKit Admin
 1. 阅读目标版本的迁移与配置变化；
 2. 执行类型检查、测试和构建；
 3. 对目标 D1 执行远程迁移；
-4. 部署 Worker 与 Admin；
+4. 部署 Worker、Admin 与 Site；
 5. 在 Cloudflare 远程界面检查 Cron Trigger，并通过 Cron Events 与 Workers Logs 验证 Scheduled Worker 实际触发；同时检查待处理 Inbound Event、Delivery 和当前 Instance 的 System Issue；
 6. 重新查询目标 D1 migration 历史和关键表/列，确认当前初始 Schema 已在正确数据库生效；
 7. 用独立请求验证 Admin、API、支付 Webhook 和 Email Provider 的实际环境；支付侧分别核对 Sandbox/Live 的 Platform 与 Simulator 地址、`traffic_source`、独立 Secret 和当前事件清单；

@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | Initial Setup API | 独立部署首次安装 | `INITIAL_SETUP_TOKEN`，且数据库必须未初始化 |
 | Admin API | 管理控制台和自动化工具 | 管理员 Session |
-| Customer Portal API | 客户授权中心 | Magic Link 与 Customer Session |
+| Customer API | 客户授权中心 | Magic Link 与 Customer Session |
 | Client API | 集成 LicenKit SDK 的 App | 注册码激活；记录编号与设备指纹校验 |
 | Payment Inbound Webhook | 支付平台 | 渠道原始请求签名 |
 
@@ -49,7 +49,7 @@ API 错误不得丢弃上游来源。支付和邮件投递错误在管理接口�
 
 Instance 只有一个稳定 ID。首次 Setup 使用 128 位安全随机数生成 22 位 Base64URL 字符串，不带类型前缀；它用于服务端数据关联、签名 Token 与支付 Webhook 路由。数据库和服务端内部 JSON 使用 `instance_id`，TypeScript 使用 `instanceId`，Signed License Token 使用 `ins` Claim。Client API、Swift SDK 和 CLI 不再要求调用方重复提交 Instance；Server 通过全局唯一 Product ID 解析租户边界。
 
-系统不接受由浏览器提交的 Instance 选择字段。Admin/API Origin 唯一映射 Instance，Customer 请求再校验对应的 Customer Site Origin。Instance 不属于管理员登录凭据。
+系统不接受由浏览器提交的 Instance 选择字段。Admin/API Origin 唯一映射 Instance，Customer 请求再校验对应的 Site Origin。Instance 不属于管理员登录凭据。
 
 CLI 激活只提交 Product 与构建身份，例如：
 
@@ -73,7 +73,7 @@ POST /api/v1/setup/verify-token
 POST /api/v1/setup
 ```
 
-Setup 使用三个独立页面：第一步只验证部署 Token；第二步收集首位 User 的显示名称、邮箱和密码；第三步收集首个 Instance 的名称、LicenKit Admin/API 地址与 Customer Site 地址。前两步不写数据库，Token 只保存在当前页面内存，刷新或关闭后必须重新验证。Instance ID 由服务端在最终提交时自动生成。
+Setup 使用三个独立页面：第一步只验证部署 Token；第二步收集首位 User 的显示名称、邮箱和密码；第三步收集首个 Instance 的名称、LicenKit Admin/API 地址与 Site 地址。前两步不写数据库，Token 只保存在当前页面内存，刷新或关闭后必须重新验证。Instance ID 由服务端在最终提交时自动生成。
 
 第一步请求：
 
@@ -103,7 +103,7 @@ Setup 使用三个独立页面：第一步只验证部署 Token；第二步收�
 
 `setup_token` 与部署 Secret `INITIAL_SETUP_TOKEN` 常量时间比较，不进入 URL、日志、审计详情或错误回显。验证接口与最终提交都检查精确 Origin、Secret、`deployment_bootstrap` 未完成，以及 User、Instance、Membership 仍为空，并返回 `Cache-Control: no-store`。管理员密码执行与正常登录一致的长度校验和密码 KDF，只保存 Hash。
 
-`admin_api_url` 是 LicenKit 管理后台和 API 的规范 Origin。Setup 页面默认填入当前浏览器的 `window.location.origin`，服务端要求它与实际 Setup 请求 Origin 完全一致，不能包含路径、尾随斜杠、credentials、query 或 fragment。`customer_site_url` 是用户自己的官网或 Customer Portal 基础地址，供邮件 Magic Link 和 Turnstile hostname 使用，可以包含基础路径，但不能包含 credentials、query 或 fragment。两个地址可以跨 Origin，但必须保持同协议、同可注册站点；Setup 在写入前拒绝跨站组合。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP，IPv6 loopback 当前不支持。
+`admin_api_url` 是 LicenKit 管理后台和 API 的规范 Origin。Setup 页面默认填入当前浏览器的 `window.location.origin`，服务端要求它与实际 Setup 请求 Origin 完全一致，不能包含路径、尾随斜杠、credentials、query 或 fragment。`customer_site_url` 是 Site（前台站点）的基础地址，供邮件 Magic Link 和 Turnstile hostname 使用。Setup 页面默认填入当前 Worker Origin，使用内置 Site 时保留该地址；自行托管站点可以包含基础路径，但不能包含 credentials、query 或 fragment。Site 模块命名不会改变此 API 字段名或数据库字段 `instances.site_url`。两个地址可以跨 Origin，但必须保持同协议、同可注册站点；Setup 在写入前拒绝跨站组合。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP，IPv6 loopback 当前不支持。
 
 最终提交再次验证 Token 和全部输入，并在一个 D1 原子批次中创建 User、Instance、Owner Membership、Admin Session、`instance.setup_completed` 审计和固定 `deployment_bootstrap(singleton_key='deployment')` 完成记录。任一步失败全部回滚，并发请求只能有一个成功；失败批次只有重新读取到完成记录时才转换为 `SETUP_ALREADY_COMPLETED`，否则保留原始错误。批次提交后才设置 Session Cookie；响应中断不回滚已经完成的 Setup，管理员可正常登录重建 Session。
 
@@ -605,7 +605,7 @@ POST   /api/v1/admin/customers/:customerId/sessions/revoke
 
 V1 不提供 Customer 自助修改邮箱。管理员修改 Customer 邮箱时必须规范化、检查同 Instance 唯一约束并写入审计；目标邮箱已属于另一个 Customer 时返回冲突，不自动合并。修改邮箱或禁用 Customer 必须同时吊销未消费 Magic Link 和现有 Customer Session，但不自动暂停或吊销其 License。
 
-## 5. Customer Portal API
+## 5. Customer API
 
 ### 5.1 请求 Magic Link
 
@@ -662,7 +662,7 @@ GET  /api/v1/customer/auth/csrf-token
 POST /api/v1/customer/auth/logout
 ```
 
-页面刷新后通过 `GET /customer/auth/csrf-token` 取回当前 Session 已绑定的同一个 CSRF Token；跨 Origin 时该接口验证精确 Customer Site Origin，同 Origin 时验证请求 URL Origin，并继续验证 Session Cookie、CSRF Cookie 与 Session Hash；响应返回 `Cache-Control: no-store`，不会旋转 Token。退出时吊销服务端 Customer Session 并清除 Cookie。所有跨 Origin Customer Auth、读取和写入接口都要求精确 Customer Site Origin；只有 Customer API 返回该 Origin 的 credentialed CORS 响应，Admin、Client 和 Webhook 不扩权。
+页面刷新后通过 `GET /customer/auth/csrf-token` 取回当前 Session 已绑定的同一个 CSRF Token；跨 Origin 时该接口验证精确 Site Origin，同 Origin 时验证请求 URL Origin，并继续验证 Session Cookie、CSRF Cookie 与 Session Hash；响应返回 `Cache-Control: no-store`，不会旋转 Token。退出时吊销服务端 Customer Session 并清除 Cookie。所有跨 Origin Customer Auth、读取和写入接口都要求精确 Site Origin；只有 Customer API 返回该 Origin 的 credentialed CORS 响应，Admin、Client 和 Webhook 不扩权。
 
 ### 5.3 当前 Customer 与 License
 

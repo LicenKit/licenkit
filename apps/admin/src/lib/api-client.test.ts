@@ -143,7 +143,7 @@ describe("Admin API JSON boundary", () => {
       requestId: "req_123",
     });
     expect(formatApiError(errorWithTranslation)).toBe(
-      "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED: 官网地址必须与管理后台使用相同的主域名，且均为 HTTPS · req_123",
+      "SETUP_CUSTOMER_SITE_CROSS_SITE_UNSUPPORTED: 前台站点地址必须与管理后台使用相同的主域名，且均为 HTTPS · req_123",
     );
 
     const errorUnknown = new ApiError({

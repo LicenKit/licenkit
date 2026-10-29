@@ -13,6 +13,7 @@ LicenKit 是面向独立开发者和小型软件团队的自托管软件授权�
 - 使用激活记录编号和设备指纹完成在线设备校验；
 - 可选签发 Ed25519 Signed License Token，供客户端本地验证授权快照，包括无网络场景；
 - 提供基于 Magic Link 和 Customer Session 的客户自助 API，用于查看 License、释放设备席位和进入支付平台管理订阅；
+- 提供 Site（前台站点），包含产品展示、购买入口、邮箱登录和授权管理，并支持按文件定制；
 - 通过 Instance 的 Email Integration 发送首次发码、注册码找回、安全重置、Customer Magic Link 和成员邀请通知；
 - 保存支付入站事件、邮件投递状态、重试次数和审计记录，支持失败诊断与恢复；
 - 天然支持多租户体系。
@@ -52,6 +53,8 @@ LicenKit 将数据库中的入站事件和 Delivery 作为异步任务的事实�
 ```text
 apps/server             Hono + Cloudflare Workers API
 apps/admin              React 管理控制台
+apps/site/builtin       Site 内置页面与公开资源
+apps/site/custom        用户自己的 Site 文件，初始为空
 apps/cli                命令行客户端
 wrangler.jsonc          当前实例的 Cloudflare Worker 配置
 docs                    使用者文档、维护者参考与过程记录
@@ -83,13 +86,15 @@ pnpm build
 
 ## 部署与站点边界
 
-LicenKit 的生产部署只包含 Worker API、Scheduled Worker 和 `/admin` 管理控制台。根路径重定向到 `/admin/`；产品官网、购买结果页、Magic Link 页面和 Customer Portal 不由 LicenKit 提供，也不在仓库中保存前端示例源码。
+LicenKit 的生产部署包含 Worker API、Scheduled Worker、`/admin/` 管理控制台，以及根路径 `/` 的 Site（前台站点）。内置 Site 包含产品与价格、购买结果、邮箱登录、我的授权及授权详情页面，授权详情支持设备和订阅管理。默认商品列表为空，配置自己的产品和 Paddle 价格后才提供购买入口；尚未配置商品时，已购客户仍可进入授权管理。
 
-Setup 为每个 Instance 保存 `admin_api_url` 与 `customer_site_url`。前者是 LicenKit 管理后台和 API 的公开 Origin，Setup 页面默认读取当前 Worker Origin，服务端也要求两者完全一致；后者是用户自己的官网及 Customer Portal 基础地址，用于生成邮件中的 Magic Link。两者可以跨 Origin，但必须保持同协议、同可注册站点，才能使用 `SameSite=Lax` Customer Cookie。Customer CORS 按请求到达的 `admin_api_url` 找到 Instance，再只允许该 Instance 的 `customer_site_url` Origin，不再使用 Wrangler 全局变量。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP 本地开发。自部署只需把 Admin/API 域名绑定到对应 Worker，不显示 CNAME 或托管证书配置。
+内置文件位于 `apps/site/builtin/`，需要定制的文件放进 `apps/site/custom/`。每次请求先读取 custom 对应文件，只有文件不存在时才读取 builtin 同名文件；页面、脚本、样式和图片分别选择。自定义文件出错时明确报告，不悄悄切换版本。公开配置 `site.json` 按整文件替换，不逐字段合并。生产修改需要重新构建和部署，用户应自行备份或用版本管理保存 custom 内容。
+
+Setup 为每个 Instance 保存 `admin_api_url` 与 `customer_site_url`。前者是 LicenKit 管理后台和 API 的公开 Origin，Setup 页面默认读取当前 Worker Origin，服务端也要求两者完全一致；后者是前台站点的基础地址，用于生成邮件中的 Magic Link。新建实例时两个地址均默认填入当前 Worker Origin，使用内置页面时保留该前台地址。已有实例的站点地址不自动修改，自行托管的站点仍可按原方式接入。两者可以跨 Origin，但必须保持同协议、同可注册站点，才能使用 `SameSite=Lax` Customer Cookie。Customer CORS 按请求到达的 `admin_api_url` 找到 Instance，再只允许该 Instance 的 `customer_site_url` Origin，不再使用 Wrangler 全局变量。正式环境及普通域名必须使用 HTTPS；只有显式非正式环境的 `localhost` 或 `127.0.0.1` 允许 HTTP 本地开发。自部署只需把 Admin/API 域名绑定到对应 Worker，不显示 CNAME 或托管证书配置。
 
 根目录 `wrangler.jsonc` 是当前部署唯一的 Worker 配置来源。Wrangler 由根包直接依赖，因为它负责整个 LicenKit 部署的开发、迁移、构建和发布；`apps/server` 只负责 Worker 服务端源码及其测试。直接在根配置中填写数据库 ID、变量和环境，不再从其他目录选择或合并配置。根配置显式开启 Workers Observability，远程验收还必须在 Cloudflare Cron Events 与 Workers Logs 中确认调度真实触发。
 
-`dist` 只包含 LicenKit Admin 的部署资产。使用方需要实现的页面、Customer API 和安全合同见[Customer Site 接入清单](./docs/zh-CN/customer-site-integration.md)。
+`dist/admin/` 保存管理后台资源，`dist/__site/builtin/` 和 `dist/__site/custom/` 分别保存两套 Site 文件；内部目录不是公开访问入口。页面路径、公开配置、文件定制和客户接口合同见 [Site 定制与 API 接入](./docs/zh-CN/customer-site-integration.md)。现有 API 字段 `customer_site_url` 保持原名。
 
 测试与正式环境使用相同模块和调用流程，只替换资源地址、Secret 和支付平台环境等配置。
 

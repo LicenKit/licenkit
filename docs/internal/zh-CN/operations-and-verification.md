@@ -7,8 +7,9 @@
 - 根 `wrangler.jsonc` 是 Worker、D1、Assets、Cron 和 Observability 的部署来源；
 - `apps/server` 是 Hono/Workers API 与 Scheduled Handler；
 - `apps/admin` 构建到 `dist/admin`；
-- Customer Site 由使用方独立实现和部署，本仓库不包含模板站点；
-- Customer Site 仍由使用方实现和验收，不是 Admin 的一部分；
+- `apps/site/builtin` 提供 Site 内置页面，`apps/site/custom` 初始为空并供使用方按文件定制；
+- 两套 Site 文件分别构建到 `dist/__site/builtin` 和 `dist/__site/custom`，运行时仅在 custom 文件不存在时读取 builtin；
+- `/` 为 Site 首页，`/admin/` 为管理后台；自行托管 Site 的接入合同继续保留；
 - 空库按编号执行全部 migration；既有主线数据库执行尚未应用的增量 migration，不提供旧原型的数据兼容层。
 
 ## 2. 本地命令
@@ -31,7 +32,7 @@ corepack pnpm --filter @licenkit/cli run typecheck
 corepack pnpm --filter @licenkit/cli run test
 ```
 
-`pnpm run build` 会清理构建输出、构建 CLI/Admin，并用 Wrangler dry-run 生成 Worker 产物。它不部署远程资源。
+`pnpm run build` 会清理构建输出、构建 CLI/Admin/Site，并用 Wrangler dry-run 生成 Worker 产物。它不部署远程资源。`pnpm build:site` 只构建两套 Site 资源，`pnpm dev:site` 按文件元数据持续检查增删改。根 `pnpm dev` 会准备 Site、补齐缺少的 Admin 构建产物并启动开发服务。
 
 修改数据库迁移后，运行 `pnpm docs:schema` 重新生成当前结构的审阅副本。`pnpm test` 会先检查副本同步，再运行各分包测试；历史迁移与其快照保留，不手工改写成最新结构。
 
@@ -62,7 +63,7 @@ Provider Webhook Secret、API Secret 和 Email API Key 通过 Admin 加密进入
 
 非敏感变量由根 `wrangler.jsonc` 管理。测试和正式环境使用相同模块、API 与流程，差异只来自部署配置和 Provider 环境。
 
-Setup 中的 `admin_api_url` 必须与实际访问 Setup 的 Worker Origin 一致；`customer_site_url` 是用户自己的官网或 Customer Portal 地址。两者保存在 Instance 中，必须同协议、同可注册站点；正式环境及普通域名必须为 HTTPS。仅显式非正式环境的 `localhost` 与 `127.0.0.1` 允许 HTTP，IPv6 loopback 不支持。远程验收要用真实 Admin/API Host 和 Customer Site Origin 验证 Instance 解析、Customer 预检、带 Cookie 请求和错误响应，并验证同 Origin GET 在浏览器不携带 Origin 时仍可读取，同时确认 Admin、Client、Webhook 路径没有 Customer CORS Header。
+Setup 中的 `admin_api_url` 必须与实际访问 Setup 的 Worker Origin 一致；`customer_site_url` 是 Site 基础地址，新实例默认当前 Worker Origin；也可填写自行托管站点的地址，已有实例不自动改写。两者保存在 Instance 中，必须同协议、同可注册站点；正式环境及普通域名必须为 HTTPS。仅显式非正式环境的 `localhost` 与 `127.0.0.1` 允许 HTTP，IPv6 loopback 不支持。远程验收要用真实 Admin/API Host 和 Site Origin 验证 Instance 解析、Customer 预检、带 Cookie 请求和错误响应，并验证同 Origin GET 在浏览器不携带 Origin 时仍可读取，同时确认 Admin、Client、Webhook 路径没有 Customer CORS Header。
 
 Customer Session 的 `last_seen_at` 是非关键遥测：仅最终 2xx best-effort 更新。失败日志使用 `CUSTOMER_SESSION_LAST_SEEN_UPDATE_FAILED`，包含 `requestId`、`instanceId`、`sessionId`、底层错误类型、受限长度的错误码与脱敏消息；不得记录 Cookie、Token、SQL bind 或请求包体，且不得覆盖业务响应。
 
@@ -77,7 +78,7 @@ Customer Session 的 `last_seen_at` 是非关键遥测：仅最终 2xx best-effo
 根配置至少声明：
 
 - D1 binding `DB`；
-- Admin 静态 Assets；Customer Site 由使用方独立部署；
+- Admin 和 Site 共用静态 Assets 绑定；相关请求先经过 Worker，显式映射页面文件；
 - 每分钟 Scheduled Trigger；
 - Workers Observability `enabled: true`。
 
@@ -123,7 +124,7 @@ corepack pnpm run db:migrate:remote
 
 三个步骤使用独立布局：验证 Token、创建 User、创建 Instance。第二、三步只在浏览器内存收集，最终通过一次 `POST /api/v1/setup` 提交。
 
-检查字段和文案没有把显示名称当登录名，没有要求实例标识参与登录，也没有显示第二个 Instance 或切换入口。
+检查字段和文案没有把显示名称当登录名，没有要求实例标识参与登录，也没有显示第二个 Instance 或切换入口。Admin/API 与前台站点地址均默认当前 Origin，Site URL 文案说明内置页面与自行托管站点的选择；不能自动改写已有实例地址。
 
 ### 5.3 原子提交
 
@@ -200,7 +201,7 @@ corepack pnpm run db:migrate:remote
 4. 失败请求返回 `CUSTOMER_LOGIN_CHALLENGE_NOT_CONSUMABLE` 的可追踪链路；
 5. 失败批次不留下额外 Session、审计或 Delivery 变化；
 6. 过期或已撤销 Token 同样无副作用；
-7. Customer Site 的 Fragment 处理由使用方站点实际验收，服务端测试不能替代页面验收。
+7. 内置 Site 及使用方定制页均需实际验收 Fragment 立即清理、无第三方资源及用户明确操作后才消费；服务端测试不能替代页面验收。
 
 ## 9. 支付与宽限期
 
@@ -272,9 +273,35 @@ git diff --check
 
 1. 实际 Worker 版本和预期提交/产物一致；
 2. 远程 D1 migration 已应用；
-3. Admin、API 和 Assets 可访问；
+3. Admin、Site、API 和 Assets 可访问，未公开内部 `/__site` 路径；
 4. Observability、Cron Trigger、Cron Events 和 Workers Logs 生效；
 5. Setup 或登录、Membership 权限、Customer Magic Link、Webhook 幂等至少各有一条目标环境证据；
-6. Customer Site 由实际使用方站点完成页面与路由验收。
+6. Site 完成目标部署的页面、文件覆盖、缓存及客户操作验收；自行托管站点也需完成自己的页面与路由验收。
 
 本地测试、dry-run、部署成功回执和生产业务闭环是四类不同证据，报告时必须分别说明。
+
+## 13. Site 验收
+
+### 13.1 文件覆盖与发布边界
+
+- custom 为空时，内置首页、价格、购买结果、邮箱登录、登录确认、我的授权、授权详情及 404 页面可访问。
+- 单独覆盖 HTML、样式、脚本、图片或 site.json 时，仅对应文件切换到 custom，页面仍可引用其他内置资源。
+- 删除自定义文件并更新部署后恢复内置文件；空文件保持为空，不误判为缺失。
+- custom 读取异常或返回 500 不读取 builtin；非法 JSON、无效配置或脚本错误能明确诊断。
+- 新增普通页面和目录首页按文件映射；未知页面返回 404，缺失资源不会变成 HTML 首页。
+- GET/HEAD 正确返回内容与元信息；模板不能覆盖 API、后台和内部打包路径，也不能发布控制文件、隐藏凭据或越界文件。
+- 构建保留 builtin/custom 两套产物，不修改源码；开发文件检查覆盖增删改和嵌套目录，失败明确报告。
+- 发布后验证 HTML、公开配置及固定名称的脚本样式没有被旧缓存混用；登录页面及客户数据响应禁止缓存。
+
+### 13.2 页面与客户操作
+
+- 默认商品列表为空时，不出现虚构商品或有效购买按钮，客户仍能进入登录流程；登录服务配置缺失只影响相应能力。
+- 已配置商品时，价格展示与公开配置一致，环境和前端 Token 匹配，每次 Checkout 只有一个 Price、数量 1。
+- 邮件登录凭证立即从地址栏清理，只保存在内存，点击确认前不消费；语言切换不能丢失仍在处理的凭证或新注册码。
+- 授权列表和详情只读取当前客户数据，设备和订阅加载失败只影响相应区域。
+- 设备释放、重新获取注册码、安全重置分别按接口执行，文案明确旧码失效和设备是否保留。
+- 新注册码只在当前成功结果中展示，邮件通知异常单独说明，不能把已成功操作显示为失败；Provider 接收不等于最终送达。
+- 需要最近认证时引导重新邮件登录，不自动重做写请求；CSRF 失败也不自动重试写入。
+- 桌面、手机、键盘及简体中文/英文均检查实际页面；支付结果页不将浏览器回调视为付款或发证事实。
+
+页面测试使用模拟 API、邮件或 Paddle 时，记录替代范围。真实邮件送达、Paddle Sandbox/Live 购买、远程 Cookie 和部署后的缓存需要各自的目标环境证据，不能用本地成功替代。

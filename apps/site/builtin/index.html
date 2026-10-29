@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Products and licenses</title>
+  <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/site.css"><link rel="stylesheet" href="/assets/theme.css">
+  <script type="module" src="/assets/public.js"></script>
+</head>
+<body data-page="home">
+  <a class="skip-link" href="#main-content" data-i18n="skipContent">Skip to content</a>
+  <header class="site-header"><div class="container header-inner">
+    <a class="brand" href="/"><img src="/assets/logo.svg" width="32" height="32" alt=""><span data-site-name>LicenKit</span></a>
+    <nav class="site-nav" data-site-navigation aria-label="Main navigation"><a href="/pricing" data-nav="pricing" data-i18n="navPricing">Products &amp; pricing</a><a href="/customer/" data-nav="customer" data-i18n="navLicenses">My licenses</a></nav>
+    <label class="language-field"><span class="sr-only" data-i18n="languageLabel">Language</span><select data-locale-select><option value="en-US">English</option><option value="zh-CN">简体中文</option></select></label>
+  </div></header>
+  <main id="main-content" class="container page-main">
+    <div data-page-error hidden></div>
+    <section class="hero">
+      <div class="hero-copy"><h1 data-i18n="homeTitle">Products and licenses, in one place.</h1><p data-site-description data-i18n="homeIntro">Explore our products, find the right plan, and keep your purchased licenses close at hand.</p><a class="button" href="/pricing" data-i18n="viewPricing">Explore products</a></div>
+      <aside class="access-panel"><span class="access-mark" aria-hidden="true">↗</span><h2 data-i18n="existingCustomer">Already purchased?</h2><p class="muted" data-i18n="existingIntro">Use the email address from your purchase to find your licenses, manage devices, and view subscriptions.</p><a class="text-link" href="/customer/" data-i18n="openLicenses">View my licenses</a></aside>
+    </section>
+    <section aria-labelledby="products-heading"><div class="section-heading"><h2 id="products-heading" data-i18n="productsHeading">Our products</h2><p data-i18n="productsIntro">Choose a product to see its available plans.</p></div><div class="product-grid" data-products aria-live="polite"></div></section>
+  </main>
+  <footer class="site-footer"><div class="container"><span data-site-name>LicenKit</span><span data-i18n="copyright">Products, purchases, and your licenses.</span><a data-support-link data-i18n="support" hidden>Contact support</a></div></footer>
+</body>
+</html>

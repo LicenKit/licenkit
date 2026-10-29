@@ -47,6 +47,7 @@ import { readDeploymentSetupState } from "./services/identity/deployment-provisi
 import { passwordResetRouter } from "./routes/password-reset.routes";
 import { recoveryCredentialRouter } from "./routes/recovery-credential.routes";
 import { runPasswordResetScheduler } from "./services/identity/password-reset";
+import { serveAdminAssets, serveSite } from "./routes/site.routes";
 
 const app = new Hono<AppContext>();
 app.onError(errorHandler);
@@ -117,20 +118,9 @@ api.route("/admin", admin);
 
 app.route("/api/v1", api);
 
-app.get("/", (c) => c.redirect("/admin/", 302));
 app.all("/admin", (c) => c.redirect("/admin/", 302));
-app.all("/admin/*", async (c) => {
-  if (c.env.ASSETS) {
-    if (["/admin/forgot-password", "/admin/reset-password", "/admin/recover-password"].includes(c.req.path)) {
-      const url = new URL(c.req.url);
-      url.pathname = "/admin/";
-      return c.env.ASSETS.fetch(new Request(url, c.req.raw));
-    }
-    return c.env.ASSETS.fetch(c.req.raw);
-  }
-  return c.text("LicenKit Admin assets are not configured.", 404);
-});
-app.all("*", (c) => c.text("Not Found", 404));
+app.all("/admin/*", serveAdminAssets);
+app.all("*", serveSite);
 
 export { app };
 export default {

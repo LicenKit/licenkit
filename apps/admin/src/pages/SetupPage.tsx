@@ -53,7 +53,7 @@ export function SetupPage({ onSetupSuccess }: { onSetupSuccess: (session: AdminS
   const [password, setPassword] = useState("");
   const [instanceName, setInstanceName] = useState("");
   const [adminApiUrl, setAdminApiUrl] = useState(() => window.location.origin);
-  const [customerSiteUrl, setCustomerSiteUrl] = useState("");
+  const [customerSiteUrl, setCustomerSiteUrl] = useState(() => window.location.origin);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
 

@@ -29,7 +29,7 @@ Deployment（运行环境）
 
 ```text
 Admin SPA ───────────────┐
-Customer Site（使用方） ─┼─ HTTPS ─> Cloudflare Worker / Hono
+Site（内置或自行托管） ─┼─ HTTPS ─> Cloudflare Worker / Hono
 CLI / Swift SDK ─────────┤                    │
 Payment Provider ────────┘                    ├─ D1
                                               ├─ Static Assets
@@ -38,7 +38,7 @@ Cloudflare Cron ─> scheduled() ───────────────�
                                               └─ Email Provider API
 ```
 
-Admin 与 API 同源部署。Customer Site 可以由使用方在同站的另一个 Origin 独立实现和托管。两者作为 `instances.admin_api_url` 与 `instances.site_url` 保存；Worker 先按请求 Origin 解析 Instance，再用该 Instance 的 Customer Site Origin 建立精确 CORS 边界。Customer Site 只通过公开 API 交互，不能直接读取 D1 或持有服务端 Secret。
+Admin、API 与内置 Site 同源部署，根路径 `/` 为 Site，`/admin/` 为后台。Site 也可以由使用方在同站的另一个 Origin 独立实现和托管。两者作为 `instances.admin_api_url` 与 `instances.site_url` 保存；Worker 先按请求 Origin 解析 Instance，再用该 Instance 的 Site Origin 建立精确 CORS 边界。Site 只通过公开 API 交互，不能直接读取 D1 或持有服务端 Secret。
 
 ## 3. 模块职责
 
@@ -70,7 +70,7 @@ Session 只绑定 User，不长期缓存 Instance 角色。
 - 原子接受、Membership、新 User/Session（如需要）与审计；
 - 与 Customer Magic Link 共享服务端一次性链接组件。
 
-Admin Invitation 页面属于 LicenKit；Customer Magic Link 页面属于使用方 Customer Site。两端通过合同测试保持相同安全机制，不虚构共享前端包。
+Invitation 接受页属于 Admin；Customer Magic Link 确认页属于 Site，可使用内置模板或由使用方定制。两端遵守同一 Fragment、内存保管和用户明确操作后消费的合同，通过测试校验，不新增共享前端包。
 
 ### M04 Product、Plan 与 Signing
 
@@ -118,7 +118,7 @@ Webhook 路径先使用 Instance ID 解析 Instance，然后只在该边界内�
 - License、设备和支付订阅读取；
 - 释放设备、普通找回和安全重置。
 
-Customer Site 的页面、路由、品牌和托管由使用方负责。
+Site 使用 `apps/site/builtin/` 提供页面，`apps/site/custom/` 提供使用方按文件定制。运行时先读取 custom，仅文件不存在时读取 builtin；页面和资源各自选择，不做内容合并或错误回退。公开 `site.json` 保存品牌、API 地址、产品与 Paddle 前端配置，按整文件替换。使用方仍可自行实现和托管 Site。
 
 ### M09 System Issue 与审计
 
@@ -127,9 +127,11 @@ Customer Site 的页面、路由、品牌和托管由使用方负责。
 - identity/instance 两类审计范围；
 - Issue 只告警，不作为产品操作门禁。
 
-### M10 Admin、CLI 与 SDK
+### M10 Admin、Site、CLI 与 SDK
 
 - Admin 提供 Instance、Members、Profile、System Issues 及共用顶部告警；
+- Site 提供产品与价格、购买提示、邮箱登录和“我的授权”页面；
+- 静态资源先经过 Worker；`html_handling=none`、`not_found_handling=none`，显式映射页面并隔离 `/admin`、`/api`、内部 `/__site`；
 - Instance 状态只读，不提供切换或新建入口；
 - CLI/SDK 对外使用 Instance 命名并验证 `ins` Claim；
 - 客户端不持有私钥或 Provider Secret。
@@ -161,7 +163,7 @@ Session Cookie
   -> instance_id + customer_id
 ```
 
-跨 Origin Customer Auth、读取和写入接口都先验证请求 Host 对应的 Instance，再验证该 Instance 的精确 Customer Site Origin；浏览器普通同 Origin GET 不携带 Origin，因此仅在请求 URL Origin 与 Customer Site Origin 相同时允许缺少该 Header。写请求始终要求 Origin，并继续校验 HttpOnly CSRF Cookie、`X-CSRF-Token` 和 Session Hash；页面只从 Magic Link 消费响应或受 Session 保护的 CSRF Bootstrap 接口取得 Token。只有返回 2xx 的 Customer Session 请求 best-effort 更新 `last_seen_at`；遥测写入失败记录独立错误链路但不覆盖业务响应，重定向、业务错误、鉴权或 CSRF 失败不会更新。
+跨 Origin Customer Auth、读取和写入接口都先验证请求 Host 对应的 Instance，再验证该 Instance 的精确 Site Origin；浏览器普通同 Origin GET 不携带 Origin，因此仅在请求 URL Origin 与 Site Origin 相同时允许缺少该 Header。写请求始终要求 Origin，并继续校验 HttpOnly CSRF Cookie、`X-CSRF-Token` 和 Session Hash；页面只从 Magic Link 消费响应或受 Session 保护的 CSRF Bootstrap 接口取得 Token。只有返回 2xx 的 Customer Session 请求 best-effort 更新 `last_seen_at`；遥测写入失败记录独立错误链路但不覆盖业务响应，重定向、业务错误、鉴权或 CSRF 失败不会更新。
 
 Customer Session 不与 Admin Session 混用。
 
@@ -252,13 +254,14 @@ System Issue 是聚合视图，不覆盖业务对象的原始错误。管理员�
 ### 10.1 Deployment 配置
 
 - Worker、D1、Assets、Cron 和 Observability：根 `wrangler.jsonc`；
-- Admin/API 与 Customer Site 安全边界：Setup 写入的 Instance 级 URL；
+- Admin/API 与 Site 安全边界：Setup 写入的 Instance 级 URL，新实例默认同源；
+- Site 公开内容：builtin/site.json 或 custom/site.json，构建及浏览器校验；部署产物分别位于 `dist/__site/builtin/` 和 `dist/__site/custom/`；
 - Setup/Encryption/Turnstile 等 Secret：Cloudflare Secrets；
 - 初始 migration：`apps/server/drizzle/0000_v1_initial.sql`。
 
 ### 10.2 Instance 配置
 
-- `instances`：随机 ID、名称、Admin/API URL、Customer Site URL、只读状态；
+- `instances`：随机 ID、名称、Admin/API URL、Site URL、只读状态；
 - Billing/Email 凭据：Admin 写入后加密存储；
 - Product：宽限期、试用；支付环境由 Offer 的 Provider 决定并固化在 License；
 - Plan：授权条款快照。
@@ -276,7 +279,7 @@ CLI           --product
 Signed Claim  ins
 ```
 
-不做别名兼容或双写。
+不做别名兼容或双写。Site 是前台模块名称，Customer 仍表示客户业务；已有 API 字段 `customer_site_url`、TypeScript 字段 `customerSiteUrl` 和 `/customer` 路径保持原合同，数据库字段仍是 `instances.site_url`。
 
 ## 11. 测试与正式环境一致性
 
@@ -292,7 +295,7 @@ Signed Claim  ins
 - 一次性链接使用 Fragment，页面立即清理，只在内存保管；
 - 所有 Instance 关联由复合外键和查询条件共同保证；
 - Admin 写请求校验 Origin 与 CSRF；
-- Customer Site 不持有服务端 Secret；
+- Site 不持有服务端 Secret；
 - 私钥不下发 CLI/SDK；客户端只配置公钥；
 - 日志和审计禁止明文敏感值。
 
@@ -307,4 +310,4 @@ Signed Claim  ins
 
 Readiness 只检查处理请求必需的 Worker/D1 绑定和数据库访问，不读取 System Issue 或 Scheduler 状态作为业务门禁。
 
-因此：代码存在 `scheduled()` 处理器不等于远程 Cron 已运行；本地测试通过也不等于远程 D1 migration、Bindings、Observability 或 Customer Site 已验收。
+因此：代码存在 `scheduled()` 处理器不等于远程 Cron 已运行；本地测试通过也不等于远程 D1 migration、Bindings、Observability 或 Site 已验收。

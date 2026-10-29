@@ -32,7 +32,7 @@ User 还可使用独立的恢复凭据。`user_recovery_credentials` 只保存�
 
 Instance 是授权业务空间，也是唯一的租户隔离边界。Product、Customer、License、支付、邮件、Customer Session、System Issue 和实例审计都必须归属明确的 Instance。
 
-Instance 只有一个稳定 ID：首次 Setup 生成不带类型前缀的 22 位 Base64URL 随机字符串，用于服务端数据关联、签名 Token 和支付 Webhook 路由。客户端配置全局唯一 Product ID，由服务端解析 Instance。Customer Portal 与 Magic Link 由 Admin/API Origin 唯一解析 Instance，不再使用第二套人工标识。
+Instance 只有一个稳定 ID：首次 Setup 生成不带类型前缀的 22 位 Base64URL 随机字符串，用于服务端数据关联、签名 Token 和支付 Webhook 路由。客户端配置全局唯一 Product ID，由服务端解析 Instance。Site 中的客户授权操作与 Magic Link 由 Admin/API Origin 唯一解析 Instance，不再使用第二套人工标识。
 
 当前自部署版创建的唯一 Instance 保持 `active`。Admin 可以展示状态，但不提供修改状态的 API 或界面；`suspended/archived` 仅为未来 SaaS 控制面预留。
 

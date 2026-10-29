@@ -164,6 +164,7 @@ describe("V1 Customer cross-Origin boundary", () => {
     );
 
     expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect((await response.json() as any).error).toMatchObject({
       code: "UNAUTHORIZED",
       request_id: "req_customer_401",

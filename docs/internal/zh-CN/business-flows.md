@@ -27,7 +27,7 @@ Admin 只在当前页面内存保存 Token。刷新、关闭标签页或返回�
 
 ### 1.3 页面三：收集首个 Instance
 
-收集实例名称、Admin/API URL 和 Customer Site URL。Instance ID 由服务端使用 128 位安全随机数自动生成，用户不填写。
+收集实例名称、Admin/API URL 和 Site URL，两个地址默认当前 Worker Origin。使用内置 Site 时保留该前台地址。Instance ID 由服务端使用 128 位安全随机数自动生成，用户不填写。
 
 最终一次提交：
 
@@ -142,9 +142,9 @@ Owner 可以修改 Membership 角色、暂停、恢复或软移除：
 
 ### 5.1 请求链接
 
-Customer Site 不提交 Instance 选择字段。服务端由请求的 Admin/API Origin 唯一解析 Instance，再在 `instance_id + email` 范围查找 Customer，执行防枚举、冷却和 Turnstile 等公开入口保护。
+Site 不提交 Instance 选择字段。服务端由请求的 Admin/API Origin 唯一解析 Instance，再在 `instance_id + email` 范围查找 Customer，执行防枚举、冷却和 Turnstile 等公开入口保护。
 
-Challenge 与 Delivery 在数据库中先创建，再调用 Provider。URL 使用 Fragment；Customer Site 负责立即清理 Fragment、只在内存保存 Token，并通过明确 POST 消费。
+Challenge 与 Delivery 在数据库中先创建，再调用 Provider。URL 使用 Fragment；Site 负责立即清理 Fragment、只在内存保存 Token，并通过明确 POST 消费。
 
 ### 5.2 原子消费与并发
 
@@ -156,7 +156,7 @@ Challenge 与 Delivery 在数据库中先创建，再调用 Provider。URL 使�
 
 ### 6.1 从产品页到 Checkout
 
-Customer Site 由使用方实现。页面从自身配置得到 Paddle Offer 信息，不从可篡改的客户端参数决定 Product 或 Plan。Customer API 由 Admin/API Origin 唯一确定 Instance。Checkout 成功页只显示支付提交状态；License 签发以已验签 Webhook 履约为准。
+Site 提供内置产品与价格页，也允许使用方按文件定制或自行实现。内置页面从有效 site.json 得到 Paddle 前端 Token、环境和 Price ID，不从可篡改的客户端参数决定 Product 或 Plan。Customer API 由 Admin/API Origin 唯一确定 Instance。Checkout 成功页只显示支付提交状态；License 签发以已验签 Webhook 履约为准。
 
 ### 6.2 Webhook 接收
 
@@ -243,13 +243,13 @@ LicenKit CLI 共享 Server 的统一请求、状态和 Signed Token 合同，但
 
 状态快照保留业务 `code` 和按字段脱敏的安全 `details`；操作结果另保留 `request_id`，使宿主应用可以把用户看到的状态与服务端日志串联。协议/凭据错误和传输失败不改写成授权终态。公开合同不接受旧字段、旧 CLI 选项、旧环境变量或旧 Claim。
 
-## 10. Customer Site 边界
+## 10. Site 边界
 
-LicenKit 提供 Customer、Magic Link、License/Activation 和 Billing API 合同，不接管使用方站点的页面、路由、品牌、Cookie UI 或托管。
+LicenKit 提供内置 Site 页面及 Customer、Magic Link、License/Activation 和 Billing API 合同。源码位于 apps/site/builtin，使用方的 apps/site/custom 按同名文件覆盖；只有文件不存在才使用 builtin，页面与资源独立选择。根路径为 Site，后台使用 /admin/，既有自行托管站点仍可按原合同接入。
 
-使用方 Customer Site 必须实现：
+内置页面和自行定制的 Site 都需要遵守：
 
-- `/customer/auth` 对应的登录入口或自身等价路由；
+- 邮件地址固定路径 `/customer/auth` 对应的登录确认页；
 - Fragment Token 读取、立即清理和内存保管；
 - License、设备和订阅管理界面；
 - 对 API 原始错误码的安全展示或支持 ID 关联。

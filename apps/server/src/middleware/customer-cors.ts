@@ -29,6 +29,7 @@ function applyCustomerCorsResponseHeaders(
 }
 
 export const customerCors: MiddlewareHandler<AppContext> = async (c, next) => {
+  c.header("Cache-Control", "no-store");
   const boundary = await resolveCustomerSiteBoundary(c.env.DB, c.req.url, c.env.ENVIRONMENT);
   const allowedOrigin = boundary.customerSiteOrigin;
   c.set("customerRequestInstanceId", boundary.instanceId);

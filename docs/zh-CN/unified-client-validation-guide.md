@@ -445,7 +445,7 @@ SDK 不会在门槛结束时自动调用 Server。检查宿主是否在冷启动
 
 ### 解绑失败后席位仍被占用
 
-保留 SDK 凭据并让用户重试。若需要服务端支持，通过 Customer Portal 或管理端释放 Activation；不要让客户端自行清空凭据来伪装成功。
+保留 SDK 凭据并让用户重试。若需要服务端支持，通过 Site 的“我的授权”或管理端释放 Activation；不要让客户端自行清空凭据来伪装成功。
 
 ### `startTrial()` 已在 Server 领取成功，但 Keychain 写入失败
 

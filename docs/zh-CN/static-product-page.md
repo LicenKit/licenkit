@@ -15,22 +15,13 @@ Paddle -> 已验签 Webhook -> LicenKit Offer -> Product + License Plan -> Licen
 
 ## 2. 静态产品页配置
 
-LicenKit 不提供产品页示例源码。使用方在自己的站点项目中静态维护：
+内置 Site 在 `/pricing` 提供产品与价格页，源码为 `apps/site/builtin/pricing.html` 及其脚本。需要修改布局时，可在 `apps/site/custom/pricing.html` 中替换页面；只调整内容时，使用 `custom/site.json` 整文件覆盖内置配置。配置结构和示例见 [Site 定制与 API 接入](./customer-site-integration.md#4-公开配置-sitejson)。
 
-- 产品 ID、名称和说明；
-- 页面内方案 ID、名称和说明；
-- 静态展示价格；
-- Paddle Price ID；
-- 一次性购买或订阅的展示类型。
+产品配置包含名称、说明以及每个方案的展示价格、Paddle Price ID；`paddle` 配置包含 Sandbox/Live 环境与对应前端公开 Token。默认 `products=[]`、`paddle=null`，不提供有效购买入口，也不影响已购客户登录。展示价格是静态文字，实际收费以 Paddle 结账窗口为准。
 
-`.env` 只保存前端公开配置：
+自行托管的产品页仍可使用自己的前端配置方式，例如 `.env` 中的公开 Client-side Token 和环境。公开配置只能放浏览器可读取的值，不能放服务端密钥。
 
-```dotenv
-VITE_PADDLE_ENVIRONMENT=live
-VITE_PADDLE_CLIENT_SIDE_TOKEN=live_...
-```
-
-Customer Portal 不需要配置 Instance 选择字段；服务端由请求的 `adminApiUrl` Origin 唯一确定 Instance。Setup 中的 `customerSiteUrl` 是用户自己的官网地址，用于生成邮件 Magic Link；`adminApiUrl` 是 LicenKit 管理后台和 API 的 Origin，Setup 页面默认读取当前 Worker Origin。两者可以跨 Origin，但必须保持同协议、同可注册站点。站点通过 `adminApiUrl` 下的绝对 API 地址调用 Customer API。Paddle Client-side Token 和 Price ID 按 Paddle 的前端合同可以公开；Paddle API Key、Webhook Secret、Email Provider API Key、Template 诊断和 Delivery 敏感负载不能进入源码、静态构建产物、日志或分析事件。
+“我的授权”页面不需要配置 Instance 选择字段；服务端由请求的 `adminApiUrl` Origin 唯一确定 Instance。Setup 中的 `customerSiteUrl` 是前台站点基础地址，用于生成邮件登录链接；新部署默认当前 Worker Origin。`adminApiUrl` 是 LicenKit 管理后台和 API 的 Origin，服务端要求它匹配实际 Setup 请求。两个地址可以跨 Origin，但必须保持同协议、同可注册站点。内置 Site 默认通过 `/api/v1` 调用 Customer API，跨 Origin 时使用正确的绝对 API 地址。Paddle Client-side Token 和 Price ID 可以公开；Paddle API Key、Webhook Secret、邮件 API Key 和验证令牌不能进入前端源码、公开构建产物、日志或统计事件。
 
 同一个 Paddle Price ID 必须在 LicenKit Admin 中创建 Billing Offer，关联唯一 Billing Provider、Product、License Plan 和购买类型。前端不需要 LicenKit Offer ID、Product ID 或 License Plan ID；后端从已验签 Webhook 中取得 Price ID 后执行关联。
 
@@ -45,7 +36,7 @@ Paddle.Initialize({ token: "test_..." });
 Paddle.Checkout.open({
   items: [{ priceId: "pri_01...", quantity: 1 }],
   settings: {
-    successUrl: `${location.origin}/purchase-success.html`,
+    successUrl: `${location.origin}/purchase-success`,
   },
 });
 ```
@@ -67,7 +58,7 @@ Sandbox 与 Live 必须分别设置 Paddle Default Payment Link。Live 产品页
 
 任一条件不满足时，Inbound Event 保留外部 Event、Transaction、Price、数量和原始错误，进入 `needs_attention`，不猜测授权方案，也不发 License。
 
-产品页与 LicenKit 没有运行期连接，因此 LicenKit 暂时不可用、Offer 已归档或通知链路故障时，静态页面仍可能成功收款。这是解耦后的明确边界：
+产品页打开 Checkout 不查询 LicenKit Offer 的实时可用性，因此页面已加载后，即使 LicenKit API 暂时不可用、Offer 已归档或通知链路故障，结账流程仍可能成功收款。这是解耦后的明确边界：
 
 - Webhook 接收端先验签并持久化事件，再返回 2xx；
 - 暂时依赖失败保持 `pending` 并由 Scheduled Worker 重试；
@@ -100,7 +91,7 @@ Paddle.Checkout.open({
 至少验证：
 
 1. 产品页加载和渲染不请求 LicenKit Checkout API；
-2. 产品与方案来自静态源码，点击购买使用对应 Paddle Price ID；
+2. 内置 Site 的产品与方案来自有效的 site.json；自行实现页面时来自使用方公开配置，点击购买使用对应 Paddle Price ID；
 3. Sandbox 与 Live Token/环境不匹配时 fail-fast；
 4. 每次 Checkout 只包含一个 Price、数量 1；
 5. Paddle API Key、Webhook Secret 和 Email Provider API Key 不进入产品页构建产物；

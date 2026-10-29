@@ -13,6 +13,7 @@ LicenKit is a self-hosted software licensing system for independent developers a
 - Validate devices online using activation IDs and device fingerprints.
 - Optionally issue Ed25519 signed license tokens so clients can verify a snapshot of their license locally, including while offline.
 - Provide customer self-service APIs using magic links (email sign-in links) and customer sessions to view licenses, free device seats, and open the payment platform's subscription management page.
+- Include a Site frontend for product pages, checkout entry, email sign-in, and license management, with file-by-file customization.
 - Send initial license keys, key recovery emails, security reset emails, customer magic links, and member invitations through the instance's email integration.
 - Record incoming payment events, email delivery status, retry counts, and audit history for troubleshooting and recovery.
 - Support multi-tenancy by design.
@@ -56,6 +57,8 @@ A User is a sign-in identity; an Instance is a business tenant; a Membership sto
 ```text
 apps/server             Hono + Cloudflare Workers API
 apps/admin              React admin console
+apps/site/builtin       Built-in Site pages and public assets
+apps/site/custom        User-owned Site overrides, initially empty
 apps/cli                Command-line client
 wrangler.jsonc          Cloudflare Worker configuration for the current instance
 docs                    User guides, maintainer references, and development records
@@ -87,13 +90,15 @@ pnpm build
 
 ## Deployment and site responsibilities
 
-A production LicenKit deployment includes the Worker API, scheduled processing, and the `/admin` console. The root path redirects to `/admin/`. Product websites, purchase result pages, magic link pages, and customer portals are implemented by the integrator; LicenKit does not provide those pages or keep example frontend source for them in this repository.
+A production LicenKit deployment includes the Worker API, scheduled processing, the `/admin/` console, and the Site frontend at `/`. The built-in Site includes product and pricing pages, a purchase result page, email sign-in, license lists, and license details with device and subscription management. The default catalog is empty; configure your own products and Paddle prices to enable purchases. Existing customers can still enter license management without a configured catalog.
 
-Setup stores `admin_api_url` and `customer_site_url` for each instance. `admin_api_url` is the public origin (scheme, host, and port) of the LicenKit admin console and API. The setup page defaults to the current Worker's origin, and the server requires an exact match. `customer_site_url` is the base URL of your website and customer portal, used to generate magic links in emails. The two URLs may have different origins, but must use the same scheme and registrable domain to support `SameSite=Lax` customer cookies. Customer CORS, which controls cross-origin browser access, identifies the instance from the `admin_api_url` receiving the request and allows only that instance's `customer_site_url` origin, rather than using global Wrangler variables. Production environments and regular domains require HTTPS. HTTP is allowed only for local development on `localhost` or `127.0.0.1` in an explicitly non-production environment. For self-hosting, bind the admin/API domain to the corresponding Worker; the interface does not display CNAME or managed certificate settings.
+Built-in files live in `apps/site/builtin/`. Put only the files you want to replace in `apps/site/custom/`. Each request first reads the matching custom file and reads the built-in file only when the custom file does not exist. Pages and their referenced scripts, styles, and images are resolved independently. A broken custom file is reported rather than silently replaced. `site.json` is public configuration and is replaced as a whole, without field merging. Rebuild and deploy after production changes; keep your own backup or version history of custom files.
+
+Setup stores `admin_api_url` and `customer_site_url` for each instance. `admin_api_url` is the public origin (scheme, host, and port) of the LicenKit admin console and API. The setup page defaults to the current Worker's origin, and the server requires an exact match. `customer_site_url` is the Site base URL used to generate magic links in emails. New setup defaults both addresses to the current Worker origin; keep that Site address to use the built-in pages. Existing instances retain their saved Site address, and independently hosted sites remain supported. The two URLs may have different origins, but must use the same scheme and registrable domain to support `SameSite=Lax` customer cookies. Customer CORS, which controls cross-origin browser access, identifies the instance from the `admin_api_url` receiving the request and allows only that instance's `customer_site_url` origin, rather than using global Wrangler variables. Production environments and regular domains require HTTPS. HTTP is allowed only for local development on `localhost` or `127.0.0.1` in an explicitly non-production environment. For self-hosting, bind the admin/API domain to the corresponding Worker; the interface does not display CNAME or managed certificate settings.
 
 The root `wrangler.jsonc` is the sole source of Worker configuration for the current deployment. Wrangler is a direct dependency of the root package because it handles development, migrations, builds, and deployment for LicenKit as a whole. `apps/server` contains only Worker server source and its tests. Set database IDs, variables, and environments directly in the root configuration; configuration is not selected or merged from other directories. Workers Observability is explicitly enabled in the root configuration. Remote acceptance checks must also confirm actual scheduled executions in Cloudflare Cron Events and Workers Logs.
 
-`dist` contains only the LicenKit admin deployment assets. See the [Customer Site integration checklist (Simplified Chinese)](./docs/zh-CN/customer-site-integration.md) for the pages you need to implement, customer APIs, and security requirements.
+`dist` contains Admin assets under `admin/` and both Site trees under `__site/builtin/` and `__site/custom/`. The internal Site paths are not public entry points. See the [Site customization and API guide (Simplified Chinese)](./docs/zh-CN/customer-site-integration.md) for page paths, public configuration, overrides, and customer API requirements. The existing `customer_site_url` API field name is retained.
 
 Test and production environments use the same modules and flows, with configuration changes for resource URLs, secrets, and payment platform environments.
 
